@@ -107,6 +107,11 @@ class _AdminPlaceRegistrationScreenState
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.backgroundWhite,
+      appBar: AppBar(
+        backgroundColor: AppColors.backgroundWhite,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+      ),
 
       body: SafeArea(
         child: Column(
@@ -116,20 +121,6 @@ class _AdminPlaceRegistrationScreenState
               child: ListView(
                 children: [
                   const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    height: 30,
-                    child: !widget.isFromLogin
-                        ? IconButton(
-                            onPressed: () => _handleBackButton(),
-                            icon: Icon(
-                              Icons.arrow_back_ios,
-                              color: AppColors.textPrimary,
-                              size: 24,
-                            ),
-                          )
-                        : null,
-                  ),
 
                   // 제목
                   Padding(
@@ -165,7 +156,7 @@ class _AdminPlaceRegistrationScreenState
 
             // 하단 버튼
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
               child: _buildBottomButtons(),
             ),
           ],
@@ -242,15 +233,6 @@ class _AdminPlaceRegistrationScreenState
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          '플레이스 이미지 등록하기',
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w500,
-            color: AppColors.textPrimary,
-          ),
-        ),
-        const SizedBox(height: 8),
         GestureDetector(
           onTap: () async {
             final pickedFile = await _imagePicker.pickImage(
@@ -274,12 +256,6 @@ class _AdminPlaceRegistrationScreenState
             decoration: BoxDecoration(
               color: AppColors.backgroundLight,
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: (_selectedImage != null || _uploadedImageUrl != null)
-                    ? AppColors.primaryGreen
-                    : AppColors.borderLight,
-                width: 1,
-              ),
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(15),
@@ -353,7 +329,7 @@ class _AdminPlaceRegistrationScreenState
             color: Colors.black.withOpacity(0.5),
             child: const Center(
               child: CircularProgressIndicator(
-                color: Colors.white,
+                color: AppColors.primaryGreen,
                 strokeWidth: 2,
               ),
             ),
@@ -420,38 +396,66 @@ class _AdminPlaceRegistrationScreenState
 
   // 플레이스 이름 입력
   Widget _buildNameInput() {
-    return TextField(
-      controller: _nameController,
-      focusNode: _nameFocusNode,
-      textInputAction: TextInputAction.next,
-      onSubmitted: (_) {
-        _locationFocusNode.requestFocus();
-      },
-      decoration: TextFieldDecorationUtil.defaultDecoration(
-        hintText: '플레이스 이름을 입력하세요',
-        floatingLabelBehavior: FloatingLabelBehavior.always,
-        hasFocus: _nameFocusNode.hasFocus,
-      ),
-      style: TextStyle(fontSize: 16, color: AppColors.textPrimary),
-      onChanged: (_) => setState(() {}),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '플레이스 이름',
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textSecondary,
+          ),
+        ),
+        const SizedBox(height: 4),
+        TextField(
+          controller: _nameController,
+          focusNode: _nameFocusNode,
+          textInputAction: TextInputAction.next,
+          onSubmitted: (_) {
+            _locationFocusNode.requestFocus();
+          },
+          decoration: TextFieldDecorationUtil.defaultDecoration(
+            hintText: '플레이스 이름을 입력하세요',
+            floatingLabelBehavior: FloatingLabelBehavior.always,
+            hasFocus: _nameFocusNode.hasFocus,
+          ),
+          style: TextStyle(fontSize: 16, color: AppColors.textPrimary),
+          onChanged: (_) => setState(() {}),
+        ),
+      ],
     );
   }
 
   // 위치 및 설명 입력
   Widget _buildLocationInput() {
-    return TextField(
-      controller: _locationController,
-      focusNode: _locationFocusNode,
-      textInputAction: TextInputAction.done,
-      maxLines: null,
-      minLines: 3,
-      decoration: TextFieldDecorationUtil.defaultDecoration(
-        hintText: '위치 및 설명을 입력하세요',
-        floatingLabelBehavior: FloatingLabelBehavior.always,
-        hasFocus: _locationFocusNode.hasFocus,
-      ),
-      style: TextStyle(fontSize: 16, color: AppColors.textPrimary),
-      onChanged: (_) => setState(() {}),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '플레이스 설명',
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textSecondary,
+          ),
+        ),
+        const SizedBox(height: 4),
+        TextField(
+          controller: _locationController,
+          focusNode: _locationFocusNode,
+          textInputAction: TextInputAction.done,
+          maxLines: null,
+          minLines: 3,
+          decoration: TextFieldDecorationUtil.defaultDecoration(
+            hintText: '플레이스 설명을 입력하세요',
+            floatingLabelBehavior: FloatingLabelBehavior.always,
+            hasFocus: _locationFocusNode.hasFocus,
+          ),
+          style: TextStyle(fontSize: 16, color: AppColors.textPrimary),
+          onChanged: (_) => setState(() {}),
+        ),
+      ],
     );
   }
 
@@ -526,7 +530,7 @@ class _AdminPlaceRegistrationScreenState
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
-                    color: Colors.white,
+                    color: AppColors.primaryGreen,
                   ),
                 ),
               ),

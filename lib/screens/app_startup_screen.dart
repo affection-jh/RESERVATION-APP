@@ -3,6 +3,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:reservation/utils/timezone_utils.dart';
 import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
+import '../models/user.dart';
 import '../widgets/splash_screen.dart';
 import 'phone_number_input_screen.dart';
 import '../screens/admin_screen.dart';
@@ -57,10 +58,46 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
     try {
       final authService = AuthService();
 
+      // ✅ 자동 로그인 시 "마지막 접속 모드 + 플레이스"로 복원한다.
+      // - lastEntryMode == 'admin'  → 관리자 자동로그인 먼저 시도
+      // - lastEntryMode == 'member' → 일반(멤버) 자동로그인 먼저 시도
+      final lastEntryMode = await authService.getLastEntryMode();
+      debugPrint('[AppStartup._checkAutoLogin] lastEntryMode=$lastEntryMode');
+
       // ✅ 전화번호 인증 직후(명시적 재로그인)는 자동 분기 금지:
-      // 관리자 자동로그인/일반 사용자 자동진입(/main)보다 Waiting에서 멈추는 것이 우선.
+      // 단, lastEntryMode가 'admin'이고 관리자 자동 로그인이 성공하면 관리자 홈으로 이동
       final requireManual = await authService.requiresManualEntrySelection();
       final firebaseUser = authService.currentFirebaseUser;
+
+      // requireManual이 true이고 lastEntryMode가 'admin'이면 관리자 자동 로그인 먼저 시도
+      if (requireManual && firebaseUser != null && lastEntryMode == 'admin') {
+        debugPrint(
+          '[AppStartup._checkAutoLogin] requireManualEntrySelection=true && lastEntryMode=admin → 관리자 자동 로그인 시도',
+        );
+        final adminResult = await authService.checkAdminAutoLogin();
+        if (adminResult != null) {
+          debugPrint('[AppStartup._checkAutoLogin] 관리자 자동 로그인 성공 → 관리자 홈으로 이동');
+          await _ensureMinLoadingTime();
+          if (!mounted) return;
+          await _prepareAdminScreen(adminResult);
+          return;
+        } else {
+          debugPrint(
+            '[AppStartup._checkAutoLogin] 관리자 자동 로그인 실패 → PlaceWaitingScreen으로 이동',
+          );
+          await _ensureMinLoadingTime();
+          if (!mounted) return;
+          setState(() {
+            _targetScreen = PlaceWaitingScreen(
+              phoneNumber: firebaseUser.phoneNumber ?? '',
+            );
+          });
+          _hideSplash();
+          return;
+        }
+      }
+
+      // requireManual이 true이고 lastEntryMode가 'admin'이 아니면 PlaceWaitingScreen으로 이동
       if (requireManual && firebaseUser != null) {
         debugPrint(
           '[AppStartup._checkAutoLogin] requireManualEntrySelection=true → PlaceWaitingScreen으로 고정',
@@ -75,12 +112,6 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
         _hideSplash();
         return;
       }
-
-      // ✅ 자동 로그인 시 "마지막 접속 모드 + 플레이스"로 복원한다.
-      // - lastEntryMode == 'admin'  → 관리자 자동로그인 먼저 시도
-      // - lastEntryMode == 'member' → 일반(멤버) 자동로그인 먼저 시도
-      final lastEntryMode = await authService.getLastEntryMode();
-      debugPrint('[AppStartup._checkAutoLogin] lastEntryMode=$lastEntryMode');
 
       AdminAutoLoginResult? adminResult;
       AuthResult? userResult;
@@ -141,6 +172,9 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
         debugPrint('[AppStartup._checkAutoLogin] 일반 사용자 자동 로그인 성공');
         // AuthProvider에 사용자 정보 설정
         final authProvider = Provider.of<AuthProvider>(context, listen: false);
+        // ✅ 유저(멤버) 플로우로 들어올 때는 항상 "현재 관리자 모드"를 해제한다.
+        // linkedAdmin은 유지되므로, 필요 시 PlaceSwitchWidget에서 다시 관리자 모드로 전환 가능.
+        authProvider.clearCurrentAdmin();
 
         // ✅ "관리자 플레이스(관리)" + "멤버 플레이스(승인)"를 스플래시에서 한 번만 로드한다.
         // - 관리자인 동시에 멤버인 경우도 있으므로, 관리자 정보를 currentAdmin으로 바로 전환하지 않는다.
@@ -162,6 +196,39 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
                   .getManagedPlaceIdsByAdminId(admin.userId);
               debugPrint('[AppStartup] 관리자 관리 플레이스 ID 목록: $managedIds');
               authProvider.setAdminManagedPlaceIds(managedIds);
+
+              // ✅ 관리자이지만 "멤버십(승인/대기)"가 0개인 경우:
+              // 기존 유저 플로우(_prepareUserScreen)는 PlaceWaiting으로 떨어지므로,
+              // 관리자 자동 로그인 플로우로 전환해서 관리자 홈으로 보낸다.
+              final hasAnyMembership =
+                  userResult.approvedMemberships.isNotEmpty ||
+                  userResult.pendingMemberships.isNotEmpty;
+              if (!hasAnyMembership && managedIds.isNotEmpty) {
+                // ✅ lastEntryMode 최우선:
+                // - 마지막이 member였다면 다음도 member로 유지 (강제 admin 전환 금지)
+                // - 마지막이 admin이었거나 기록이 없으면, 기존 동작대로 admin 홈으로 전환 허용
+                final shouldForceAdmin =
+                    lastEntryMode == null || lastEntryMode == 'admin';
+                if (!shouldForceAdmin) {
+                  debugPrint(
+                    '[AppStartup._checkAutoLogin] lastEntryMode=member → 관리자 플로우 자동 전환 스킵 (유저 플로우 유지)',
+                  );
+                } else {
+                  debugPrint(
+                    '[AppStartup._checkAutoLogin] 관리자(멤버십 0) + 관리 플레이스 존재 → 관리자 플로우로 전환',
+                  );
+                  final adminResult = await authService.checkAdminAutoLogin();
+                  if (adminResult != null) {
+                    await _ensureMinLoadingTime();
+                    if (!mounted) return;
+                    await _prepareAdminScreen(adminResult);
+                    return;
+                  }
+                  debugPrint(
+                    '[AppStartup._checkAutoLogin] 관리자 플로우 전환 실패 → 유저 플로우 계속',
+                  );
+                }
+              }
             } catch (e) {
               debugPrint('[AppStartup] 관리자 관리 플레이스 로드 실패: $e');
               authProvider.setAdminManagedPlaceIds([]);
@@ -301,12 +368,11 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
         final firestoreService = FirestoreService();
         final firestore = firestoreService.firestore;
 
-        // placeMemberships 컬렉션에서 userId와 placeId로 승인된 멤버십 확인
+        // placeMemberships 컬렉션에서 userId와 placeId로 멤버십 확인 (status 제거로 모든 멤버십이 승인된 것으로 처리)
         final membershipQuery = await firestore
             .collection('placeMemberships')
             .where('userId', isEqualTo: result.user.userId)
             .where('placeId', isEqualTo: targetPlaceId)
-            .where('status', isEqualTo: 'approved')
             .limit(1)
             .get();
 
@@ -336,8 +402,10 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
         debugPrint(
           '[AppStartup] _prepareUserScreen: 승인된 플레이스 없음 → PlaceWaitingScreen',
         );
+        final firebasePhone =
+            AuthService().currentFirebaseUser?.phoneNumber ?? '';
         setState(() {
-          _targetScreen = PlaceWaitingScreen(phoneNumber: '');
+          _targetScreen = PlaceWaitingScreen(phoneNumber: firebasePhone);
         });
         _hideSplash();
         return;
@@ -467,6 +535,74 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
     authProvider.setCurrentAdmin(result.admin);
     debugPrint(
       '[AppStartup._navigateToAdminScreen] AuthProvider에 관리자 정보 설정 완료',
+    );
+
+    // ✅ 관리자 자동 로그인 경로에서도 "멤버 전환"을 위해 currentUser/linkedAdmin을 준비한다.
+    // - PlaceSwitchWidget에서 멤버 모드 전환 시 currentUser가 필요함
+    // - Firestore에 users 문서가 없을 수도 있으므로, 없으면 최소 user 모델로 폴백
+    authProvider.setLinkedAdmin(result.admin);
+    try {
+      final authService = AuthService();
+      final user =
+          await authService.findUserByPhone(result.admin.phoneNumber) ??
+          User(
+            userId: result.admin.userId,
+            name: result.admin.name,
+            phoneNumber: result.admin.phoneNumber,
+            createdAt: TimezoneUtils.getSeoulDateTime(),
+            updatedAt: TimezoneUtils.getSeoulDateTime(),
+          );
+      authProvider.setCurrentUser(user);
+    } catch (e) {
+      // users 조회 실패해도 관리자 화면 진입은 막지 않는다.
+      authProvider.setCurrentUser(
+        User(
+          userId: result.admin.userId,
+          name: result.admin.name,
+          phoneNumber: result.admin.phoneNumber,
+          createdAt: TimezoneUtils.getSeoulDateTime(),
+          updatedAt: TimezoneUtils.getSeoulDateTime(),
+        ),
+      );
+    }
+
+    // ✅ PlaceSwitchWidget에서 사용하는 "관리 플레이스/승인 플레이스" 캐시도 함께 세팅
+    // - 관리자 자동 로그인 경로에서는 _checkAutoLogin(userResult) 분기가 아니어서
+    //   adminManagedPlaceIds/approvedPlaceIds가 비어 있을 수 있다.
+    // - 관리 플레이스는 AdminUser.placeIds를 우선 사용한다.
+    authProvider.setAdminManagedPlaceIds(result.admin.placeIds);
+    // - 멤버 플레이스는 placeMemberships에서 조회 (approved + pending)
+    try {
+      final firestore = FirestoreService().firestore;
+      // ✅ whereIn은 복합 인덱스 요구/제약으로 인해 예기치 않게 실패하거나 비는 케이스가 있어,
+      // 먼저 userId로만 가져온 뒤 status는 클라이언트에서 필터링한다.
+      final snap = await firestore
+          .collection('placeMemberships')
+          .where('userId', isEqualTo: result.admin.userId)
+          .get();
+
+      final memberPlaceIds = <String>{};
+      // status 제거로 모든 멤버십이 승인된 것으로 처리
+      for (final d in snap.docs) {
+        final data = d.data();
+        final placeId = (data['placeId'] as String?) ?? '';
+        if (placeId.trim().isNotEmpty) memberPlaceIds.add(placeId);
+      }
+
+      debugPrint(
+        '[AppStartup] 관리자 경로 placeMemberships docs=${snap.docs.length}, memberPlaceIds=${memberPlaceIds.toList()}',
+      );
+      authProvider.setApprovedPlaceIds(memberPlaceIds.toList());
+    } catch (e) {
+      debugPrint('[AppStartup] 관리자 경로 멤버 플레이스 로드 실패: $e');
+      authProvider.setApprovedPlaceIds([]);
+    }
+
+    // 관리자 자동 로그인 성공 → requireManualEntrySelection 플래그 클리어
+    final authService = AuthService();
+    await authService.clearRequireManualEntrySelection();
+    debugPrint(
+      '[AppStartup._navigateToAdminScreen] requireManualEntrySelection 플래그 클리어 완료',
     );
 
     // 플레이스가 없으면 waiting screen으로 이동 (플레이스 등록은 수동으로 진행)

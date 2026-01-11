@@ -85,6 +85,16 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
   StreamSubscription<List<SessionReservation>>? _sessionReservationSub;
   final Map<String, SessionReservation> _sessionReservationsByKey = {};
 
+  // 구독 파라미터 추적 (중복 구독 방지)
+  String? _lastSubscribedCourseId;
+  String? _lastSubscribedPlaceId;
+  int? _lastSubscribedWeekOffset;
+  DateTime? _lastSubscribedStartDate;
+  DateTime? _lastSubscribedEndDate;
+
+  // 이전 선택 코스 추적 (코스 변경 감지)
+  Course? _previousSelectedCourse;
+
   // UI 상수 정의 (compact calendar용으로 조정)
   static const double _minHourSlotHeight = 60.0; // 세션이 있는 구간의 최소 한 시간당 높이 (px)
   static const double _minGapHourSlotHeight = 18.0; // 공백 구간 축소 하한 (px/h)
@@ -185,6 +195,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     // 선택 코스가 확정된 뒤, 해당 주차의 예약 현황/정책을 구독
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      _previousSelectedCourse = _selectedCourse;
       _subscribeWeekSessionReservations();
     });
   }
@@ -229,9 +240,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
   }
 
   void _subscribeWeekSessionReservations() {
-    _sessionReservationSub?.cancel();
-    _sessionReservationsByKey.clear();
-
     final course = _selectedCourse;
     if (course == null) return;
     if (widget.weeklyViewMode) return;
@@ -247,6 +255,34 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     ).add(Duration(days: 7 * widget.weekOffset));
     final startDate = DateTime(weekStart.year, weekStart.month, weekStart.day);
     final endDate = startDate.add(const Duration(days: 6));
+
+    // 구독 파라미터가 변경되지 않았으면 재구독하지 않음
+    if (_sessionReservationSub != null &&
+        _lastSubscribedCourseId == course.id &&
+        _lastSubscribedPlaceId == placeId &&
+        _lastSubscribedWeekOffset == widget.weekOffset &&
+        _lastSubscribedStartDate != null &&
+        _lastSubscribedEndDate != null &&
+        _lastSubscribedStartDate!.year == startDate.year &&
+        _lastSubscribedStartDate!.month == startDate.month &&
+        _lastSubscribedStartDate!.day == startDate.day &&
+        _lastSubscribedEndDate!.year == endDate.year &&
+        _lastSubscribedEndDate!.month == endDate.month &&
+        _lastSubscribedEndDate!.day == endDate.day) {
+      // 이미 같은 파라미터로 구독 중이면 재구독하지 않음
+      return;
+    }
+
+    // 기존 구독 취소
+    _sessionReservationSub?.cancel();
+    _sessionReservationsByKey.clear();
+
+    // 구독 파라미터 저장
+    _lastSubscribedCourseId = course.id;
+    _lastSubscribedPlaceId = placeId;
+    _lastSubscribedWeekOffset = widget.weekOffset;
+    _lastSubscribedStartDate = startDate;
+    _lastSubscribedEndDate = endDate;
 
     _loadCoursePolicy();
 
@@ -283,10 +319,24 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
   @override
   void didUpdateWidget(CompactCalendarWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
+
+    bool needsResubscribe = false;
+
     // 주 변경 시(이번주/다음주/다다음주) 예약 현황/정책 재구독
     if (widget.weekOffset != oldWidget.weekOffset) {
-      _subscribeWeekSessionReservations();
+      needsResubscribe = true;
     }
+
+    // 코스 변경 감지 (이전 선택 코스와 비교)
+    if (_selectedCourse != null && _previousSelectedCourse != null) {
+      if (_selectedCourse!.id != _previousSelectedCourse!.id) {
+        needsResubscribe = true;
+      }
+    } else if (_selectedCourse != null && _previousSelectedCourse == null) {
+      // 코스가 새로 선택된 경우
+      needsResubscribe = true;
+    }
+
     // highlightReservation이 새로 추가되었을 때 애니메이션 시작
     if (widget.highlightReservation != null &&
         oldWidget.highlightReservation == null) {
@@ -300,8 +350,15 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       );
       _shakeController!.forward();
     }
+
     // 코스 목록이 변경되었을 때 처리
     if (widget.courses != oldWidget.courses) {
+      // 코스 목록이 비어있지 않고, 선택된 코스가 없을 때 마지막 선택 코스 복원 시도
+      if (widget.courses.isNotEmpty && _selectedCourse == null) {
+        _restoreLastSelectedCourse();
+        return; // 복원 로직에서 구독 처리하므로 여기서 리턴
+      }
+
       // 새 코스가 추가되었는지 확인 (목록 길이가 증가)
       final newCourseAdded = widget.courses.length > oldWidget.courses.length;
 
@@ -312,6 +369,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
             _selectedCourse = widget.courses.last;
             _didInitialJump = false; // 초기 점프 리셋
           });
+          needsResubscribe = true; // 코스 변경으로 재구독 필요
         }
       } else {
         // 선택된 코스가 여전히 목록에 있는지 확인
@@ -320,17 +378,9 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
             (course) => course.id == _selectedCourse!.id,
           );
           if (!stillExists) {
-            // 선택된 코스가 없어졌으면 첫 번째 코스 선택
-            if (widget.courses.isNotEmpty) {
-              setState(() {
-                _selectedCourse = widget.courses.first;
-                _didInitialJump = false; // 초기 점프 리셋
-              });
-            } else {
-              setState(() {
-                _selectedCourse = null;
-              });
-            }
+            // 선택된 코스가 없어졌으면 마지막 선택 코스 복원 시도
+            _restoreLastSelectedCourse();
+            return; // 복원 로직에서 구독 처리하므로 여기서 리턴
           } else {
             // 선택된 코스가 여전히 있으면, 최신 정보로 업데이트 (이름, 색상, 이미지, 세션 등 모든 변경사항 반영)
             final updatedCourse = widget.courses.firstWhere(
@@ -354,27 +404,51 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                   ),
                 );
             if (hasChanges) {
+              // 세션 정보가 변경되었는지 확인 (재구독 필요 여부 판단)
+              final sessionsChanged =
+                  updatedCourse.sessions.length !=
+                      _selectedCourse!.sessions.length ||
+                  updatedCourse.sessions.any(
+                    (s) => !_selectedCourse!.sessions.any(
+                      (os) =>
+                          os.dayOfWeek == s.dayOfWeek &&
+                          os.startTime == s.startTime &&
+                          os.endTime == s.endTime &&
+                          os.capacity == s.capacity,
+                    ),
+                  );
+
               setState(() {
                 _selectedCourse = updatedCourse;
                 _didInitialJump = false; // 초기 점프 리셋
               });
+
+              // 세션 정보가 변경되었으면 재구독 필요
+              if (sessionsChanged) {
+                needsResubscribe = true;
+              }
             }
           }
         } else if (widget.courses.isNotEmpty) {
-          // 선택된 코스가 없었는데 코스가 추가되었으면 첫 번째 코스 선택
-          setState(() {
-            _selectedCourse = widget.courses.first;
-            _didInitialJump = false; // 초기 점프 리셋
-          });
+          // 선택된 코스가 없었는데 코스가 추가되었으면 마지막 선택 코스 복원 시도
+          _restoreLastSelectedCourse();
+          return; // 복원 로직에서 구독 처리하므로 여기서 리턴
         }
       }
     }
 
-    // 코스/주차 변경으로 선택 상태가 바뀌었을 수 있으므로 재구독
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      _subscribeWeekSessionReservations();
-    });
+    // 실제로 변경이 필요한 경우에만 재구독
+    if (needsResubscribe) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _subscribeWeekSessionReservations();
+        // 코스 변경 추적 업데이트
+        _previousSelectedCourse = _selectedCourse;
+      });
+    } else {
+      // 재구독하지 않아도 이전 선택 코스 추적 업데이트 (코스 정보 업데이트만 된 경우)
+      _previousSelectedCourse = _selectedCourse;
+    }
   }
 
   @override
@@ -382,6 +456,13 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     _sessionReservationSub?.cancel();
     _scrollController.dispose();
     _shakeController?.dispose();
+    // 구독 파라미터 초기화
+    _lastSubscribedCourseId = null;
+    _lastSubscribedPlaceId = null;
+    _lastSubscribedWeekOffset = null;
+    _lastSubscribedStartDate = null;
+    _lastSubscribedEndDate = null;
+    _previousSelectedCourse = null;
     super.dispose();
   }
 
@@ -408,7 +489,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       }
 
       // 현재 주의 날짜들 계산 (이번주만)
-      final today = TimezoneUtils.getSeoulDateTime();
+      // 주차 계산은 "오늘 00:00" 기준으로 해야 날짜가 안정적이다.
+      final today = TimezoneUtils.getSeoulToday();
       final daysFromMonday = today.weekday - 1;
       final thisWeekMonday = today.subtract(Duration(days: daysFromMonday));
       final weekStart = thisWeekMonday; // weekOffset 무시하고 항상 이번주
@@ -471,7 +553,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     }
 
     // 현재 주의 날짜들 계산
-    final today = TimezoneUtils.getSeoulDateTime();
+    // 주차 계산은 "오늘 00:00" 기준으로 해야 날짜가 안정적이다.
+    final today = TimezoneUtils.getSeoulToday();
     // 이번 주 월요일 찾기
     final daysFromMonday = today.weekday - 1; // 월요일이 0이 되도록
     final thisWeekMonday = today.subtract(Duration(days: daysFromMonday));
@@ -608,6 +691,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                   _didInitialJump = false; // 코스 변경 시 초기 점프 리셋
                 });
 
+                // 코스 변경 추적 업데이트
+                _previousSelectedCourse = newCourse;
                 _subscribeWeekSessionReservations();
 
                 // 마지막 선택 코스 저장
@@ -2037,7 +2122,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     final totalSeats = sr?.capacity ?? session.getCapacityForDate(date);
     final reservedCount = sr?.reservedCount ?? 0;
     final remainingSeats = math.max(0, totalSeats - reservedCount);
-    final isCancelled = sr?.isCancelled ?? false;
 
     final placeId =
         Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id ??
@@ -2090,12 +2174,9 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       CompactCalendarUsage.userWeeklyReservationsView => (isFull || isLocked),
     };
 
-    // 취소된 세션은 회색으로 표시
-    final baseColor = isCancelled
+    final baseColor = visuallyDisabled
         ? AppColors.reservedGrey
-        : (visuallyDisabled
-              ? AppColors.reservedGrey
-              : _selectedCourse!.colorValue);
+        : _selectedCourse!.colorValue;
 
     // 편집 모드인지 확인 (현재 예약 정보가 전달되었으면 편집 모드)
     final isEditMode =
@@ -2203,11 +2284,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                             ? 18
                             : (sessionHeightPx >= 40 ? 14 : 12),
                         fontWeight: FontWeight.bold,
-                        decoration: isCancelled
-                            ? TextDecoration.lineThrough
-                            : null,
-                        decorationColor: textColor,
-                        decorationThickness: 2,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -2238,11 +2314,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                               ? 20
                               : (sessionHeightPx >= 40 ? 16 : 14),
                           fontWeight: FontWeight.bold,
-                          decoration: isCancelled
-                              ? TextDecoration.lineThrough
-                              : null,
-                          decorationColor: textColor,
-                          decorationThickness: 2,
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -2257,11 +2328,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                         color: iconColor,
                         fontSize: sessionHeightPx >= 90 ? 13 : 11,
                         fontWeight: FontWeight.w500,
-                        decoration: isCancelled
-                            ? TextDecoration.lineThrough
-                            : null,
-                        decorationColor: iconColor,
-                        decorationThickness: 1.5,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -2310,20 +2376,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                     ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              // 취소 표시 (빨간 원)
-              if (isCancelled)
-                Positioned(
-                  top: 4,
-                  right: 4,
-                  child: Container(
-                    width: sessionHeightPx >= 60 ? 8 : 6,
-                    height: sessionHeightPx >= 60 ? 8 : 6,
-                    decoration: BoxDecoration(
-                      color: Colors.red,
-                      shape: BoxShape.circle,
-                    ),
                   ),
                 ),
             ],

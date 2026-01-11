@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:reservation/utils/text_field_decoration_util.dart';
 import '../../models/course.dart';
 import '../../models/course_enrollment.dart';
 import '../../theme/app_colors.dart';
@@ -125,14 +126,27 @@ class _EnrollmentDetailBottomSheetState
                         children: [
                           // 제목
                           Padding(
-                            padding: const EdgeInsets.only(top: 32),
-                            child: Text(
-                              widget.course.name,
-                              style: TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.bold,
-                                color: AppColors.textPrimary,
-                              ),
+                            padding: const EdgeInsets.only(top: 28),
+                            child: Row(
+                              children: [
+                                Text(
+                                  widget.course.name,
+                                  style: TextStyle(
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.bold,
+                                    color: AppColors.textPrimary,
+                                  ),
+                                ),
+                                Spacer(),
+                                IconButton(
+                                  onPressed: () => Navigator.of(context).pop(),
+                                  icon: Icon(
+                                    Icons.close,
+                                    color: AppColors.textSecondary,
+                                    size: 24,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                           const SizedBox(height: 24),
@@ -167,7 +181,7 @@ class _EnrollmentDetailBottomSheetState
                                 ),
                                 const SizedBox(height: 10),
                                 Container(
-                                  height: 20,
+                                  height: 10,
                                   decoration: BoxDecoration(
                                     color: AppColors.backgroundLight,
                                     borderRadius: BorderRadius.circular(12),
@@ -214,7 +228,7 @@ class _EnrollmentDetailBottomSheetState
                               _buildInfoChip(
                                 '요일',
                                 daysText,
-                                widget.course.colorValue,
+                                AppColors.textSecondary,
                               ),
                               const SizedBox(height: 8),
                               // 등록일 - 마감일 (아래에 나란히)
@@ -317,7 +331,7 @@ class _EnrollmentDetailBottomSheetState
                                     });
                                   },
                                   style: ElevatedButton.styleFrom(
-                                    backgroundColor: widget.course.colorValue,
+                                    backgroundColor: AppColors.primaryGreen,
                                     foregroundColor: Colors.white,
                                     padding: const EdgeInsets.symmetric(
                                       vertical: 16,
@@ -348,7 +362,7 @@ class _EnrollmentDetailBottomSheetState
                                         Text(
                                           '연장 사유',
                                           style: TextStyle(
-                                            fontSize: 14,
+                                            fontSize: 15,
                                             color: AppColors.textSecondary,
                                             fontWeight: FontWeight.w500,
                                           ),
@@ -357,41 +371,15 @@ class _EnrollmentDetailBottomSheetState
                                         TextField(
                                           controller: _reasonController,
                                           maxLines: 4,
-                                          decoration: InputDecoration(
-                                            hintText: '사유를 입력하세요',
-                                            hintStyle: TextStyle(
-                                              color: AppColors.textLight,
-                                              fontSize: 14,
-                                            ),
-                                            border: OutlineInputBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                              borderSide: BorderSide(
-                                                color: AppColors.borderLight,
-                                                width: 1,
+                                          decoration:
+                                              TextFieldDecorationUtil.defaultDecoration(
+                                                hintText: '사유를 입력하세요',
+
+                                                contentPadding:
+                                                    const EdgeInsets.all(16),
                                               ),
-                                            ),
-                                            enabledBorder: OutlineInputBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                              borderSide: BorderSide(
-                                                color: AppColors.borderLight,
-                                                width: 1,
-                                              ),
-                                            ),
-                                            focusedBorder: OutlineInputBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                              borderSide: BorderSide(
-                                                color: widget.course.colorValue,
-                                                width: 2,
-                                              ),
-                                            ),
-                                            contentPadding:
-                                                const EdgeInsets.all(16),
-                                          ),
                                           style: TextStyle(
-                                            fontSize: 14,
+                                            fontSize: 15,
                                             color: AppColors.textPrimary,
                                           ),
                                         ),
@@ -409,12 +397,12 @@ class _EnrollmentDetailBottomSheetState
                                                 style: OutlinedButton.styleFrom(
                                                   padding:
                                                       const EdgeInsets.symmetric(
-                                                        vertical: 14,
+                                                        vertical: 18,
                                                       ),
                                                   shape: RoundedRectangleBorder(
                                                     borderRadius:
                                                         BorderRadius.circular(
-                                                          12,
+                                                          16,
                                                         ),
                                                   ),
                                                   side: BorderSide(
@@ -461,12 +449,12 @@ class _EnrollmentDetailBottomSheetState
                                                   foregroundColor: Colors.white,
                                                   padding:
                                                       const EdgeInsets.symmetric(
-                                                        vertical: 14,
+                                                        vertical: 18,
                                                       ),
                                                   shape: RoundedRectangleBorder(
                                                     borderRadius:
                                                         BorderRadius.circular(
-                                                          12,
+                                                          16,
                                                         ),
                                                   ),
                                                   elevation: 0,
@@ -480,7 +468,10 @@ class _EnrollmentDetailBottomSheetState
                                                           valueColor:
                                                               AlwaysStoppedAnimation<
                                                                 Color
-                                                              >(Colors.white),
+                                                              >(
+                                                                AppColors
+                                                                    .primaryGreen,
+                                                              ),
                                                         ),
                                                       )
                                                     : Text(
@@ -559,7 +550,7 @@ class _EnrollmentDetailBottomSheetState
           Text(
             label,
             style: TextStyle(
-              fontSize: 13,
+              fontSize: 14,
               color: AppColors.textSecondary,
               fontWeight: FontWeight.w500,
             ),
@@ -568,7 +559,7 @@ class _EnrollmentDetailBottomSheetState
           Text(
             value,
             style: TextStyle(
-              fontSize: 13,
+              fontSize: 14,
               fontWeight: FontWeight.w600,
               color: AppColors.textPrimary,
             ),

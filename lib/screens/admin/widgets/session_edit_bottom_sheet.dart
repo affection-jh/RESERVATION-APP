@@ -508,15 +508,6 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
                               vertical: 16,
                             ),
                           ).copyWith(
-                            label: Text(
-                              '수용인원',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.w600,
-                                color: widget.courseColor,
-                              ),
-                            ),
-
                             suffixIcon: _capacityFocusNode.hasFocus
                                 ? Padding(
                                     padding: const EdgeInsets.only(right: 8),

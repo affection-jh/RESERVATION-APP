@@ -493,7 +493,7 @@ class _VerificationCodeScreenState extends State<VerificationCodeScreen> {
                                   child: CircularProgressIndicator(
                                     strokeWidth: 2,
                                     valueColor: AlwaysStoppedAnimation<Color>(
-                                      Colors.white,
+                                      AppColors.primaryGreen,
                                     ),
                                   ),
                                 )

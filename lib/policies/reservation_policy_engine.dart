@@ -1,4 +1,5 @@
 import 'course_policy.dart';
+import '../utils/timezone_utils.dart';
 
 enum ReservationLockReason {
   none,
@@ -66,13 +67,10 @@ class ReservationPolicyEngine {
     required bool enrollmentCanReserve, // (유효기간 && 남은 횟수)
   }) {
     // 1) 과거 날짜 (가장 우선 체크)
-    final today = DateTime(now.year, now.month, now.day);
-    final dateOnly = DateTime(
-      sessionDate.year,
-      sessionDate.month,
-      sessionDate.day,
-    );
-    if (dateOnly.isBefore(today)) {
+    // ✅ 서울 시간대 기준으로 날짜 비교 (UTC 해석 방지)
+    final today = TimezoneUtils.getSeoulToday();
+    final sessionDateOnly = TimezoneUtils.getSeoulDateOnly(sessionDate);
+    if (sessionDateOnly.isBefore(today)) {
       return const ReservationEligibility(
         canReserve: false,
         reason: ReservationLockReason.pastDate,
@@ -88,7 +86,11 @@ class ReservationPolicyEngine {
     }
 
     // 3) 시작 N분 전 마감
-    final sessionStart = _combineDateAndTime(sessionDate, startTime);
+    // ✅ 서울 시간대 기준으로 세션 시작 시간 계산
+    final sessionStart = TimezoneUtils.combineDateAndTimeSeoul(
+      sessionDate,
+      startTime,
+    );
     final closeAt = sessionStart.subtract(
       Duration(minutes: policy.closeBeforeMinutes),
     );
@@ -138,13 +140,10 @@ class ReservationPolicyEngine {
     required DateTime sessionDate,
     required int reservedCount,
   }) {
-    final today = DateTime(now.year, now.month, now.day);
-    final dateOnly = DateTime(
-      sessionDate.year,
-      sessionDate.month,
-      sessionDate.day,
-    );
-    if (dateOnly.isBefore(today)) {
+    // ✅ 서울 시간대 기준으로 날짜 비교 (UTC 해석 방지)
+    final today = TimezoneUtils.getSeoulToday();
+    final sessionDateOnly = TimezoneUtils.getSeoulDateOnly(sessionDate);
+    if (sessionDateOnly.isBefore(today)) {
       return const AdminEditEligibility(
         canEditTime: false,
         canDelete: false,
@@ -183,18 +182,14 @@ class ReservationPolicyEngine {
     required CoursePolicy policy,
     required DateTime sessionDate,
   }) {
-    // sessionDate를 날짜만 추출 (시간대는 now와 동일하게 유지)
-    final dateOnly = DateTime(
-      sessionDate.year,
-      sessionDate.month,
-      sessionDate.day,
-    );
+    // ✅ 서울 시간대 기준으로 날짜 추출 (UTC 해석 방지)
+    final dateOnly = TimezoneUtils.getSeoulDateOnly(sessionDate);
 
     switch (policy.openStrategy.type) {
       case BookingOpenStrategyType.rollingWindow:
         final days = policy.openStrategy.rollingWindow?.windowDays ?? 21;
         final openDate = dateOnly.subtract(Duration(days: days));
-        // 날짜만 반환 (00:00, 로컬 시간대)
+        // ✅ 서울 시간대 기준으로 날짜만 반환 (00:00)
         return DateTime(openDate.year, openDate.month, openDate.day);
       case BookingOpenStrategyType.weeklyRelease:
         final s = policy.openStrategy.weeklyRelease;
@@ -208,14 +203,11 @@ class ReservationPolicyEngine {
         final h = int.tryParse(parts[0]) ?? 10;
         final m = int.tryParse(parts[1]) ?? 0;
 
-        // 서울 시간대 기준으로 오픈 시각 생성 (로컬 시간대)
-        final openAt = DateTime(
-          openWeekStart.year,
-          openWeekStart.month,
-          openWeekStart.day,
-          h,
-          m,
-        ).add(Duration(days: (s.releaseDayOfWeek - 1)));
+        // ✅ 서울 시간대 기준으로 오픈 시각 생성
+        final openAt = TimezoneUtils.combineDateAndTimeSeoul(
+          openWeekStart.add(Duration(days: (s.releaseDayOfWeek - 1))),
+          '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}',
+        );
         return openAt;
     }
   }
@@ -225,18 +217,5 @@ class ReservationPolicyEngine {
     return dateOnly.subtract(
       Duration(days: dateOnly.weekday - DateTime.monday),
     );
-  }
-
-  /// 날짜와 시간 문자열을 결합하여 DateTime 생성
-  ///
-  /// ⚠️ 시간대 처리:
-  /// - date의 시간대를 유지하여 생성 (로컬 시간대)
-  /// - evaluateReservation의 now 파라미터와 일관성 유지
-  static DateTime _combineDateAndTime(DateTime date, String hhmm) {
-    final parts = hhmm.split(':');
-    final h = int.parse(parts[0]);
-    final m = int.parse(parts[1]);
-    // date의 시간대를 유지하여 생성 (로컬 시간대)
-    return DateTime(date.year, date.month, date.day, h, m);
   }
 }

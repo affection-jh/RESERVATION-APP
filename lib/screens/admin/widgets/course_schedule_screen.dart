@@ -628,6 +628,8 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
                   );
                 }
               }
+              // 세션 변경 시 콜백 호출 (단일 요일)
+              widget.onSessionsChanged?.call(_daySessions, _defaultCapacity);
             });
             // 선택 영역 초기화
             _clearSelectionForDay(dayOfWeek);
@@ -656,7 +658,13 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
         ),
       ),
     ).then((_) {
-      // 바텀시트가 닫힐 때 (dismissed) 선택 영역 초기화
+      // 바텀시트가 닫힐 때 (dismissed) 미리보기 및 선택 영역 초기화
+      setState(() {
+        _previewStartTime = null;
+        _previewEndTime = null;
+        _previewDayOfWeek = null;
+        _isBulkPreview = false;
+      });
       _clearSelectionForDay(dayOfWeek);
     });
   }
@@ -750,9 +758,11 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
       color: widget.colorSelectionData.selectedColor,
       sessions: courseSessions,
       imageUrl: widget.colorSelectionData.basicInfo.imageUrl,
-      defaultTotalReservations: widget.colorSelectionData.defaultTotalReservations,
+      defaultTotalReservations:
+          widget.colorSelectionData.defaultTotalReservations,
       useUniformSettings: widget.colorSelectionData.useUniformSettings,
-      uniformTotalReservations: widget.colorSelectionData.uniformTotalReservations,
+      uniformTotalReservations:
+          widget.colorSelectionData.uniformTotalReservations,
       uniformPeriodType: widget.colorSelectionData.uniformPeriodType,
       uniformPeriodValue: widget.colorSelectionData.uniformPeriodValue,
     );

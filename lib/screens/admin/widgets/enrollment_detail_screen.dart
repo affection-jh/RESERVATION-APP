@@ -9,8 +9,8 @@ import '../../../models/course_enrollment.dart';
 import '../../../models/admin_models.dart';
 import '../../../providers/member_provider.dart';
 import '../../../providers/place_provider.dart';
+import '../../../providers/enrollment_provider.dart';
 import '../../../services/enrollment_service.dart';
-import '../../../services/firestore_service.dart';
 import '../../../services/member_service.dart';
 import '../../../theme/app_colors.dart';
 import '../../../utils/text_field_decoration_util.dart';
@@ -83,7 +83,9 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
   late int _reEnrollPeriodValue;
   late TextEditingController _reEnrollPeriodController;
 
-  bool _isSaving = false;
+  bool _isSaving = false; // 횟수 조정/기간 연장용
+  bool _isCancelling = false; // 수강 취소용
+  bool _isReenrolling = false; // 재등록용
   bool _isDetailExpanded = false; // 자세히 보기 펼침 상태
   String? _selectedTimelineFilter; // 타임라인 필터 (null이면 전체)
   int _timelineDisplayLimit = 20; // 타임라인 표시 개수 제한
@@ -192,6 +194,11 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
 
   void _loadHistoryData() {
     final enrollmentService = EnrollmentService();
+
+    // 기존 구독 취소 (중복 구독 방지)
+    _reenrollmentHistorySubscription?.cancel();
+    _adminActionsSubscription?.cancel();
+    _extensionRequestsSubscription?.cancel();
 
     // 재등록 이력 구독
     _reenrollmentHistorySubscription = enrollmentService
@@ -310,17 +317,14 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           SnackbarUtil.showSuccess(context, '대기 등록 정보가 변경되었습니다.');
         }
       } else {
-        // 기존 enrollment 업데이트
+        // ✅ 트랜잭션으로 원자적 저장 (enrollment 업데이트 + 관리자 액션)
         final updatedEnrollment = widget.enrollment.copyWith(
           remainingReservations: remaining,
         );
 
-        await enrollmentService.updateEnrollment(updatedEnrollment);
-
-        // 서브컬렉션에 관리자 액션 추가
-        await enrollmentService.addAdminAction(
-          enrollmentId: widget.enrollment.id,
-          action: AdminAction(
+        await enrollmentService.updateEnrollmentWithAdminAction(
+          updatedEnrollment: updatedEnrollment,
+          adminAction: AdminAction(
             id: 'action_${DateTime.now().millisecondsSinceEpoch}',
             actionType: AdminActionType.adjustCount,
             performedAt: TimezoneUtils.getSeoulDateTime(),
@@ -532,17 +536,14 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           SnackbarUtil.showSuccess(context, '대기 등록 정보가 변경되었습니다.');
         }
       } else {
-        // 기존 enrollment 업데이트
+        // ✅ 트랜잭션으로 원자적 저장 (enrollment 업데이트 + 관리자 액션)
         final updatedEnrollment = widget.enrollment.copyWith(
           validUntil: _extendedValidUntil,
         );
 
-        await enrollmentService.updateEnrollment(updatedEnrollment);
-
-        // 서브컬렉션에 관리자 액션 추가
-        await enrollmentService.addAdminAction(
-          enrollmentId: widget.enrollment.id,
-          action: AdminAction(
+        await enrollmentService.updateEnrollmentWithAdminAction(
+          updatedEnrollment: updatedEnrollment,
+          adminAction: AdminAction(
             id: 'action_${DateTime.now().millisecondsSinceEpoch}',
             actionType: AdminActionType.extendPeriod,
             performedAt: TimezoneUtils.getSeoulDateTime(),
@@ -685,11 +686,16 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
     if (confirmed != true) return;
 
     setState(() {
-      _isSaving = true;
+      _isReenrolling = true;
     });
 
     try {
       final enrollmentService = EnrollmentService();
+      final enrollmentProvider = Provider.of<EnrollmentProvider>(
+        context,
+        listen: false,
+      );
+      final enrollmentId = widget.enrollment.id;
       final now = TimezoneUtils.getSeoulDateTime();
       final totalReservations = int.parse(
         _reEnrollTotalReservationsController.text,
@@ -716,25 +722,36 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           ],
         );
 
-        final createdEnrollment = await enrollmentService.createEnrollment(
-          newEnrollment,
+        // ✅ Provider를 통해 재등록 처리 (화면을 나가도 진행 상태 유지)
+        final createdEnrollment = await enrollmentProvider.reenrollEnrollment(
+          enrollmentId: enrollmentId,
+          reenrollAction: () async {
+            final created = await enrollmentService.createEnrollment(
+              newEnrollment,
+            );
+
+            if (created == null) {
+              throw Exception('enrollment 생성 실패');
+            }
+
+            // 관리자 액션 추가
+            await enrollmentService.addAdminAction(
+              enrollmentId: created.id,
+              action: AdminAction(
+                id: 'action_${DateTime.now().millisecondsSinceEpoch}',
+                actionType: AdminActionType.reenroll,
+                performedAt: now,
+                performedBy: 'admin', // TODO: 실제 admin ID로 변경
+                details: '재등록 처리 완료',
+              ),
+            );
+            return created;
+          },
         );
 
         if (createdEnrollment == null) {
           throw Exception('enrollment 생성 실패');
         }
-
-        // 관리자 액션 추가
-        await enrollmentService.addAdminAction(
-          enrollmentId: createdEnrollment.id,
-          action: AdminAction(
-            id: 'action_${DateTime.now().millisecondsSinceEpoch}',
-            actionType: AdminActionType.reenroll,
-            performedAt: now,
-            performedBy: 'admin', // TODO: 실제 admin ID로 변경
-            details: '재등록 처리 완료',
-          ),
-        );
 
         // pendingMembers에서 해당 코스 제거
         final placeProvider = Provider.of<PlaceProvider>(
@@ -779,7 +796,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           ),
         );
 
-        // 재등록: totalEnrollmentCount 증가, enrolledAt 업데이트
+        // ✅ 트랜잭션으로 원자적 저장 (enrollment 업데이트 + 재등록 이력 2개 + 관리자 액션)
         final updatedEnrollment = widget.enrollment.copyWith(
           totalEnrollmentCount: widget.enrollment.totalEnrollmentCount + 1,
           enrolledAt: now, // 재등록일로 업데이트
@@ -789,43 +806,35 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           validUntil: _reEnrollValidUntil,
         );
 
-        await enrollmentService.updateEnrollment(updatedEnrollment);
-
-        // 서브컬렉션에 재등록 이력 추가
-        // 기존 등록 정보를 히스토리에 추가
-        await enrollmentService.addReenrollmentRecord(
-          enrollmentId: widget.enrollment.id,
-          record: ReenrollmentRecord(
-            enrollmentNumber: widget.enrollment.totalEnrollmentCount,
-            totalReservations: widget.enrollment.totalReservations,
-            enrolledAt: widget.enrollment.enrolledAt,
-            validFrom: widget.enrollment.validFrom,
-            validUntil: widget.enrollment.validUntil,
-          ),
-        );
-
-        // 새 재등록 정보를 히스토리에 추가
-        await enrollmentService.addReenrollmentRecord(
-          enrollmentId: widget.enrollment.id,
-          record: ReenrollmentRecord(
-            enrollmentNumber: widget.enrollment.totalEnrollmentCount + 1,
-            totalReservations: totalReservations,
-            enrolledAt: now,
-            validFrom: _reEnrollValidFrom,
-            validUntil: _reEnrollValidUntil,
-          ),
-        );
-
-        // 관리자 액션 추가
-        await enrollmentService.addAdminAction(
-          enrollmentId: widget.enrollment.id,
-          action: AdminAction(
-            id: 'action_${DateTime.now().millisecondsSinceEpoch}',
-            actionType: AdminActionType.reenroll,
-            performedAt: now,
-            performedBy: 'admin', // TODO: 실제 admin ID로 변경
-            details: '재등록 처리 완료',
-          ),
+        // ✅ Provider를 통해 재등록 처리 (화면을 나가도 진행 상태 유지)
+        await enrollmentProvider.reenrollEnrollment(
+          enrollmentId: enrollmentId,
+          reenrollAction: () async {
+            await enrollmentService.reenrollWithHistory(
+              updatedEnrollment: updatedEnrollment,
+              oldRecord: ReenrollmentRecord(
+                enrollmentNumber: widget.enrollment.totalEnrollmentCount,
+                totalReservations: widget.enrollment.totalReservations,
+                enrolledAt: widget.enrollment.enrolledAt,
+                validFrom: widget.enrollment.validFrom,
+                validUntil: widget.enrollment.validUntil,
+              ),
+              newRecord: ReenrollmentRecord(
+                enrollmentNumber: widget.enrollment.totalEnrollmentCount + 1,
+                totalReservations: totalReservations,
+                enrolledAt: now,
+                validFrom: _reEnrollValidFrom,
+                validUntil: _reEnrollValidUntil,
+              ),
+              adminAction: AdminAction(
+                id: 'action_${DateTime.now().millisecondsSinceEpoch}',
+                actionType: AdminActionType.reenroll,
+                performedAt: now,
+                performedBy: 'admin', // TODO: 실제 admin ID로 변경
+                details: '재등록 처리 완료',
+              ),
+            );
+          },
         );
 
         // 저장 성공 후 변경사항 추적 기준 업데이트
@@ -861,7 +870,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
     } finally {
       if (mounted) {
         setState(() {
-          _isSaving = false;
+          _isReenrolling = false;
         });
       }
     }
@@ -881,7 +890,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
     if (confirmed != true) return;
 
     setState(() {
-      _isSaving = true;
+      _isCancelling = true;
     });
 
     try {
@@ -902,7 +911,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           );
         }
         if (mounted) {
-          SnackbarUtil.showSuccess(context, '요청이 취소되었습니다.');
+          SnackbarUtil.showSuccess(context, '수강 리스트에서 제외했습니다.');
           Navigator.of(context).pop(true);
         }
         return;
@@ -914,13 +923,20 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         throw Exception('플레이스를 찾을 수 없습니다.');
       }
 
-      final fs = FirestoreService();
+      // ✅ Provider를 통해 취소 처리 (화면을 나가도 진행 상태 유지)
+      final enrollmentProvider = Provider.of<EnrollmentProvider>(
+        context,
+        listen: false,
+      );
+      final enrollmentId = widget.enrollment.id;
+
       // 1) 서버에 미래 예약 존재 여부 확인 (cascade=false)
       try {
-        await fs.cancelEnrollment(
+        await enrollmentProvider.cancelEnrollment(
           placeId: placeId,
           userId: widget.member.userId,
           courseId: widget.course.id,
+          enrollmentId: enrollmentId,
           cascade: false,
         );
       } on FirebaseFunctionsException catch (e) {
@@ -945,59 +961,17 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           );
           if (confirmedCascade != true) return;
 
-          await fs.cancelEnrollment(
+          await enrollmentProvider.cancelEnrollment(
             placeId: placeId,
             userId: widget.member.userId,
             courseId: widget.course.id,
+            enrollmentId: enrollmentId,
             cascade: true,
           );
         } else {
           rethrow;
         }
       }
-
-      final enrollmentService = EnrollmentService();
-      final now = TimezoneUtils.getSeoulDateTime();
-
-      // 유효기간을 과거로 설정하여 만료 처리
-      final updatedEnrollment = widget.enrollment.copyWith(
-        validUntil: now.subtract(const Duration(days: 1)),
-      );
-
-      await enrollmentService.updateEnrollment(updatedEnrollment);
-
-      // 서브컬렉션에 취소 기록 추가 (가장 최근 재등록 이력에 cancelledAt 추가)
-      // 가장 최근 재등록 이력을 찾아서 취소 처리
-      final latestRecord = _loadedReenrollmentHistory.isNotEmpty
-          ? _loadedReenrollmentHistory.first
-          : null;
-
-      if (latestRecord != null) {
-        // 취소된 재등록 이력 추가
-        await enrollmentService.addReenrollmentRecord(
-          enrollmentId: widget.enrollment.id,
-          record: ReenrollmentRecord(
-            enrollmentNumber: latestRecord.enrollmentNumber,
-            totalReservations: latestRecord.totalReservations,
-            enrolledAt: latestRecord.enrolledAt,
-            validFrom: latestRecord.validFrom,
-            validUntil: latestRecord.validUntil,
-            cancelledAt: now,
-          ),
-        );
-      }
-
-      // 관리자 액션 추가
-      await enrollmentService.addAdminAction(
-        enrollmentId: widget.enrollment.id,
-        action: AdminAction(
-          id: 'action_${DateTime.now().millisecondsSinceEpoch}',
-          actionType: AdminActionType.cancel,
-          performedAt: now,
-          performedBy: 'admin', // TODO: 실제 admin ID로 변경
-          details: '수강 취소 처리',
-        ),
-      );
 
       final memberProvider = Provider.of<MemberProvider>(
         context,
@@ -1016,7 +990,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
     } finally {
       if (mounted) {
         setState(() {
-          _isSaving = false;
+          _isCancelling = false;
         });
       }
     }
@@ -1224,8 +1198,8 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
       child: Container(
         padding: const EdgeInsets.all(24),
         decoration: BoxDecoration(
-          color: AppColors.backgroundLight.withOpacity(0.7),
           borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: AppColors.borderLight),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1307,7 +1281,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                           height: 20,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            color: Colors.white,
+                            color: AppColors.primaryGreen,
                           ),
                         )
                       : Text(
@@ -1339,8 +1313,8 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
       child: Container(
         padding: const EdgeInsets.all(24),
         decoration: BoxDecoration(
-          color: AppColors.backgroundLight.withOpacity(0.7),
           borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: AppColors.borderLight),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1800,7 +1774,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                           height: 20,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            color: Colors.white,
+                            color: AppColors.primaryGreen,
                           ),
                         )
                       : Text(
@@ -1862,22 +1836,12 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
       child: Container(
         padding: const EdgeInsets.all(24),
         decoration: BoxDecoration(
-          color: AppColors.backgroundLight.withOpacity(0.7),
+          border: Border.all(color: AppColors.borderLight),
           borderRadius: BorderRadius.circular(16),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              '재등록',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-                color: AppColors.textPrimary,
-              ),
-            ),
-            const SizedBox(height: 8),
-
             // 수업 횟수 지정 UI (공통 위젯 사용)
             ReservationsInputWidget(
               controller: _reEnrollTotalReservationsController,
@@ -1949,7 +1913,8 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                       (_canReEnroll() &&
                           _isReEnrollValid() &&
                           _hasReEnrollChanges() &&
-                          !_isSaving)
+                          !_isReenrolling &&
+                          !_isCancelling)
                       ? _saveReEnrollment
                       : null,
                   style: ElevatedButton.styleFrom(
@@ -1957,7 +1922,8 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                         (_canReEnroll() &&
                             _isReEnrollValid() &&
                             _hasReEnrollChanges() &&
-                            !_isSaving)
+                            !_isReenrolling &&
+                            !_isCancelling)
                         ? AppColors.primaryGreen
                         : AppColors.borderLight,
                     disabledBackgroundColor: AppColors.borderLight,
@@ -1967,13 +1933,13 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                     ),
                     elevation: 0,
                   ),
-                  child: _isSaving
+                  child: _isReenrolling
                       ? const SizedBox(
                           width: 20,
                           height: 20,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            color: Colors.white,
+                            color: AppColors.primaryGreen,
                           ),
                         )
                       : Text(
@@ -1985,7 +1951,8 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                                 (_canReEnroll() &&
                                     _isReEnrollValid() &&
                                     _hasReEnrollChanges() &&
-                                    !_isSaving)
+                                    !_isReenrolling &&
+                                    !_isCancelling)
                                 ? Colors.white
                                 : AppColors.textSecondary,
                           ),
@@ -2000,7 +1967,9 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
               child: SizedBox(
                 width: double.infinity,
                 child: OutlinedButton(
-                  onPressed: _isSaving ? null : _cancelEnrollment,
+                  onPressed: (_isCancelling || _isReenrolling)
+                      ? null
+                      : _cancelEnrollment,
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
@@ -2011,14 +1980,23 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                       width: 1,
                     ),
                   ),
-                  child: Text(
-                    '수강 취소 처리',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.red,
-                    ),
-                  ),
+                  child: _isCancelling
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.red,
+                          ),
+                        )
+                      : Text(
+                          '수강 취소 처리',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.red,
+                          ),
+                        ),
                 ),
               ),
             ),

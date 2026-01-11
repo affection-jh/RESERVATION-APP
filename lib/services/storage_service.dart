@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 import 'package:firebase_storage/firebase_storage.dart';
 
 /// Firebase Storage 이미지 업로드 서비스
@@ -23,12 +24,15 @@ class StorageService {
   }) async {
     try {
       // 파일명 생성 (없으면 타임스탬프 기반)
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      // ⚠️ milliseconds 기반은 병렬 업로드 시 충돌(덮어쓰기) 가능성이 있어
+      // microseconds + random suffix로 충돌 방지
+      final timestamp = DateTime.now().microsecondsSinceEpoch;
+      final rand = Random.secure().nextInt(1 << 32);
       final filePath = imageFile.path;
       final extension = filePath.contains('.')
           ? filePath.substring(filePath.lastIndexOf('.'))
           : '.jpg';
-      final finalFileName = fileName ?? 'image_$timestamp$extension';
+      final finalFileName = fileName ?? 'image_${timestamp}_$rand$extension';
 
       // Storage 경로 생성: folder/filename
       final storagePath = '$folder/$finalFileName';

@@ -14,6 +14,8 @@ class FcmService {
   final FirebaseMessaging _messaging = FirebaseMessaging.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   StreamSubscription<String>? _tokenRefreshSubscription;
+  StreamSubscription<RemoteMessage>? _foregroundMessageSubscription;
+  StreamSubscription<RemoteMessage>? _messageOpenedSubscription;
   bool _isInitialized = false;
 
   /// FCM 초기화 및 토큰 저장
@@ -54,8 +56,16 @@ class FcmService {
 
   /// 포그라운드 메시지 핸들러 설정
   void _setupForegroundHandlers() {
+    // 이미 설정되어 있으면 중복 등록 방지
+    if (_foregroundMessageSubscription != null ||
+        _messageOpenedSubscription != null) {
+      return;
+    }
+
     // 포그라운드 메시지 핸들러
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+    _foregroundMessageSubscription = FirebaseMessaging.onMessage.listen((
+      RemoteMessage message,
+    ) {
       print('포그라운드 메시지 수신: ${message.notification?.title}');
       _showForegroundNotification(message);
       // NotificationProvider에 새 알림 추가
@@ -63,7 +73,9 @@ class FcmService {
     });
 
     // 알림 클릭 핸들러
-    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+    _messageOpenedSubscription = FirebaseMessaging.onMessageOpenedApp.listen((
+      RemoteMessage message,
+    ) {
       print('알림 클릭: ${message.data}');
       _handleNotificationTap(message.data);
     });
@@ -123,23 +135,25 @@ class FcmService {
         return;
       }
 
-      // users 컬렉션에 FCM 토큰 저장
-      await _firestore.collection('users').doc(userId).update({
-        'fcmToken': fcmToken,
-        'fcmTokenUpdatedAt': FieldValue.serverTimestamp(),
-      });
+      // ✅ 트랜잭션으로 원자적 저장 (users 문서 + 서브컬렉션)
+      await _firestore.runTransaction((transaction) async {
+        final userRef = _firestore.collection('users').doc(userId);
+        transaction.update(userRef, {
+          'fcmToken': fcmToken,
+          'fcmTokenUpdatedAt': FieldValue.serverTimestamp(),
+        });
 
-      // fcmTokens 서브컬렉션에도 저장 (토큰별 조회를 위해)
-      await _firestore
-          .collection('users')
-          .doc(userId)
-          .collection('fcmTokens')
-          .doc(fcmToken)
-          .set({
-            'token': fcmToken,
-            'createdAt': FieldValue.serverTimestamp(),
-            'updatedAt': FieldValue.serverTimestamp(),
-          });
+        final tokenRef = _firestore
+            .collection('users')
+            .doc(userId)
+            .collection('fcmTokens')
+            .doc(fcmToken);
+        transaction.set(tokenRef, {
+          'token': fcmToken,
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      });
 
       print('FCM 토큰이 저장되었습니다: $fcmToken');
     } catch (e) {
@@ -152,18 +166,18 @@ class FcmService {
     try {
       final token = await _messaging.getToken();
       if (token != null) {
-        // users 문서에서 토큰 제거
-        await _firestore.collection('users').doc(userId).update({
-          'fcmToken': FieldValue.delete(),
-        });
+        // ✅ 트랜잭션으로 원자적 삭제 (users 문서 + 서브컬렉션)
+        await _firestore.runTransaction((transaction) async {
+          final userRef = _firestore.collection('users').doc(userId);
+          transaction.update(userRef, {'fcmToken': FieldValue.delete()});
 
-        // fcmTokens 서브컬렉션에서도 삭제
-        await _firestore
-            .collection('users')
-            .doc(userId)
-            .collection('fcmTokens')
-            .doc(token)
-            .delete();
+          final tokenRef = _firestore
+              .collection('users')
+              .doc(userId)
+              .collection('fcmTokens')
+              .doc(token);
+          transaction.delete(tokenRef);
+        });
 
         // 디바이스에서도 토큰 삭제
         await _messaging.deleteToken();
@@ -226,6 +240,11 @@ class FcmService {
   /// 리소스 정리
   void dispose() {
     _tokenRefreshSubscription?.cancel();
+    _foregroundMessageSubscription?.cancel();
+    _messageOpenedSubscription?.cancel();
+    _tokenRefreshSubscription = null;
+    _foregroundMessageSubscription = null;
+    _messageOpenedSubscription = null;
     _isInitialized = false;
   }
 }

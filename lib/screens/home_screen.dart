@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../theme/app_colors.dart';
 import '../widgets/story_card.dart';
+import 'story/story_detail_screen.dart';
 import '../models/reservation.dart';
 import '../models/course.dart';
 import '../providers/place_provider.dart';
@@ -239,65 +240,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildTitleSection(PlaceProvider placeProvider) {
     final place = placeProvider.currentPlace;
     final greetingText = place?.greetingText ?? '안녕하세요,\n리퀘스트를 추천해 드려요';
-    final highlightedText = place?.highlightedText;
-    final highlightColor = place?.highlightColorValue != null
-        ? Color(place!.highlightColorValue!)
-        : AppColors.primaryGreen.withOpacity(0.3);
 
-    // 형광펜 효과가 있는 경우
-    if (highlightedText != null && highlightedText.isNotEmpty) {
-      final parts = greetingText.split(highlightedText);
-      if (parts.length == 2) {
-        // 형광펜으로 강조할 텍스트가 있는 경우
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-          child: Text.rich(
-            TextSpan(
-              children: [
-                TextSpan(
-                  text: parts[0],
-                  style: TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-                WidgetSpan(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: highlightColor,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 4,
-                      vertical: 2,
-                    ),
-                    child: Text(
-                      highlightedText,
-                      style: TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-                  ),
-                ),
-                TextSpan(
-                  text: parts[1],
-                  style: TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      }
-    }
-
-    // 형광펜 효과가 없는 경우 기본 텍스트
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
       child: Text(
@@ -418,7 +361,7 @@ class _HomeScreenState extends State<HomeScreen> {
         key: key,
         height: 330,
         child: Padding(
-          padding: const EdgeInsets.only(left: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 16),
           child: StoryCard(
             title: stories[0].title,
             content: stories[0].content,
@@ -426,6 +369,14 @@ class _HomeScreenState extends State<HomeScreen> {
             imageUrls: stories[0].imageUrls,
             backgroundImageUrl: stories[0].backgroundImageUrl,
             placeName: currentPlace?.name,
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) =>
+                      StoryDetailScreen(story: stories[0], place: currentPlace),
+                ),
+              );
+            },
           ),
         ),
       );
@@ -457,6 +408,16 @@ class _HomeScreenState extends State<HomeScreen> {
                 imageUrls: stories[index].imageUrls,
                 backgroundImageUrl: stories[index].backgroundImageUrl,
                 placeName: currentPlace?.name,
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => StoryDetailScreen(
+                        story: stories[index],
+                        place: currentPlace,
+                      ),
+                    ),
+                  );
+                },
               ),
             );
           },
@@ -665,12 +626,9 @@ class _HomeScreenState extends State<HomeScreen> {
           final course = data['course'] as Course;
 
           // 오늘 날짜 (시간 제외)
-          final today = TimezoneUtils.getSeoulDateTime();
-          final todayDate = DateTime(today.year, today.month, today.day);
-          final reservationDate = DateTime(
-            reservation.reservedDate.year,
-            reservation.reservedDate.month,
-            reservation.reservedDate.day,
+          final todayDate = TimezoneUtils.getSeoulToday();
+          final reservationDate = TimezoneUtils.getSeoulDateOnly(
+            reservation.reservedDate,
           );
 
           // 지난 예약인지 확인

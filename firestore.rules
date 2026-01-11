@@ -160,6 +160,23 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
+    // ==================== Enrollments Subcollections (Admin Only) ====================
+    // 히스토리/관리자액션/연장요청은 서브컬렉션으로 분리되어 있으며,
+    // 기본 규칙(match /{document=**})에 의해 별도 match가 없으면 전부 거부됨.
+    // 관리자 화면에서 쓰기/읽기가 필요하므로 명시적으로 허용.
+    match /enrollments/{enrollmentId}/reenrollmentHistory/{recordId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+    match /enrollments/{enrollmentId}/adminActions/{actionId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+    match /enrollments/{enrollmentId}/extensionRequests/{requestId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
     // ==================== Course Policies ====================
     match /coursePolicies/{courseId} {
       // 유저도 정책을 읽어야 잠금(openAt) 표시 가능

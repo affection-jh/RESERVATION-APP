@@ -1,18 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_functions/cloud_functions.dart';
-import 'package:provider/provider.dart';
 import 'package:reservation/services/user_service.dart';
 import '../../../models/course.dart';
 import '../../../models/reservation.dart';
 import '../../../models/user.dart';
 import '../../../theme/app_colors.dart';
 import '../../../services/firestore_service.dart';
-import '../../../providers/auth_provider.dart';
 import '../../../widgets/common_dialog.dart';
 import 'reservation_manage_bottom_sheet.dart';
 import 'member_selection_side_panel.dart';
 import '../../../utils/snackbar_util.dart';
+import '../../../utils/format_utils.dart';
 import 'dart:async';
 
 /// 세션 상세보기 화면
@@ -39,6 +38,8 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   Map<String, User> _userCache = {};
   bool _isLoading = false;
+  bool _shouldShowSpinner = false; // 1초 이상 걸릴 때만 스피너 표시
+  Timer? _loadingTimer; // 로딩 스피너 표시 타이머
   Map<String, bool> _copiedPhones = {}; // 전화번호 복사 상태 관리
   List<Reservation> _dateReservations = [];
   StreamSubscription<List<Reservation>>? _reservationsSub;
@@ -47,12 +48,28 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
   @override
   void initState() {
     super.initState();
+    // 초기 로딩 상태 설정
+    setState(() {
+      _isLoading = true;
+      _shouldShowSpinner = false; // 초기에는 스피너 숨김
+    });
+
+    // 1초 후에 스피너 표시
+    _loadingTimer = Timer(const Duration(seconds: 1), () {
+      if (mounted && _isLoading) {
+        setState(() {
+          _shouldShowSpinner = true;
+        });
+      }
+    });
+
     _listenReservations();
   }
 
   @override
   void dispose() {
     _reservationsSub?.cancel();
+    _loadingTimer?.cancel();
     super.dispose();
   }
 
@@ -77,7 +94,25 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
   }
 
   Future<void> _loadUserDataFor(List<Reservation> reservations) async {
-    setState(() => _isLoading = true);
+    final loadingStartTime = DateTime.now();
+
+    // 기존 타이머 취소
+    _loadingTimer?.cancel();
+
+    setState(() {
+      _isLoading = true;
+      _shouldShowSpinner = false; // 초기에는 스피너 숨김
+    });
+
+    // 1초 후에 스피너 표시
+    _loadingTimer = Timer(const Duration(seconds: 1), () {
+      if (mounted && _isLoading) {
+        setState(() {
+          _shouldShowSpinner = true;
+        });
+      }
+    });
+
     for (final reservation in reservations) {
       if (_userCache.containsKey(reservation.userId)) continue;
       try {
@@ -92,7 +127,22 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
         // ignore
       }
     }
-    if (mounted) setState(() => _isLoading = false);
+
+    // 최소 로딩 시간 보장 (300ms) - UI 깨짐 방지
+    final elapsed = DateTime.now().difference(loadingStartTime);
+    final minLoadingDuration = const Duration(milliseconds: 300);
+    if (elapsed < minLoadingDuration) {
+      await Future.delayed(minLoadingDuration - elapsed);
+    }
+
+    // 타이머 취소 및 로딩 상태 해제
+    _loadingTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+        _shouldShowSpinner = false;
+      });
+    }
   }
 
   void _refreshReservations() {
@@ -169,8 +219,12 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                   children: [
                     const SizedBox(height: 16),
                     Expanded(
-                      child: _isLoading
-                          ? Center(child: CircularProgressIndicator())
+                      child: (_isLoading && _shouldShowSpinner)
+                          ? Center(
+                              child: CircularProgressIndicator(
+                                color: AppColors.primaryGreen,
+                              ),
+                            )
                           : dateReservations.isEmpty
                           ? Center(
                               child: Column(
@@ -232,14 +286,6 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
         ),
       ),
       actions: [
-        // 세션 취소 버튼 (관리자만)
-        if (Provider.of<AuthProvider>(context, listen: false).currentAdmin !=
-            null)
-          IconButton(
-            icon: Icon(Icons.cancel, color: Colors.red, size: 32),
-            onPressed: () => _cancelSession(),
-            tooltip: '세션 취소',
-          ),
         // 예약자 추가 버튼
         IconButton(
           icon: Icon(Icons.add_circle, color: AppColors.primaryGreen, size: 32),
@@ -329,7 +375,10 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
   }) {
     final user = _userCache[reservation.userId];
     final userName = user?.name ?? '예약자 $index';
-    final phoneNumber = user?.phoneNumber ?? '010-0000-0000';
+    final rawPhoneNumber = user?.phoneNumber ?? '01000000000';
+    final formattedPhoneNumber = rawPhoneNumber.isNotEmpty
+        ? FormatUtils.formatPhoneNumber(rawPhoneNumber)
+        : '010-0000-0000';
 
     return InkWell(
       onTap: () =>
@@ -355,7 +404,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                   Row(
                     children: [
                       Text(
-                        phoneNumber,
+                        formattedPhoneNumber,
                         style: TextStyle(
                           fontSize: 16,
                           color: AppColors.textSecondary,
@@ -364,8 +413,10 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                       const SizedBox(width: 8),
                       GestureDetector(
                         onTap: () {
-                          // 클립보드에 복사
-                          Clipboard.setData(ClipboardData(text: phoneNumber));
+                          // 클립보드에 원본 전화번호 복사
+                          Clipboard.setData(
+                            ClipboardData(text: rawPhoneNumber),
+                          );
                           setState(() {
                             _copiedPhones[reservation.id] = true;
                           });
@@ -518,69 +569,6 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     setState(() => _isLoading = false);
     if (success > 0) {
       SnackbarUtil.showSuccess(context, '$success명 예약이 추가되었습니다.');
-    }
-  }
-
-  /// 세션 취소 (관리자)
-  Future<void> _cancelSession() async {
-    final reservedCount = _dateReservations.length;
-    final courseName = widget.course.name;
-    final dayName = widget.session.dayName;
-    final timeRange = '${widget.session.startTime} - ${widget.session.endTime}';
-    final dateText = '${widget.date.month}월 ${widget.date.day}일';
-
-    // 예약자가 있는 경우 확인
-    if (reservedCount > 0) {
-      final confirmed = await CommonDialog.show(
-        context: context,
-        title: '세션 취소',
-        message:
-            '$dateText $dayName요일 $timeRange\n$courseName\n\n$reservedCount명의 기존 예약자에게 알림이 발송됩니다.',
-        cancelText: '취소',
-        confirmText: '세션 취소',
-        confirmButtonColor: Colors.red,
-      );
-
-      if (confirmed != true) {
-        return;
-      }
-    } else {
-      // 예약자가 없는 경우에도 확인
-      final confirmed = await CommonDialog.show(
-        context: context,
-        title: '세션 취소',
-        message:
-            '$dateText $dayName요일 $timeRange\n$courseName\n\n이 세션을 취소하시겠습니까?',
-        cancelText: '취소',
-        confirmText: '세션 취소',
-        confirmButtonColor: Colors.red,
-      );
-
-      if (confirmed != true) {
-        return;
-      }
-    }
-
-    setState(() => _isLoading = true);
-    try {
-      await _firestoreService.cancelSession(
-        placeId: widget.placeId,
-        courseId: widget.course.id,
-        dayOfWeek: widget.session.dayOfWeek,
-        startTime: widget.session.startTime,
-        reservedDate: widget.date,
-      );
-
-      if (mounted) {
-        SnackbarUtil.showSuccess(context, '세션이 취소되었습니다. 모든 예약자에게 알림이 전송되었습니다.');
-        Navigator.of(context).pop(true); // 세션 취소 후 화면 닫기
-      }
-    } catch (e) {
-      if (mounted) {
-        SnackbarUtil.showError(context, '세션 취소 중 오류가 발생했습니다: $e');
-      }
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
     }
   }
 }

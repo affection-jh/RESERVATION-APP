@@ -6,6 +6,7 @@ import '../models/course_enrollment.dart';
 import '../models/reservation.dart';
 import '../models/place.dart';
 import '../utils/reservation_utils.dart';
+import '../utils/timezone_utils.dart';
 import 'firestore_service.dart';
 
 /// 유저 관리 서비스
@@ -32,7 +33,7 @@ class UserService {
   }
 
   DateTime _timestampToDateTime(dynamic timestamp) {
-    if (timestamp == null) return DateTime.now();
+    if (timestamp == null) return TimezoneUtils.getSeoulDateTime();
     if (timestamp is Timestamp) return timestamp.toDate();
     if (timestamp is String) return DateTime.parse(timestamp);
     throw Exception('Invalid timestamp format');
@@ -85,14 +86,12 @@ class UserService {
     required String userId,
     required String name,
     required String phoneNumber,
-    String? email,
   }) async {
     final user = User(
       userId: userId,
       name: name,
       phoneNumber: phoneNumber,
-      email: email,
-      createdAt: DateTime.now(),
+      createdAt: TimezoneUtils.getSeoulDateTime(),
     );
 
     final docRef = _firestore.collection('users').doc(user.userId);
@@ -134,25 +133,11 @@ class UserService {
   }
 
   /// 플레이스별 사용자 목록 조회
+  /// @deprecated users.placeIds는 더 이상 사용하지 않음. courseMembers 기반으로 조회하세요.
+  @Deprecated('users.placeIds는 더 이상 사용하지 않음. courseMembers 기반으로 조회하세요.')
   Stream<List<User>> watchUsersByPlace(String placeId) {
-    return _firestore
-        .collection('users')
-        .where('placeIds', arrayContains: placeId)
-        .snapshots()
-        .map((snapshot) {
-          return snapshot.docs.map((doc) {
-            final data = doc.data();
-            data['createdAt'] = _timestampToDateTime(
-              data['createdAt'],
-            ).toIso8601String();
-            if (data['updatedAt'] != null) {
-              data['updatedAt'] = _timestampToDateTime(
-                data['updatedAt'],
-              ).toIso8601String();
-            }
-            return User.fromJson(data);
-          }).toList();
-        });
+    // users.placeIds는 더 이상 사용하지 않으므로 빈 리스트 반환
+    return Stream.value([]);
   }
 
   /// 유저 가져오기
@@ -179,6 +164,53 @@ class UserService {
       _notifyUserUpdate(user);
     }
     return user;
+  }
+
+  /// 여러 유저를 한 번에 조회 (배치 조회)
+  ///
+  /// [userIds] 조회할 userId 리스트 (최대 10개)
+  /// Returns: User 리스트 (존재하지 않는 userId는 제외)
+  Future<List<User>> getUsersByIds(List<String> userIds) async {
+    if (userIds.isEmpty) return [];
+
+    // Firestore whereIn은 최대 10개까지만 가능
+    const maxBatchSize = 10;
+    final allUsers = <User>[];
+
+    for (int i = 0; i < userIds.length; i += maxBatchSize) {
+      final batch = userIds.skip(i).take(maxBatchSize).toList();
+      try {
+        final snapshot = await _firestore
+            .collection('users')
+            .where(FieldPath.documentId, whereIn: batch)
+            .get();
+
+        for (final doc in snapshot.docs) {
+          final data = doc.data();
+          data['createdAt'] = _timestampToDateTime(
+            data['createdAt'],
+          ).toIso8601String();
+          if (data['updatedAt'] != null) {
+            data['updatedAt'] = _timestampToDateTime(
+              data['updatedAt'],
+            ).toIso8601String();
+          }
+          allUsers.add(User.fromJson(data));
+        }
+      } catch (e) {
+        // 배치 조회 실패 시 개별 조회로 폴백
+        for (final userId in batch) {
+          try {
+            final user = await getUser(userId);
+            allUsers.add(user);
+          } catch (_) {
+            // 개별 조회도 실패하면 스킵
+          }
+        }
+      }
+    }
+
+    return allUsers;
   }
 
   /// 유저 업데이트
@@ -228,7 +260,6 @@ class UserService {
     required String userId,
     String? name,
     String? phoneNumber,
-    String? email,
   }) async {
     if (_currentUser == null || _currentUser!.userId != userId) {
       throw Exception('로그인된 유저가 아닙니다.');
@@ -237,7 +268,6 @@ class UserService {
     final updatedUser = _currentUser!.updateProfile(
       name: name,
       phoneNumber: phoneNumber,
-      email: email,
     );
 
     return await updateUser(updatedUser);
@@ -281,9 +311,9 @@ class UserService {
       throw Exception('이미 등록된 코스입니다.');
     }
 
-    final now = DateTime.now();
+    final now = TimezoneUtils.getSeoulDateTime();
     final enrollment = CourseEnrollment(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      id: now.millisecondsSinceEpoch.toString(),
       userId: userId,
       courseId: courseId,
       placeId: placeId,
@@ -591,7 +621,6 @@ class UserService {
     // 클라이언트에서 수정하지 않도록 한다(Cloud Function에서만).
     final updateData = <String, dynamic>{
       'name': admin.name,
-      'email': admin.email,
       'placeIds': admin.placeIds,
       'lastAccessedPlaceId': admin.lastAccessedPlaceId,
       'notificationsEnabled': admin.notificationsEnabled,

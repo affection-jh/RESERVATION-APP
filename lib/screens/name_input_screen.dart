@@ -289,7 +289,7 @@ class _NameInputScreenState extends State<NameInputScreen> {
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
                             valueColor: AlwaysStoppedAnimation<Color>(
-                              Colors.white,
+                              AppColors.primaryGreen,
                             ),
                           ),
                         )

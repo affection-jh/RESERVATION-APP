@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import '../models/course_enrollment.dart';
 import '../models/pending_member.dart';
@@ -28,6 +29,11 @@ class MemberService {
     }
     return digits;
   }
+
+  /// 전화번호 기반으로 일관된 userId 생성
+  /// (⚠️ 사용 금지)
+  /// 과거에 phone_ 접두사로 가짜 userId를 만들었는데,
+  /// Firebase Auth UID와 불일치해서 enrollments/placeMemberships가 "2유저"로 갈라지는 원인이 됨.
 
   /// 멤버 등록 (pendingMembers 및 enrollments 생성)
   ///
@@ -69,6 +75,37 @@ class MemberService {
       );
       debugPrint('🔥 [MemberService] courseEnrollments: $courseEnrollments');
 
+      // 성능 최적화: 코스 조회를 Map으로 캐싱 (O(1) 접근)
+      final courseMap = <String, dynamic>{};
+      for (final course in courses) {
+        final courseId = (course as dynamic).id as String;
+        courseMap[courseId] = course;
+      }
+
+      // 성능 최적화: courseEnrollments를 Map으로 변환 (빠른 조회)
+      final courseEnrollmentMap = <String, Map<String, dynamic>>{};
+      if (courseEnrollments != null) {
+        for (final enrollment in courseEnrollments) {
+          final courseId = enrollment['courseId'] as String;
+          courseEnrollmentMap[courseId] = enrollment;
+        }
+      }
+
+      // pendingMembers 중복 체크 (트랜잭션 전에 확인)
+      final pendingId = '${placeId}_$normalizedPhone';
+      final pendingRef = _firestore.collection('pendingMembers').doc(pendingId);
+      final pendingDoc = await pendingRef.get();
+
+      if (pendingDoc.exists) {
+        final pendingData = pendingDoc.data();
+        final status = pendingData?['status'] as String?;
+        // status가 null이거나 'approved'인 경우 중복으로 간주
+        if (status == null || status == 'approved') {
+          debugPrint('❌ [MemberService] 이미 등록된 pendingMember입니다: $pendingId');
+          return false;
+        }
+      }
+
       // User 조회
       debugPrint('🔍 [MemberService] User 조회 시작');
       final userQuery = _firestore
@@ -79,16 +116,20 @@ class MemberService {
       debugPrint('🔍 [MemberService] User 조회 결과: ${userSnapshot.docs.length}개');
 
       String? existingUserId;
-      if (userSnapshot.docs.isNotEmpty) {
+      final hasRealUser = userSnapshot.docs.isNotEmpty;
+      if (hasRealUser) {
         existingUserId = userSnapshot.docs.first.id;
         debugPrint('✅ [MemberService] 기존 사용자 발견: $existingUserId');
       } else {
-        debugPrint('ℹ️ [MemberService] 신규 사용자');
+        debugPrint(
+          'ℹ️ [MemberService] 신규 사용자: users 문서가 아직 없음 (로그인 후 자동 매칭 예정)',
+        );
+        existingUserId = null;
       }
 
-      // 기존 enrollments 확인
+      // 기존 enrollments 확인 (User가 존재하는 경우에만)
       final existingEnrollmentIds = <String>{};
-      if (courseIds.isNotEmpty && existingUserId != null) {
+      if (courseIds.isNotEmpty && hasRealUser && existingUserId != null) {
         debugPrint('🔍 [MemberService] 기존 enrollments 조회 시작');
         final existingEnrollmentQuery = _firestore
             .collection('enrollments')
@@ -112,92 +153,149 @@ class MemberService {
       }
 
       // 트랜잭션으로 처리
-      final pendingId = '${placeId}_$normalizedPhone';
-      final pendingRef = _firestore.collection('pendingMembers').doc(pendingId);
-
       debugPrint('🔥 [MemberService] 트랜잭션 시작');
       await _firestore.runTransaction((tx) async {
-        // 1. pendingMembers 생성/업데이트
+        // ========== 1단계: 모든 읽기 작업 먼저 수행 ==========
+        // 1-1. pendingMembers 읽기
         final existingPending = await tx.get(pendingRef);
         debugPrint(
           '🔍 [MemberService] pendingMembers 존재 여부: ${existingPending.exists}',
         );
 
-        if (existingPending.exists) {
-          debugPrint('🔄 [MemberService] pendingMembers 업데이트');
-          final updateData = <String, dynamic>{
-            'name': name,
-            'autoApprove': true,
-            'courseIds': courseIds,
-            'updatedAt': FieldValue.serverTimestamp(),
-          };
-          if (courseEnrollments != null) {
-            updateData['courseEnrollments'] = courseEnrollments;
-            debugPrint('📝 [MemberService] courseEnrollments 저장');
-          }
-          debugPrint('📝 [MemberService] 업데이트 데이터: $updateData');
-          tx.update(pendingRef, updateData);
+        // 1-2. User 읽기 (존재하는 경우에만)
+        DocumentReference? userRef;
+        DocumentSnapshot? userDoc;
+        if (existingUserId != null) {
+          userRef = _firestore.collection('users').doc(existingUserId);
+          userDoc = await tx.get(userRef);
+          debugPrint('🔍 [MemberService] User 존재 여부: ${userDoc.exists}');
         } else {
-          debugPrint('✨ [MemberService] pendingMembers 생성');
-          final pending = PendingMember(
-            id: pendingId,
-            placeId: placeId,
-            phoneNumber: normalizedPhone,
-            name: name,
-            createdBy: adminId,
-            createdAt: DateTime.now(),
-            autoApprove: true,
+          debugPrint(
+            '🔍 [MemberService] User 문서 없음: enrollments는 생성하지 않고 pendingMembers만 저장',
           );
-
-          final payload = <String, dynamic>{
-            ...pending.toJson(),
-            'createdAt': FieldValue.serverTimestamp(),
-            'courseIds': courseIds,
-          };
-          if (courseEnrollments != null) {
-            payload['courseEnrollments'] = courseEnrollments;
-            debugPrint('📝 [MemberService] courseEnrollments 저장');
-          }
-          debugPrint('📝 [MemberService] 생성 데이터: $payload');
-          tx.set(pendingRef, payload);
         }
 
-        // 2. 기존 User가 있으면 enrollments 생성
-        if (existingUserId != null && courseIds.isNotEmpty) {
+        // 1-3. placeMembership 읽기 (존재하는 경우에만)
+        // - 불변조건: enrollments(=courseMembers)가 있으면 placeMembership도 반드시 존재해야 한다.
+        // - 과거 랜덤 docId로 생성된 placeMembership과 충돌을 피하기 위해,
+        //   여기서는 "고정 docId"로 하나를 보장한다. (중복 placeMembership이 있어도 placeId set으로 안전)
+        DocumentReference? membershipRef;
+        DocumentSnapshot? membershipDoc;
+        if (existingUserId != null) {
+          final membershipId = '${existingUserId}_$placeId';
+          membershipRef = _firestore
+              .collection('placeMemberships')
+              .doc(membershipId);
+          membershipDoc = await tx.get(membershipRef);
+          debugPrint(
+            '🔍 [MemberService] placeMembership 존재 여부: ${membershipDoc.exists}',
+          );
+        }
+
+        // 1-4. 모든 enrollments 읽기 (트랜잭션 규칙: 모든 read가 write보다 먼저)
+        final enrollmentRefs = <String, DocumentReference>{};
+        final enrollmentDocs = <String, DocumentSnapshot>{};
+        if (courseIds.isNotEmpty && existingUserId != null) {
+          for (final courseId in courseIds) {
+            // 트랜잭션 외부에서 이미 확인한 경우 스킵
+            if (existingEnrollmentIds.contains(courseId)) {
+              debugPrint(
+                '⏭️ [MemberService] enrollment 스킵 (트랜잭션 외부 확인): $courseId',
+              );
+              continue;
+            }
+
+            final enrollmentId = '${existingUserId}_${placeId}_$courseId';
+            final enrollmentRef = _firestore
+                .collection('enrollments')
+                .doc(enrollmentId);
+            enrollmentRefs[courseId] = enrollmentRef;
+            enrollmentDocs[courseId] = await tx.get(enrollmentRef);
+
+            if (enrollmentDocs[courseId]!.exists) {
+              debugPrint(
+                '⏭️ [MemberService] enrollment 이미 존재 (트랜잭션 내부 확인): $courseId',
+              );
+            }
+          }
+        }
+
+        // ========== 2단계: 모든 쓰기 작업 수행 ==========
+        // 2-1. pendingMembers 생성/업데이트는 제거
+        // 초대 요청은 pushMessage만 전송하도록 변경
+
+        // 2-2. placeMembership 보장 (User가 존재하는 경우에만)
+        if (existingUserId != null &&
+            membershipRef != null &&
+            membershipDoc != null &&
+            !membershipDoc.exists) {
+          debugPrint('📝 [MemberService] placeMembership 생성 시작');
+          final now = TimezoneUtils.getSeoulDateTime();
+          final membership = PlaceMembership(
+            id: membershipRef.id,
+            userId: existingUserId,
+            placeId: placeId,
+            requestedAt: now,
+            approvedAt: now, // status 제거로 항상 멤버
+            invitedBy: adminId,
+          );
+
+          final membershipData = membership.toJson();
+          final ts = _firestoreService.dateTimeToTimestamp(now);
+          membershipData['requestedAt'] = ts;
+          membershipData['approvedAt'] = ts;
+          tx.set(membershipRef, membershipData);
+          debugPrint('✅ [MemberService] placeMembership 생성 완료');
+        }
+
+        // 2-3. users 문서는 관리자/클라이언트가 타인 uid로 생성/수정할 수 없음 (rules).
+        // 따라서 여기서는 users 문서를 만들거나 수정하지 않는다.
+        if (existingUserId != null) {
+          debugPrint('✅ [MemberService] 기존 User 사용: $existingUserId');
+        }
+
+        // 2-4. enrollments 생성
+        // ✅ users 문서(=실제 Firebase UID)가 있는 경우에만 enrollments를 만든다.
+        // users가 없는 상태에서 phone_... 같은 가짜 userId로 enrollments를 만들면
+        // 나중에 로그인한 실제 유저와 데이터가 분리된다.
+        if (courseIds.isNotEmpty && existingUserId != null) {
           debugPrint('📚 [MemberService] enrollments 생성 시작');
           final enrollmentTime = TimezoneUtils.getSeoulDateTime();
 
           for (final courseId in courseIds) {
-            if (existingEnrollmentIds.contains(courseId)) {
-              debugPrint('⏭️ [MemberService] enrollment 스킵: $courseId');
+            // 이미 읽은 enrollment 문서 확인
+            final enrollmentDoc = enrollmentDocs[courseId];
+            if (enrollmentDoc == null) {
+              // 트랜잭션 외부에서 이미 확인한 경우 스킵
               continue;
             }
 
-            // 코스 찾기
-            final course = courses.firstWhere(
-              (c) => (c as dynamic).id == courseId,
-              orElse: () => throw Exception('코스를 찾을 수 없습니다: $courseId'),
-            );
+            if (enrollmentDoc.exists) {
+              // 트랜잭션 내부에서 확인한 경우 스킵
+              continue;
+            }
+
+            final enrollmentRef = enrollmentRefs[courseId]!;
+            final enrollmentId = '${existingUserId}_${placeId}_$courseId';
+
+            // 코스 찾기 (캐시된 Map 사용 - O(1) 접근)
+            final course = courseMap[courseId];
+            if (course == null) {
+              throw Exception('코스를 찾을 수 없습니다: $courseId');
+            }
             final courseName = (course as dynamic).name;
             final defaultTotalReservations =
                 (course as dynamic).defaultTotalReservations ?? 0;
             debugPrint('✅ [MemberService] 코스 확인: $courseName ($courseId)');
 
-            // courseEnrollments에서 설정 찾기
-            Map<String, dynamic>? courseEnrollmentConfig;
-            if (courseEnrollments != null) {
-              try {
-                final found = courseEnrollments.firstWhere(
-                  (e) => e['courseId'] == courseId,
-                );
-                courseEnrollmentConfig = found as Map<String, dynamic>?;
-                debugPrint('✅ [MemberService] courseEnrollmentConfig 발견');
-              } catch (e) {
-                debugPrint(
-                  '⚠️ [MemberService] courseEnrollmentConfig 없음, 기본값 사용',
-                );
-                courseEnrollmentConfig = null;
-              }
+            // courseEnrollments에서 설정 찾기 (캐시된 Map 사용 - O(1) 접근)
+            final courseEnrollmentConfig = courseEnrollmentMap[courseId];
+            if (courseEnrollmentConfig != null) {
+              debugPrint('✅ [MemberService] courseEnrollmentConfig 발견');
+            } else {
+              debugPrint(
+                '⚠️ [MemberService] courseEnrollmentConfig 없음, 기본값 사용',
+              );
             }
 
             // Enrollment 생성
@@ -222,9 +320,9 @@ class MemberService {
               debugPrint('📅 [MemberService] 유효기간 기본값 사용');
             }
 
-            final enrollmentRef = _firestore.collection('enrollments').doc();
+            // ✅ 고정 ID 사용으로 중복 생성 완전 방지
             final enrollment = CourseEnrollment(
-              id: enrollmentRef.id,
+              id: enrollmentId,
               userId: existingUserId,
               courseId: courseId,
               placeId: placeId,
@@ -244,12 +342,36 @@ class MemberService {
             enrollmentData['validUntil'] = _firestoreService
                 .dateTimeToTimestamp(validUntil);
 
-            debugPrint('✨ [MemberService] enrollment 생성: ${enrollmentRef.id}');
+            debugPrint('✨ [MemberService] enrollment 생성: $enrollmentId');
             debugPrint('✨ [MemberService] enrollment 데이터: $enrollmentData');
             tx.set(enrollmentRef, enrollmentData);
           }
         }
       });
+
+      // 트랜잭션 완료 후 pushMessage 전송 (User가 존재하는 경우에만)
+      if (existingUserId != null) {
+        try {
+          debugPrint('📤 [MemberService] 초대 요청 pushMessage 전송 시작');
+          final callable = FirebaseFunctions.instance.httpsCallable(
+            'sendInvitation',
+          );
+          await callable.call({
+            'userId': existingUserId,
+            'placeId': placeId,
+            'phoneNumber': normalizedPhone,
+            'name': name,
+          });
+          debugPrint('✅ [MemberService] 초대 요청 pushMessage 전송 완료');
+        } catch (e) {
+          debugPrint('⚠️ [MemberService] pushMessage 전송 실패 (무시): $e');
+          // pushMessage 전송 실패해도 멤버 등록은 성공으로 처리
+        }
+      } else {
+        debugPrint(
+          'ℹ️ [MemberService] User가 없어 pushMessage 전송 스킵 (로그인 후 자동 매칭 예정)',
+        );
+      }
 
       debugPrint('✅ [MemberService] 멤버 등록 완료');
       return true;
@@ -303,7 +425,7 @@ class MemberService {
       // 이름 업데이트
       final updatedUser = user.copyWith(
         name: newName,
-        updatedAt: DateTime.now(),
+        updatedAt: TimezoneUtils.getSeoulDateTime(),
       );
 
       debugPrint('📝 [MemberService] User 업데이트 시작');
@@ -359,11 +481,51 @@ class MemberService {
 
       debugPrint('✅ [MemberService] User 발견: ${user.userId}');
 
+      // placeMembership 확인 및 생성 (없으면 생성)
+      final firestore = _firestoreService.firestore;
+      final membershipQuery = firestore
+          .collection('placeMemberships')
+          .where('userId', isEqualTo: user.userId)
+          .where('placeId', isEqualTo: placeId)
+          .limit(1);
+
+      final membershipSnapshot = await membershipQuery.get();
+      if (membershipSnapshot.docs.isEmpty) {
+        debugPrint('📝 [MemberService] placeMembership 없음, 생성 시작');
+        final now = TimezoneUtils.getSeoulDateTime();
+        // 고정 ID로 중복 생성 방지 (cancelEnrollment/회원탈퇴 정합성 유지)
+        final membershipRef = firestore
+            .collection('placeMemberships')
+            .doc('${user.userId}_$placeId');
+
+        final membership = PlaceMembership(
+          id: membershipRef.id,
+          userId: user.userId,
+          placeId: placeId,
+          requestedAt: now,
+          approvedAt: now, // status 제거로 항상 approvedAt 설정
+        );
+
+        final membershipData = membership.toJson();
+        final timestamp = _firestoreService.dateTimeToTimestamp(now);
+        // Firestore에 저장할 때는 Timestamp로 변환
+        membershipData['requestedAt'] = timestamp;
+        membershipData['approvedAt'] = timestamp;
+
+        await membershipRef.set(membershipData);
+        debugPrint('✅ [MemberService] placeMembership 생성 완료');
+      } else {
+        debugPrint('✅ [MemberService] placeMembership 이미 존재');
+      }
+
       // 이름 업데이트
       User updatedUser = user;
       if (user.name != name) {
         debugPrint('📝 [MemberService] 이름 업데이트: ${user.name} -> $name');
-        updatedUser = user.copyWith(name: name, updatedAt: DateTime.now());
+        updatedUser = user.copyWith(
+          name: name,
+          updatedAt: TimezoneUtils.getSeoulDateTime(),
+        );
         await _userService.updateUserDirect(updatedUser);
         debugPrint('✅ [MemberService] 이름 업데이트 완료');
       }
@@ -406,7 +568,8 @@ class MemberService {
         debugPrint('✅ [MemberService] 코스 확인: $courseName ($courseId)');
 
         final enrollment = CourseEnrollment(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          // ✅ cancelEnrollment Cloud Function과 동일한 고정 ID 패턴 사용
+          id: '${updatedUser.userId}_${placeId}_$courseId',
           userId: updatedUser.userId,
           courseId: courseId,
           placeId: placeId,
@@ -423,46 +586,28 @@ class MemberService {
         debugPrint('✅ [MemberService] enrollment 생성 완료');
       }
 
-      // 코스 등록 제거 (유효 기간을 만료시킴)
+      // 코스 등록 제거 (수강취소: enrollment 완전 삭제, placeMembership 유지)
       for (final courseId in coursesToRemove) {
         debugPrint('🗑️ [MemberService] 코스 제거 시작: $courseId');
-
-        final enrollment = updatedUser.getEnrollment(courseId);
-        if (enrollment != null) {
-          // 현재 등록 정보를 히스토리에 추가 (취소 기록)
-          final currentHistory = List<ReenrollmentRecord>.from(
-            enrollment.reenrollmentHistory,
+        try {
+          final callable = FirebaseFunctions.instance.httpsCallable(
+            'cancelEnrollment',
           );
-          currentHistory.add(
-            ReenrollmentRecord(
-              enrollmentNumber: enrollment.totalEnrollmentCount,
-              totalReservations: enrollment.totalReservations,
-              enrolledAt: enrollment.enrolledAt,
-              validFrom: enrollment.validFrom,
-              validUntil: enrollment.validUntil,
-              cancelledAt: now, // 취소일 기록
-            ),
-          );
-
-          // 유효 기간을 과거로 설정하여 만료 처리 (히스토리는 유지)
-          final expiredEnrollment = enrollment.copyWith(
-            validUntil: now.subtract(const Duration(days: 1)),
-            reenrollmentHistory: currentHistory,
-          );
-
-          debugPrint('📝 [MemberService] enrollment 만료 처리: ${enrollment.id}');
-          await _enrollmentService.updateEnrollment(expiredEnrollment);
-          updatedUser = updatedUser.updateEnrollment(expiredEnrollment);
-          debugPrint('✅ [MemberService] enrollment 만료 처리 완료');
+          await callable.call({
+            'placeId': placeId,
+            'userId': updatedUser.userId,
+            'courseId': courseId,
+            'cascade': false,
+          });
+          debugPrint('✅ [MemberService] enrollment 삭제 완료: $courseId');
+        } catch (e) {
+          debugPrint('❌ [MemberService] enrollment 삭제 실패: $e');
+          rethrow;
         }
       }
 
-      // User 업데이트 (코스 변경이 있었을 때만)
-      if (coursesToAdd.isNotEmpty || coursesToRemove.isNotEmpty) {
-        debugPrint('📝 [MemberService] User 최종 업데이트');
-        await _userService.updateUserDirect(updatedUser);
-        debugPrint('✅ [MemberService] User 최종 업데이트 완료');
-      }
+      // 주의: User 문서에는 enrollments 필드를 저장하지 않으므로,
+      // 코스 변경만으로 users 문서를 업데이트할 필요가 없다. (placeIds 등 부수 필드 오염 방지)
 
       debugPrint('✅ [MemberService] 멤버 정보 업데이트 완료');
       return updatedUser;
@@ -804,7 +949,7 @@ class MemberService {
 
   // Helper 메서드
   DateTime _timestampToDateTime(dynamic timestamp) {
-    if (timestamp == null) return DateTime.now();
+    if (timestamp == null) return TimezoneUtils.getSeoulDateTime();
     if (timestamp is Timestamp) return timestamp.toDate();
     if (timestamp is String) return DateTime.parse(timestamp);
     throw Exception('Invalid timestamp format');

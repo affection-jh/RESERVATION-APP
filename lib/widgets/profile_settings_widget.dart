@@ -305,7 +305,7 @@ class SettingsItemsBuilder {
             final confirmed = await CommonDialog.show(
               context: context,
               title: '회원탈퇴',
-              message: '정말 회원탈퇴를 하시겠습니까?\n탈퇴 후 모든 데이터가 삭제되며 복구할 수 없습니다.',
+              message: '정말 회원탈퇴를 하시겠습니까?\n탈퇴 후 모든 데이터가 삭제되며\n복구할 수 없습니다.',
               confirmText: '탈퇴하기',
               cancelText: '취소',
               confirmButtonColor: Colors.red,
@@ -405,7 +405,7 @@ class UserProfileInfoSection extends StatelessWidget {
           final confirmed = await CommonDialog.show(
             context: context,
             title: '회원탈퇴',
-            message: '정말 회원탈퇴를 하시겠습니까?\n탈퇴 후 모든 데이터가 삭제되며 복구할 수 없습니다.',
+            message: '정말 회원탈퇴를 하시겠습니까?\n탈퇴 후 모든 데이터가 삭제되며\n복구할 수 없습니다.',
             confirmText: '탈퇴하기',
             cancelText: '취소',
             confirmButtonColor: Colors.red,

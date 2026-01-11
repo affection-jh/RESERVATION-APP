@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:provider/provider.dart';
 import '../models/course.dart';
 import '../models/reservation.dart';
@@ -48,6 +49,11 @@ class ReservationBottomSheet extends StatefulWidget {
     return showModalBottomSheet<Reservation?>(
       context: context,
       isScrollControlled: true,
+      // ✅ 스와이프(내려서 닫기) / 바깥 탭 닫기 지원
+      // 처리 중이어도 백그라운드에서 서버 처리는 계속 진행되며,
+      // 캘린더/리스트 UI에서 "진행 중" 표시로 피드백을 제공한다.
+      isDismissible: true,
+      enableDrag: true,
       backgroundColor: Colors.transparent,
       barrierColor: Colors.black.withOpacity(0.7),
       builder: (context) => ReservationBottomSheet(
@@ -73,36 +79,102 @@ class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
   bool _isSubmitting = false;
 
   Future<void> _handleConfirm() async {
-    if (_isSubmitting) return;
-    if (widget.remainingReservations <= 0) return;
-    if (widget.onConfirm == null) return;
+    if (_isSubmitting) {
+      debugPrint('[ReservationBottomSheet] 이미 예약 처리 중입니다.');
+      return;
+    }
+    if (widget.remainingReservations <= 0) {
+      debugPrint(
+        '[ReservationBottomSheet] 남은 횟수가 없습니다: ${widget.remainingReservations}',
+      );
+      return;
+    }
+    if (widget.onConfirm == null) {
+      debugPrint('[ReservationBottomSheet] onConfirm 콜백이 없습니다.');
+      return;
+    }
+
+    debugPrint('[ReservationBottomSheet] 예약 시작');
+    debugPrint('[ReservationBottomSheet] 활동명: ${widget.activityName}');
+    debugPrint('[ReservationBottomSheet] 날짜: ${widget.date}');
+    debugPrint(
+      '[ReservationBottomSheet] 시간: ${widget.startTime} - ${widget.endTime}',
+    );
+    debugPrint(
+      '[ReservationBottomSheet] 남은 자리: ${widget.availableSeats} / ${widget.totalSeats}',
+    );
+    debugPrint(
+      '[ReservationBottomSheet] 내 남은 횟수: ${widget.remainingReservations}',
+    );
+    if (widget.course != null) {
+      debugPrint('[ReservationBottomSheet] 코스 ID: ${widget.course!.id}');
+      debugPrint('[ReservationBottomSheet] 코스명: ${widget.course!.name}');
+    }
 
     setState(() {
       _isSubmitting = true;
     });
 
     try {
+      debugPrint('[ReservationBottomSheet] onConfirm 콜백 호출 시작');
       final created = await widget.onConfirm!.call();
-      if (!mounted) return;
+      debugPrint('[ReservationBottomSheet] 예약 생성 성공: ${created.id}');
+      if (!mounted) {
+        debugPrint('[ReservationBottomSheet] 위젯이 unmount되었습니다.');
+        return;
+      }
       Navigator.of(context).pop<Reservation>(created);
-    } catch (e) {
-      if (!mounted) return;
+    } catch (e, stackTrace) {
+      debugPrint('[ReservationBottomSheet] 예약 생성 실패');
+      debugPrint('[ReservationBottomSheet] 에러 타입: ${e.runtimeType}');
+      debugPrint('[ReservationBottomSheet] 에러 메시지: $e');
+      debugPrint('[ReservationBottomSheet] 스택 트레이스: $stackTrace');
+      if (!mounted) {
+        debugPrint('[ReservationBottomSheet] 위젯이 unmount되었습니다 (에러 후).');
+        return;
+      }
       setState(() {
         _isSubmitting = false;
       });
       // 애플 스타일의 에러 메시지 표시
       final errorMessage = _getErrorMessage(e);
+      debugPrint('[ReservationBottomSheet] 사용자에게 표시할 에러 메시지: $errorMessage');
       SnackbarUtil.showError(context, errorMessage);
     }
   }
 
   String _getErrorMessage(dynamic error) {
+    // Firebase Functions 예외는 code로 1차 분기 (가장 정확함)
+    if (error is FirebaseFunctionsException) {
+      final code = error.code.toLowerCase();
+      // 서버(createReservation)에서 이미 예약된 세션이면 already-exists로 내려옴
+      if (code == 'already-exists') {
+        return '이미 예약된 세션입니다';
+      }
+      if (code == 'permission-denied' || code == 'unauthenticated') {
+        return '예약 권한이 없습니다';
+      }
+      if (code == 'failed-precondition') {
+        // 서버에서 정책/마감/크레딧 등의 사유로 막는 경우가 많음
+        // message를 그대로 노출하면 가장 빠르게 원인 파악 가능
+        final msg = (error.message ?? '').trim();
+        if (msg.isNotEmpty) return msg;
+      }
+      // 기타: message가 있으면 그대로 사용 (디버깅에 도움)
+      final msg = (error.message ?? '').trim();
+      if (msg.isNotEmpty) return msg;
+    }
+
     final errorString = error.toString().toLowerCase();
     if (errorString.contains('network') || errorString.contains('connection')) {
       return '네트워크 연결을 확인해주세요';
     }
     if (errorString.contains('timeout')) {
       return '요청 시간이 초과되었습니다';
+    }
+    if (errorString.contains('already-exists') ||
+        errorString.contains('이미 예약된 세션')) {
+      return '이미 예약된 세션입니다';
     }
     if (errorString.contains('permission') || errorString.contains('권한')) {
       return '예약 권한이 없습니다';
@@ -127,7 +199,6 @@ class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
           Positioned.fill(
             child: GestureDetector(
               onTap: () {
-                if (_isSubmitting) return;
                 Navigator.of(context).pop();
                 widget.onCancel?.call();
               },
@@ -140,7 +211,7 @@ class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
             child: GestureDetector(
               onTap: () {},
               child: PopScope(
-                canPop: !_isSubmitting,
+                canPop: true,
                 child: Container(
                   decoration: BoxDecoration(
                     color: AppColors.backgroundWhite,
@@ -211,7 +282,10 @@ class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
             ),
             Spacer(),
             GestureDetector(
-              onTap: () => Navigator.of(context).pop(),
+              onTap: () {
+                if (_isSubmitting) return;
+                Navigator.of(context).pop();
+              },
               child: Icon(Icons.close, size: 20, color: AppColors.textPrimary),
             ),
           ],
@@ -479,7 +553,9 @@ class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
                     height: 18,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        AppColors.primaryGreen,
+                      ),
                     ),
                   )
                 : const Text(

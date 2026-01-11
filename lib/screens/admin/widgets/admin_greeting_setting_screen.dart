@@ -10,7 +10,6 @@ import '../../../widgets/cached_image_widget.dart';
 import '../../../screens/admin_screen.dart';
 import '../../../providers/place_provider.dart';
 import '../../../providers/auth_provider.dart';
-import '../../../services/firestore_service.dart';
 import '../../../services/storage_service.dart';
 import '../../../utils/snackbar_util.dart';
 
@@ -482,8 +481,6 @@ class _AdminGreetingSettingScreenState
                         location: widget.placeLocation,
                         appBarText: widget.placeName,
                         greetingText: _greetingTextController.text.trim(),
-                        highlightedText: null,
-                        highlightColorValue: null,
                         imageUrl: imageUrl,
                         adminId: admin.userId,
                       );

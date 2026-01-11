@@ -42,6 +42,15 @@ class _CalendarScreenState extends State<CalendarScreen> {
   CoursePolicy? _coursePolicy;
   StreamSubscription<List<SessionReservation>>? _sessionReservationSub;
   final Map<String, SessionReservation> _sessionReservationsByKey = {};
+  StreamSubscription<ReservationOperationEvent>? _reservationOpSub;
+  String? _lastShownCompleteReservationId;
+
+  // 구독 파라미터 추적 (중복 구독 방지)
+  String? _lastSubscribedCourseId;
+  String? _lastSubscribedPlaceId;
+  int? _lastSubscribedWeekOffset;
+  DateTime? _lastSubscribedStartDate;
+  DateTime? _lastSubscribedEndDate;
 
   // 정책 기반 주차 범위
   List<int> _availableWeekOffsets = [0, 1, 2]; // 기본값
@@ -84,6 +93,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
       debugPrint('[CalendarScreen] postFrameCallback: 구독 시작 준비');
       _ensureUserDataLoaded();
       _subscribeWeekSessionReservations();
+      _subscribeReservationOperationEvents();
     });
   }
 
@@ -93,12 +103,12 @@ class _CalendarScreenState extends State<CalendarScreen> {
     // 화면이 다시 포커스될 때 정책을 다시 로드
     // (예: 정책 편집 화면에서 돌아왔을 때)
     // 중복 호출 방지를 위해 최근 로드 시간 확인
-    final now = DateTime.now();
+    final now = TimezoneUtils.getSeoulDateTime();
     if (_lastPolicyLoadTime == null ||
         now.difference(_lastPolicyLoadTime!) > _policyReloadInterval) {
       SchedulerBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        _lastPolicyLoadTime = DateTime.now();
+        _lastPolicyLoadTime = TimezoneUtils.getSeoulDateTime();
         _loadCoursePolicy();
       });
     }
@@ -115,9 +125,97 @@ class _CalendarScreenState extends State<CalendarScreen> {
     } else {
       debugPrint('[CalendarScreen] dispose: 취소할 구독이 없음');
     }
+    _reservationOpSub?.cancel();
     _scrollController.dispose();
+    // 구독 파라미터 초기화
+    _lastSubscribedCourseId = null;
+    _lastSubscribedPlaceId = null;
+    _lastSubscribedWeekOffset = null;
+    _lastSubscribedStartDate = null;
+    _lastSubscribedEndDate = null;
     debugPrint('[CalendarScreen] dispose: 모든 리소스 해제 완료');
     super.dispose();
+  }
+
+  void _subscribeReservationOperationEvents() {
+    _reservationOpSub?.cancel();
+    final rp = Provider.of<ReservationProvider>(context, listen: false);
+    _reservationOpSub = rp.operationEvents.listen((event) async {
+      // create 성공 시: 바텀시트가 닫혀 있어도(또는 닫혔더라도) 성공 바텀시트 표시
+      if (event.type == ReservationOperationType.create &&
+          event.success == true &&
+          event.reservation != null) {
+        final created = event.reservation!;
+        if (_lastShownCompleteReservationId == created.id) return;
+        _lastShownCompleteReservationId = created.id;
+
+        if (!mounted) return;
+        ReservationCompleteBottomSheet.show(
+          context: context,
+          onViewReservations: () {
+            Navigator.of(context).pushNamedAndRemoveUntil(
+              '/main',
+              (route) => false,
+              arguments: {
+                'initialIndex': 2, // 마이페이지 탭
+                'highlightReservation': {
+                  'reservationId': created.id,
+                  'courseId': created.courseId,
+                  'dayOfWeek': created.dayOfWeek,
+                  'startTime': created.startTime,
+                  'reservedDate': created.reservedDate,
+                },
+              },
+            );
+          },
+          onClose: () {
+            if (!mounted) return;
+            setState(() {});
+          },
+        );
+        return;
+      }
+
+      // cancel 성공 시: 달력에서도 바로 피드백 + 상태 갱신
+      if (event.type == ReservationOperationType.cancel &&
+          event.success == true &&
+          event.reservation != null) {
+        if (!mounted) return;
+        final r = event.reservation!;
+        try {
+          // 취소 후 크레딧/예약이 바로 반영되도록 강제 재구독 (닫혀있어도 백그라운드에서 정상 동작)
+          await Provider.of<EnrollmentProvider>(
+            context,
+            listen: false,
+          ).loadUserEnrollments(userId: r.userId, placeId: r.placeId);
+          await Provider.of<ReservationProvider>(
+            context,
+            listen: false,
+          ).loadUserReservations(userId: r.userId, placeId: r.placeId);
+        } catch (_) {}
+        SnackbarUtil.showSuccess(context, '예약이 취소되었습니다.');
+        if (!mounted) return;
+        setState(() {});
+      }
+
+      // move 성공 시: 바텀시트가 닫혀 있어도 결과 피드백 + 상태 갱신
+      if (event.type == ReservationOperationType.move &&
+          event.success == true &&
+          event.reservation != null) {
+        if (!mounted) return;
+        final r = event.reservation!;
+        try {
+          // 이동 후 목록/세션 정보가 즉시 반영되도록 재구독(이미 구독 중이면 내부에서 noop)
+          await Provider.of<ReservationProvider>(
+            context,
+            listen: false,
+          ).loadUserReservations(userId: r.userId, placeId: r.placeId);
+        } catch (_) {}
+        SnackbarUtil.showSuccess(context, '예약이 변경되었습니다.');
+        if (!mounted) return;
+        setState(() {});
+      }
+    });
   }
 
   void _ensureUserDataLoaded() {
@@ -199,20 +297,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
   void _subscribeWeekSessionReservations() {
     debugPrint('[CalendarScreen] _subscribeWeekSessionReservations: 구독 시작');
 
-    // 기존 구독이 있으면 취소
-    if (_sessionReservationSub != null) {
-      debugPrint(
-        '[CalendarScreen] _subscribeWeekSessionReservations: 기존 구독 취소 중...',
-      );
-      _sessionReservationSub?.cancel();
-      _sessionReservationSub = null;
-      debugPrint(
-        '[CalendarScreen] _subscribeWeekSessionReservations: 기존 구독 취소 완료',
-      );
-    }
-
-    _sessionReservationsByKey.clear();
-
     final placeId = Provider.of<PlaceProvider>(
       context,
       listen: false,
@@ -229,6 +313,46 @@ class _CalendarScreenState extends State<CalendarScreen> {
     ).add(Duration(days: 7 * weekOffset));
     final startDate = DateTime(weekStart.year, weekStart.month, weekStart.day);
     final endDate = startDate.add(const Duration(days: 6));
+
+    // 구독 파라미터가 변경되지 않았으면 재구독하지 않음
+    if (_sessionReservationSub != null &&
+        _lastSubscribedCourseId == course.id &&
+        _lastSubscribedPlaceId == placeId &&
+        _lastSubscribedWeekOffset == weekOffset &&
+        _lastSubscribedStartDate != null &&
+        _lastSubscribedEndDate != null &&
+        _lastSubscribedStartDate!.year == startDate.year &&
+        _lastSubscribedStartDate!.month == startDate.month &&
+        _lastSubscribedStartDate!.day == startDate.day &&
+        _lastSubscribedEndDate!.year == endDate.year &&
+        _lastSubscribedEndDate!.month == endDate.month &&
+        _lastSubscribedEndDate!.day == endDate.day) {
+      debugPrint(
+        '[CalendarScreen] _subscribeWeekSessionReservations: 동일한 파라미터로 이미 구독 중, 재구독 스킵',
+      );
+      return;
+    }
+
+    // 기존 구독이 있으면 취소
+    if (_sessionReservationSub != null) {
+      debugPrint(
+        '[CalendarScreen] _subscribeWeekSessionReservations: 기존 구독 취소 중...',
+      );
+      _sessionReservationSub?.cancel();
+      _sessionReservationSub = null;
+      debugPrint(
+        '[CalendarScreen] _subscribeWeekSessionReservations: 기존 구독 취소 완료',
+      );
+    }
+
+    _sessionReservationsByKey.clear();
+
+    // 구독 파라미터 저장
+    _lastSubscribedCourseId = course.id;
+    _lastSubscribedPlaceId = placeId;
+    _lastSubscribedWeekOffset = weekOffset;
+    _lastSubscribedStartDate = startDate;
+    _lastSubscribedEndDate = endDate;
 
     debugPrint('[CalendarScreen] _subscribeWeekSessionReservations: 쿼리 파라미터');
     debugPrint('  - courseId: ${course.id}');
@@ -1064,17 +1188,51 @@ class _CalendarScreenState extends State<CalendarScreen> {
     );
 
     final isLocked = !eligibility.canReserve || !isEnrolled || userId == null;
-    final canReserve = !isLocked && !hasUserReservation;
+    final isMyReserved = hasUserReservation;
+    final canReserve = !isLocked && !isMyReserved;
 
-    final blockColor = (hasUserReservation || isLocked)
+    // ✅ 이미 예약된 세션은 "연하게(비활성 느낌)" 보이되,
+    // 잠김(정책/권한/만석 등)과는 구분해서 표시한다.
+    final String? pidForKey = placeId;
+    final processingKey = pidForKey == null
+        ? null
+        : reservationProvider.operationKeyFromParts(
+            placeId: pidForKey,
+            courseId: course.id,
+            dayOfWeek: session.dayOfWeek,
+            startTime: session.startTime,
+            date: date,
+          );
+    final isProcessing =
+        processingKey != null &&
+        reservationProvider.isOperationInFlightByKey(processingKey);
+
+    // 배경색: 연하게 표시할 때는 opacity 적용, 텍스트는 그대로
+    final baseBlockColor = isLocked
         ? AppColors.reservedGrey
         : course.colorValue;
-    final textColor = (hasUserReservation || isLocked)
+    final blockColor = isProcessing
+        ? (isMyReserved
+              ? baseBlockColor.withOpacity(0.35)
+              : baseBlockColor.withOpacity(0.45))
+        : (isMyReserved ? baseBlockColor.withOpacity(0.55) : baseBlockColor);
+
+    // 배경색 밝기에 따라 텍스트 색상 자동 결정
+    // opacity가 적용된 색상의 실제 밝기를 계산하기 위해
+    // 배경이 흰색이라고 가정하고 블렌딩된 색상의 밝기 계산
+    final backgroundColor = AppColors.backgroundWhite;
+    final blendedColor = Color.alphaBlend(blockColor, backgroundColor);
+    final luminance = blendedColor.computeLuminance();
+
+    // 예약 완료 또는 잠김 상태는 회색 텍스트 유지
+    final textColor = (isMyReserved || isLocked)
         ? AppColors.reservedTextGrey
-        : Colors.white;
-    final iconColor = (hasUserReservation || isLocked)
-        ? AppColors.reservedIconGrey
-        : Colors.white.withOpacity(0.9);
+        : (luminance > 0.5 ? AppColors.textPrimary : Colors.white);
+    final iconColor = (isMyReserved || isLocked)
+        ? AppColors.reservedTextGrey
+        : (luminance > 0.5
+              ? AppColors.textPrimary.withOpacity(0.9)
+              : Colors.white.withOpacity(0.9));
 
     return Positioned(
       top: topPosition,
@@ -1082,137 +1240,113 @@ class _CalendarScreenState extends State<CalendarScreen> {
       right: _sessionPadding,
       height: sessionHeightPx,
       child: GestureDetector(
-        onTap: hasUserReservation
-            ? () {
-                // 사용자가 예약한 경우 예약 취소 바텀시트 표시
-                UserReservationManageBottomSheet.show(
-                  context: context,
-                  course: course,
-                  session: session,
-                  date: date,
-                  reservation: userReservation,
-                  onReservationCancelled: () {
-                    setState(() {});
-                  },
-                );
-              }
-            : canReserve
-            ? () async {
-                final String? pid = placeId;
-                final String? uid = userId;
-                if (pid == null || uid == null) {
-                  SnackbarUtil.showError(context, '로그인이 필요합니다.');
-                  return;
-                }
+        onTap: () async {
+          if (isProcessing) {
+            SnackbarUtil.showError(context, '처리 중입니다. 잠시만 기다려주세요.');
+            return;
+          }
 
-                try {
-                  final created = await ReservationBottomSheet.show(
-                    context: context,
-                    activityName: course.name,
-                    date: '${session.dayName}요일 ${date.day}일',
-                    startTime: session.startTime,
-                    endTime: session.endTime,
-                    availableSeats: remainingSeats,
-                    totalSeats: totalSeats,
-                    remainingReservations: enrollment.remainingReservations,
-                    course: course,
-                    onConfirm: () async {
-                      return await Provider.of<ReservationProvider>(
-                        context,
-                        listen: false,
-                      ).createReservation(
-                        Reservation(
-                          id: '',
-                          userId: uid,
-                          courseId: course.id,
-                          placeId: pid,
-                          dayOfWeek: session.dayOfWeek,
-                          startTime: session.startTime,
-                          reservedAt: TimezoneUtils.getSeoulDateTime(),
-                          reservedDate: DateTime(
-                            date.year,
-                            date.month,
-                            date.day,
-                          ),
-                        ),
-                      );
-                    },
-                  );
-
-                  if (!mounted) return;
-
-                  if (created != null) {
-                    // 예약 성공 시 성공 UI 표시
-                    ReservationCompleteBottomSheet.show(
-                      context: context,
-                      onViewReservations: () {
-                        Navigator.of(context).pushNamedAndRemoveUntil(
-                          '/main',
-                          (route) => false,
-                          arguments: {
-                            'initialIndex': 2, // 마이페이지 탭
-                            'highlightReservation': {
-                              'reservationId': created.id,
-                              'courseId': created.courseId,
-                              'dayOfWeek': created.dayOfWeek,
-                              'startTime': created.startTime,
-                              'reservedDate': created.reservedDate,
-                            },
-                          },
-                        );
-                      },
-                      onClose: () {
-                        setState(() {});
-                      },
-                    );
-                  } else {
-                    // 예약 취소 또는 실패 시 상태 갱신
-                    setState(() {});
-                  }
-                } catch (e) {
-                  if (!mounted) return;
-                  // 예약 실패 시 에러 메시지는 ReservationBottomSheet에서 처리됨
-                  setState(() {});
-                }
-              }
-            : () {
-                if (!isEnrolled) {
-                  SnackbarUtil.showError(context, '등록된 코스가 아닙니다.');
-                  return;
-                }
-                if (eligibility.reason == ReservationLockReason.notOpenedYet &&
-                    eligibility.openAt != null) {
-                  final t = eligibility.openAt!;
-                  SnackbarUtil.showError(
-                    context,
-                    '아직 예약 오픈 전입니다. (오픈 ${t.month}/${t.day} ${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')})',
-                  );
-                  return;
-                }
-                debugPrint('eligibility.reason: ${eligibility.reason}');
-                switch (eligibility.reason) {
-                  case ReservationLockReason.pastDate:
-                    SnackbarUtil.showError(context, '과거 날짜는 예약할 수 없습니다.');
-                    return;
-                  case ReservationLockReason.closedBeforeStart:
-                    SnackbarUtil.showError(
-                      context,
-                      '세션 시작 ${policy.closeBeforeMinutes}분 전까지만 예약 가능합니다.',
-                    );
-                    return;
-                  case ReservationLockReason.full:
-                    SnackbarUtil.showError(context, '예약 가능한 인원이 없습니다.');
-                    return;
-                  case ReservationLockReason.noCreditsOrExpired:
-                    SnackbarUtil.showError(context, '예약 가능한 횟수가 없습니다.');
-                    return;
-                  case ReservationLockReason.notOpenedYet:
-                    SnackbarUtil.showError(context, '아직 예약 오픈 전입니다.');
-                    return;
-                  case ReservationLockReason.none:
-                    return;
-                }
+          if (hasUserReservation) {
+            // 사용자가 예약한 경우 예약 취소 바텀시트 표시
+            UserReservationManageBottomSheet.show(
+              context: context,
+              course: course,
+              session: session,
+              date: date,
+              reservation: userReservation,
+              onReservationCancelled: () {
+                setState(() {});
               },
+            );
+            return;
+          }
+
+          if (canReserve) {
+            final String? pid = placeId;
+            final String? uid = userId;
+            if (pid == null || uid == null) {
+              SnackbarUtil.showError(context, '로그인이 필요합니다.');
+              return;
+            }
+
+            try {
+              // ✅ 성공 바텀시트는 ReservationProvider operationEvents에서 처리
+              await ReservationBottomSheet.show(
+                context: context,
+                activityName: course.name,
+                date: '${session.dayName}요일 ${date.day}일',
+                startTime: session.startTime,
+                endTime: session.endTime,
+                availableSeats: remainingSeats,
+                totalSeats: totalSeats,
+                remainingReservations: enrollment.remainingReservations,
+                course: course,
+                onConfirm: () async {
+                  return await Provider.of<ReservationProvider>(
+                    context,
+                    listen: false,
+                  ).createReservation(
+                    Reservation(
+                      id: '',
+                      userId: uid,
+                      courseId: course.id,
+                      placeId: pid,
+                      dayOfWeek: session.dayOfWeek,
+                      startTime: session.startTime,
+                      reservedAt: TimezoneUtils.getSeoulDateTime(),
+                      reservedDate: TimezoneUtils.getSeoulToday(),
+                    ),
+                  );
+                },
+              );
+
+              if (!mounted) return;
+              setState(() {});
+            } catch (e) {
+              if (!mounted) return;
+              // 예약 실패 시 에러 메시지는 ReservationBottomSheet에서 처리됨
+              setState(() {});
+            }
+            return;
+          }
+
+          if (!isEnrolled) {
+            SnackbarUtil.showError(context, '등록된 코스가 아닙니다.');
+            return;
+          }
+          if (eligibility.reason == ReservationLockReason.notOpenedYet &&
+              eligibility.openAt != null) {
+            final t = eligibility.openAt!;
+            SnackbarUtil.showError(
+              context,
+              '아직 예약 오픈 전입니다. (오픈 ${t.month}/${t.day} ${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')})',
+            );
+            return;
+          }
+          debugPrint('eligibility.reason: ${eligibility.reason}');
+          switch (eligibility.reason) {
+            case ReservationLockReason.pastDate:
+              SnackbarUtil.showError(context, '과거 날짜는 예약할 수 없습니다.');
+              return;
+            case ReservationLockReason.closedBeforeStart:
+              SnackbarUtil.showError(
+                context,
+                '세션 시작 ${policy.closeBeforeMinutes}분 전까지만 예약 가능합니다.',
+              );
+              return;
+            case ReservationLockReason.full:
+              SnackbarUtil.showError(context, '예약 가능한 인원이 없습니다.');
+              return;
+            case ReservationLockReason.noCreditsOrExpired:
+              SnackbarUtil.showError(context, '예약 가능한 횟수가 없습니다.');
+              return;
+            case ReservationLockReason.notOpenedYet:
+              SnackbarUtil.showError(context, '아직 예약 오픈 전입니다.');
+              return;
+            case ReservationLockReason.none:
+              return;
+          }
+        },
         child: Container(
           padding: EdgeInsets.symmetric(
             horizontal: 8,
@@ -1221,16 +1355,33 @@ class _CalendarScreenState extends State<CalendarScreen> {
           decoration: BoxDecoration(
             color: blockColor,
             borderRadius: BorderRadius.circular(8),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.1),
-                blurRadius: 4,
-                offset: const Offset(0, 2),
-              ),
-            ],
+            boxShadow: isMyReserved
+                ? const []
+                : [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.1),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
           ),
           child: Stack(
             children: [
+              if (isProcessing)
+                const Positioned(
+                  top: 6,
+                  right: 6,
+                  child: SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        AppColors.primaryGreen,
+                      ),
+                    ),
+                  ),
+                ),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -1406,7 +1557,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
                           valueColor: AlwaysStoppedAnimation<Color>(
-                            Colors.white,
+                            AppColors.primaryGreen,
                           ),
                         ),
                       )

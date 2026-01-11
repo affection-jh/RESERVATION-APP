@@ -9,6 +9,7 @@ import 'firestore_service.dart';
 import 'user_service.dart';
 import 'admin_service.dart';
 import '../utils/storage_service.dart';
+import '../utils/timezone_utils.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart' hide User;
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth show User;
@@ -558,7 +559,7 @@ class AuthService {
             name: '관리자', // 임시
             authPin: null, // PIN은 저장하지 않음
             placeIds: [],
-            createdAt: DateTime.now(),
+            createdAt: TimezoneUtils.getSeoulDateTime(),
           );
         } else {
           return null;
@@ -591,7 +592,7 @@ class AuthService {
       debugPrint('[AuthService.checkAdminAutoLogin] 관리자 로그인 시작');
       await _adminService.loginWithAdmin(admin);
       debugPrint('[AuthService.checkAdminAutoLogin] 관리자 로그인 완료');
-      
+
       // ✅ 플레이스 업데이트 여부와 무관하게 "마지막 접속 모드=admin"을 저장
       // (관리자 화면에 진입했는데도 lastEntryMode가 member로 남는 문제 방지)
       await _storageService.saveLastEntryMode('admin');
@@ -641,7 +642,7 @@ class AuthService {
         if (admin != null) {
           final updatedAdmin = admin.copyWith(
             lastAccessedPlaceId: placeId,
-            updatedAt: DateTime.now(),
+            updatedAt: TimezoneUtils.getSeoulDateTime(),
           );
           final userService = UserService();
           await userService.updateAdmin(updatedAdmin);
@@ -735,22 +736,89 @@ class AuthService {
 
   // ==================== 인증 완료 처리 ====================
 
+  Future<List<PlaceMembership>> _fetchPlaceMembershipsForUser(
+    String userId,
+  ) async {
+    final firestore = _firestoreService.firestore;
+    final snap = await firestore
+        .collection('placeMemberships')
+        .where('userId', isEqualTo: userId)
+        .get();
+
+    DateTime toDateTime(dynamic v) => _firestoreService.timestampToDateTime(v);
+
+    return snap.docs.map((doc) {
+      final data = doc.data();
+      // Timestamp → ISO string 정규화 (fromJson이 string을 기대)
+      if (data['requestedAt'] != null) {
+        data['requestedAt'] = toDateTime(data['requestedAt']).toIso8601String();
+      }
+      if (data['approvedAt'] != null) {
+        data['approvedAt'] = toDateTime(data['approvedAt']).toIso8601String();
+      }
+      if (data['rejectedAt'] != null) {
+        data['rejectedAt'] = toDateTime(data['rejectedAt']).toIso8601String();
+      }
+      return PlaceMembership.fromJson(data);
+    }).toList();
+  }
+
+  PlaceMembership _pickPreferredMembership(
+    PlaceMembership a,
+    PlaceMembership b,
+  ) {
+    // status 제거로 항상 멤버이므로, 시간 정보가 있는 쪽/더 최신을 선호
+    DateTime? timeOf(PlaceMembership m) {
+      if (m.approvedAt != null) return m.approvedAt;
+      return m.requestedAt;
+    }
+
+    final ta = timeOf(a);
+    final tb = timeOf(b);
+    if (ta == null || tb == null) return a;
+    return ta.isAfter(tb) ? a : b;
+  }
+
   /// 인증 완료 후 공통 처리
   /// 관리자도 일반 사용자로 처리하여 다른 플레이스의 멤버가 될 수 있도록 함
   Future<AuthResult> _completeAuthentication(models.User user) async {
+    // ✅ 과거 버그로 생성된 phone_{010...} userId 데이터를 현재 UID로 자동 이관(가능하면)
+    // - 함수 미배포/권한/네트워크 오류가 있어도 로그인 자체는 계속 진행해야 하므로 try/catch로 감싼다.
+    try {
+      final callable = FirebaseFunctions.instance.httpsCallable(
+        'reconcileLegacyPhoneUser',
+      );
+      await callable.call({'phoneNumber': user.phoneNumber});
+    } catch (e) {
+      debugPrint('[AuthService] reconcileLegacyPhoneUser 실패(무시): $e');
+    }
+
     // 자동 매칭 시도 (관리자도 일반 사용자로 처리)
-    final memberships = await _autoMatchMemberships(
+    final newlyCreated = await _autoMatchMemberships(
       user.userId,
       user.phoneNumber,
     );
 
-    // 승인된 플레이스 확인
-    final approvedMemberships = memberships
-        .where((m) => m.status == PlaceMembershipStatus.approved)
-        .toList();
-    final pendingMemberships = memberships
-        .where((m) => m.status == PlaceMembershipStatus.pending)
-        .toList();
+    // ✅ 기존 placeMemberships까지 합쳐서 "전체 멤버십"을 구성해야 한다.
+    // (pendingMembers가 없으면 _autoMatchMemberships는 []를 반환하므로)
+    final existing = await _fetchPlaceMembershipsForUser(user.userId);
+
+    final byPlaceId = <String, PlaceMembership>{};
+    for (final m in existing) {
+      byPlaceId[m.placeId] = m;
+    }
+    for (final m in newlyCreated) {
+      final prev = byPlaceId[m.placeId];
+      byPlaceId[m.placeId] = prev == null
+          ? m
+          : _pickPreferredMembership(prev, m);
+    }
+
+    final memberships = byPlaceId.values.toList();
+
+    // status 제거로 항상 멤버이므로 모든 멤버십이 승인된 것으로 처리
+    final approvedMemberships = memberships;
+    final pendingMemberships = <PlaceMembership>[];
 
     // 마지막 접속 플레이스 확인
     final lastPlaceId = await _storageService.getUserLastAccessedPlaceId();
@@ -845,7 +913,6 @@ class AuthService {
     String? userId, // Firebase Auth UID 사용 시
     required String phoneNumber,
     required String name,
-    String? email,
   }) async {
     final finalUserId = userId ?? _generateUserId();
 
@@ -853,8 +920,7 @@ class AuthService {
       userId: finalUserId,
       name: name,
       phoneNumber: phoneNumber,
-      email: email,
-      createdAt: DateTime.now(),
+      createdAt: TimezoneUtils.getSeoulDateTime(),
     );
 
     // UserService를 통해 저장
@@ -934,7 +1000,6 @@ class AuthService {
         final adminUserId = data['userId'] as String;
         final adminName = data['name'] as String;
         final adminPhoneNumber = data['phoneNumber'] as String;
-        final adminEmail = data['email'] as String?;
         final adminPlaceIds =
             (data['placeIds'] as List<dynamic>?)
                 ?.map((e) => e.toString())
@@ -946,10 +1011,9 @@ class AuthService {
           userId: adminUserId,
           name: adminName,
           phoneNumber: adminPhoneNumber,
-          email: adminEmail,
           placeIds: adminPlaceIds,
-          createdAt: DateTime.now(),
-          updatedAt: DateTime.now(),
+          createdAt: TimezoneUtils.getSeoulDateTime(),
+          updatedAt: TimezoneUtils.getSeoulDateTime(),
         );
         await _adminService.loginWithAdmin(admin);
 
@@ -958,14 +1022,14 @@ class AuthService {
         await _storageService.saveAdminUserId(adminUserId);
 
         // 6. AdminUser를 User로 변환 (AuthResult 호환성)
+        // User.placeIds는 더 이상 사용하지 않음 (빈 배열로 설정)
         final user = models.User(
           userId: adminUserId,
           name: adminName,
           phoneNumber: adminPhoneNumber,
-          email: adminEmail,
-          placeIds: adminPlaceIds,
-          createdAt: DateTime.now(),
-          updatedAt: DateTime.now(),
+          placeIds: [], // User.placeIds는 더 이상 사용하지 않음
+          createdAt: TimezoneUtils.getSeoulDateTime(),
+          updatedAt: TimezoneUtils.getSeoulDateTime(),
         );
 
         return AuthResult(user: user, role: UserRole.admin, memberships: []);
@@ -1019,7 +1083,6 @@ class AuthService {
     required String verificationCode,
     required String name,
     required String pin,
-    String? email,
   }) async {
     // adminUsers는 rules에서 클라이언트 create/update가 막혀있으므로
     // Cloud Function으로만 등록한다.
@@ -1034,7 +1097,6 @@ class AuthService {
         'verificationCode': verificationCode, // 서버에서 참조하지 않지만 로깅용
         'name': name,
         'pin': pin,
-        'email': email,
       });
       final data = (res.data as Map).cast<String, dynamic>();
       if (data['success'] != true) {
@@ -1045,13 +1107,12 @@ class AuthService {
         userId: data['userId'] as String,
         name: data['name'] as String? ?? name,
         phoneNumber: data['phoneNumber'] as String? ?? normalizedPhone,
-        email: email,
         authPin: pin,
         placeIds: (data['placeIds'] as List<dynamic>? ?? [])
             .map((e) => e.toString())
             .toList(),
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
+        createdAt: TimezoneUtils.getSeoulDateTime(),
+        updatedAt: TimezoneUtils.getSeoulDateTime(),
       );
 
       return admin;
@@ -1075,7 +1136,7 @@ class AuthService {
 
     final updatedAdmin = admin.copyWith(
       authPin: newPin, // 실제로는 해시화 필요
-      updatedAt: DateTime.now(),
+      updatedAt: TimezoneUtils.getSeoulDateTime(),
     );
 
     final userService = UserService();
@@ -1091,7 +1152,6 @@ class AuthService {
     required String phoneNumber,
     required String name,
     required String createdBy, // 슈퍼 관리자 ID 또는 시스템
-    String? email,
     List<String>? placeIds,
   }) async {
     // 이미 등록된 전화번호인지 확인
@@ -1110,9 +1170,8 @@ class AuthService {
       userId: userId,
       name: name,
       phoneNumber: phoneNumber,
-      email: email,
       placeIds: [], // 베타 버전: 항상 빈 배열로 시작
-      createdAt: DateTime.now(),
+      createdAt: TimezoneUtils.getSeoulDateTime(),
     );
 
     // UserService를 통해 저장
@@ -1153,43 +1212,34 @@ class AuthService {
 
     final memberships = <PlaceMembership>[];
 
-    // 트랜잭션 외부에서 기존 멤버십 확인
-    final existingMembershipsQuery = firestore
-        .collection('placeMemberships')
-        .where('userId', isEqualTo: userId);
-    final existingMembershipsSnapshot = await existingMembershipsQuery.get();
-    final existingPlaceIds = existingMembershipsSnapshot.docs
-        .map((doc) => doc.data()['placeId'] as String)
-        .toSet();
-
     // 트랜잭션으로 처리
+    // ✅ 중복 확인은 트랜잭션 내부에서 수행 (race condition 방지)
     await firestore.runTransaction((transaction) async {
       for (final doc in snapshot.docs) {
         final data = doc.data();
         final placeId = data['placeId'] as String;
         final autoApprove = data['autoApprove'] as bool? ?? true;
 
-        // 이미 멤버십이 있는지 확인 (트랜잭션 외부에서 확인한 결과 사용)
-        if (existingPlaceIds.contains(placeId)) {
+        // PlaceMembership 생성 (중복 방지: placeId+userId로 고정 ID 사용)
+        final membershipId = '${placeId}_$userId';
+        final membershipRef = firestore
+            .collection('placeMemberships')
+            .doc(membershipId);
+
+        // ✅ 트랜잭션 내부에서도 중복 확인 (race condition 방지)
+        final existingMembership = await transaction.get(membershipRef);
+        if (existingMembership.exists) {
           // 이미 있으면 스킵
           continue;
         }
 
-        // PlaceMembership 생성
-        final membershipRef = firestore.collection('placeMemberships').doc();
-
-        final status = autoApprove
-            ? PlaceMembershipStatus.approved
-            : PlaceMembershipStatus.pending;
-
-        final now = DateTime.now();
+        final now = TimezoneUtils.getSeoulDateTime();
         final membership = PlaceMembership(
-          id: membershipRef.id,
+          id: membershipId,
           userId: userId,
           placeId: placeId,
-          status: status,
           requestedAt: now,
-          approvedAt: autoApprove ? now : null,
+          approvedAt: autoApprove ? now : now, // status 제거로 항상 approvedAt 설정
           invitedBy: data['createdBy'] as String?,
         );
 
@@ -1203,9 +1253,13 @@ class AuthService {
 
         transaction.set(membershipRef, membershipData);
 
-        // pendingMembers 삭제 (placeMembership 생성 후 더 이상 필요 없음)
-        // Cloud Function에서 enrollments 생성 후 삭제하지만, 여기서도 삭제하여 중복 방지
-        transaction.delete(doc.reference);
+        // users.placeIds는 더 이상 사용하지 않음 (courseMembers 기반으로 조회)
+
+        // ✅ pendingMembers는 클라이언트에서 삭제하지 않는다.
+        // - 일반 유저는 rules상 pendingMembers delete 권한이 없음(트랜잭션 실패 위험)
+        // - 관리자(겸용) 계정은 delete가 가능해서, 오히려 서버 트리거(onPlaceMembershipCreated)가
+        //   pendingMembers를 못 찾아 enrollments 생성이 누락되는 문제가 생길 수 있음
+        // - pendingMembers 정리는 서버 트리거가 담당한다.
 
         memberships.add(membership);
       }
@@ -1216,13 +1270,12 @@ class AuthService {
 
   // ==================== 플레이스 멤버십 관리 ====================
 
-  /// 승인된 플레이스 목록 가져오기
+  /// 승인된 플레이스 목록 가져오기 (status 제거로 모든 멤버십이 승인된 것으로 처리)
   Future<List<Place>> getApprovedPlaces(String userId) async {
     final firestore = _firestoreService.firestore;
     final memberships = await firestore
         .collection('placeMemberships')
         .where('userId', isEqualTo: userId)
-        .where('status', isEqualTo: 'approved')
         .get();
 
     final placeIds = memberships.docs
@@ -1243,25 +1296,10 @@ class AuthService {
     return places;
   }
 
-  /// Pending 상태 멤버십 목록 가져오기
+  /// Pending 상태 멤버십 목록 가져오기 (status 제거로 빈 리스트 반환)
   Future<List<PlaceMembership>> getPendingMemberships(String userId) async {
-    final firestore = _firestoreService.firestore;
-    final snapshot = await firestore
-        .collection('placeMemberships')
-        .where('userId', isEqualTo: userId)
-        .where('status', isEqualTo: 'pending')
-        .get();
-
-    return snapshot.docs.map((doc) {
-      final data = doc.data();
-      // Timestamp 변환
-      if (data['requestedAt'] != null) {
-        data['requestedAt'] = _firestoreService
-            .timestampToDateTime(data['requestedAt'])
-            .toIso8601String();
-      }
-      return PlaceMembership.fromJson(data);
-    }).toList();
+    // status 제거로 항상 멤버이므로 빈 리스트 반환
+    return [];
   }
 
   /// 플레이스 가입 요청
@@ -1280,18 +1318,20 @@ class AuthService {
     final firestore = _firestoreService.firestore;
     final membershipRef = firestore.collection('placeMemberships').doc();
 
-    final now = DateTime.now();
+    final now = TimezoneUtils.getSeoulDateTime();
     final membership = PlaceMembership(
       id: membershipRef.id,
       userId: userId,
       placeId: placeId,
-      status: PlaceMembershipStatus.pending,
       requestedAt: now,
+      approvedAt: now, // status 제거로 항상 approvedAt 설정
     );
 
     final membershipData = membership.toJson();
     final timestamp = _firestoreService.dateTimeToTimestamp(now);
-    membershipData['requestedAt'] = timestamp.toDate().toIso8601String();
+    // Firestore에 저장할 때는 Timestamp로 변환
+    membershipData['requestedAt'] = timestamp;
+    membershipData['approvedAt'] = timestamp;
 
     await membershipRef.set(membershipData);
 
@@ -1355,7 +1395,7 @@ class AuthService {
 
     // 사용자 데이터 삭제
     await _storageService.clearUserData();
-    
+
     // 관리자 데이터도 삭제 (일반 사용자 로그아웃 시에도 관리자 자동 로그인 방지)
     await _storageService.clearAdminData();
 

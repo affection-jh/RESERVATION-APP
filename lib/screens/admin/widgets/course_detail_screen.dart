@@ -160,6 +160,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
   Widget _buildCourseInfoSection(Course course) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+      margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(color: AppColors.backgroundWhite),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -250,124 +251,125 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
   Widget _buildStudentListSection(Course course) {
     return Consumer<MemberProvider>(
       builder: (context, memberProvider, child) {
-        // 해당 코스에 등록된 멤버 필터링
-        final enrolledMembers = memberProvider.members.where((user) {
-          return user.isEnrolledInCourse(course.id);
-        }).toList();
+        // ✅ courseMembers 컬렉션을 직접 조회 (enrollments 생성 전에도 표시됨)
+        return StreamBuilder<List<User>>(
+          stream: memberProvider.watchCourseMembers(course.id),
+          builder: (context, courseMembersSnapshot) {
+            // PendingMembers도 필터링 (아직 로그인 안 한 멤버)
+            final enrolledPendingMembers = memberProvider.pendingMembers.where((
+              pending,
+            ) {
+              final courseIds = pending.courseIds ?? [];
+              return courseIds.contains(course.id);
+            }).toList();
 
-        // PendingMembers도 필터링
-        final enrolledPendingMembers = memberProvider.pendingMembers.where((
-          pending,
-        ) {
-          final courseIds = pending.courseIds ?? [];
-          return courseIds.contains(course.id);
-        }).toList();
+            // PendingMembers를 User로 변환
+            final pendingAsUsers = enrolledPendingMembers.map((pm) {
+              final courseIds = pm.courseIds ?? [];
+              final enrollments = courseIds.map((courseId) {
+                return CourseEnrollment(
+                  id: 'pending_${pm.id}_$courseId',
+                  userId: 'pending_${pm.id}',
+                  courseId: courseId.toString(),
+                  placeId: pm.placeId,
+                  enrolledAt: pm.createdAt,
+                  validFrom: pm.createdAt,
+                  validUntil: pm.createdAt.add(const Duration(days: 365)),
+                  totalReservations: 10,
+                  remainingReservations: 10,
+                );
+              }).toList();
 
-        // PendingMembers를 User로 변환
-        final pendingAsUsers = enrolledPendingMembers.map((pm) {
-          final courseIds = pm.courseIds ?? [];
-          final enrollments = courseIds.map((courseId) {
-            return CourseEnrollment(
-              id: 'pending_${pm.id}_$courseId',
-              userId: 'pending_${pm.id}',
-              courseId: courseId.toString(),
-              placeId: pm.placeId,
-              enrolledAt: pm.createdAt,
-              validFrom: pm.createdAt,
-              validUntil: pm.createdAt.add(const Duration(days: 365)),
-              totalReservations: 10,
-              remainingReservations: 10,
-            );
-          }).toList();
+              return User(
+                userId: 'pending_${pm.id}',
+                name: pm.name ?? '이름 없음',
+                phoneNumber: pm.phoneNumber,
+                placeIds: [pm.placeId],
+                enrollments: enrollments,
+                reservations: [],
+                notificationsEnabled: false,
+                createdAt: pm.createdAt,
+                updatedAt: null,
+              );
+            }).toList();
 
-          return User(
-            userId: 'pending_${pm.id}',
-            name: pm.name ?? '이름 없음',
-            phoneNumber: pm.phoneNumber,
-            email: null,
-            placeIds: [pm.placeId],
-            enrollments: enrollments,
-            reservations: [],
-            notificationsEnabled: false,
-            createdAt: pm.createdAt,
-            updatedAt: null,
-          );
-        }).toList();
+            // courseMembers에서 가져온 멤버 + pendingMembers 합치기
+            final courseMembers = courseMembersSnapshot.data ?? [];
+            final allMembers = [...courseMembers, ...pendingAsUsers];
+            final totalCount = allMembers.length;
 
-        final allMembers = [...enrolledMembers, ...pendingAsUsers];
-        final totalCount = allMembers.length;
-
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // 헤더
-              Row(
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Padding(
-                    padding: const EdgeInsets.only(left: 8),
-                    child: Text(
-                      '멤버($totalCount명)',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textPrimary,
+                  // 헤더
+                  Row(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(left: 8),
+                        child: Text(
+                          '멤버($totalCount명)',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                  Spacer(),
-                  GestureDetector(
-                    onTap: () {
-                      _showMemberRegistration(course);
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.only(bottom: 2),
-                      child: Icon(
-                        Icons.add_circle,
-                        color: AppColors.primaryGreen,
-                        size: 30,
+                      Spacer(),
+                      GestureDetector(
+                        onTap: () {
+                          _showMemberRegistration(course);
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: 2),
+                          child: Icon(
+                            Icons.add_circle,
+                            color: AppColors.primaryGreen,
+                            size: 30,
+                          ),
+                        ),
                       ),
-                    ),
+                    ],
                   ),
+                  const SizedBox(height: 16),
+
+                  // 멤버 리스트
+                  if (allMembers.isEmpty)
+                    Center(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Text(
+                          '',
+                          style: TextStyle(
+                            color: AppColors.textSecondary.withOpacity(0.8),
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    ...allMembers.map((member) {
+                      final memberData = _userToMemberData(member);
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: MemberCard(
+                          member: memberData,
+                          backgroundColor: AppColors.backgroundLight
+                              .withOpacity(0.8),
+                          onMemberTapped: () {
+                            // 최근 본 멤버 추가는 필요 없음 (코스 상세 화면이므로)
+                          },
+                        ),
+                      );
+                    }).toList(),
+                  if (allMembers.isNotEmpty) const SizedBox(height: 60),
                 ],
               ),
-              const SizedBox(height: 16),
-
-              // 멤버 리스트
-              if (allMembers.isEmpty)
-                Center(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 40),
-                    child: Text(
-                      '등록된 멤버가 없어요.',
-                      style: TextStyle(
-                        color: AppColors.textSecondary,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                )
-              else
-                ...allMembers.map((member) {
-                  final memberData = _userToMemberData(member);
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: MemberCard(
-                      member: memberData,
-                      backgroundColor: AppColors.backgroundLight.withOpacity(
-                        0.8,
-                      ),
-                      onMemberTapped: () {
-                        // 최근 본 멤버 추가는 필요 없음 (코스 상세 화면이므로)
-                      },
-                    ),
-                  );
-                }).toList(),
-              const SizedBox(height: 100),
-            ],
-          ),
+            );
+          },
         );
       },
     );
@@ -384,7 +386,6 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     return MemberData(
       userId: user.userId,
       name: user.name,
-      email: user.email ?? '',
       phoneNumber: user.phoneNumber,
       role: user.userId.startsWith('pending_') ? '대기중' : '일반',
       isActive: !user.userId.startsWith('pending_'),
@@ -422,6 +423,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                 );
               },
               courseId: course.id, // 특정 코스만 등록
+              placeId: placeId,
             ),
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
           const begin = Offset(1.0, 0.0);

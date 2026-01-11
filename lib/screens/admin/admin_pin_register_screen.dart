@@ -331,7 +331,7 @@ class _AdminPinRegisterScreenState extends State<AdminPinRegisterScreen> {
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
                             valueColor: AlwaysStoppedAnimation<Color>(
-                              Colors.white,
+                              AppColors.primaryGreen,
                             ),
                           ),
                         )

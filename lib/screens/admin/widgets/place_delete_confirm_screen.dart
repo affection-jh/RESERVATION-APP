@@ -332,7 +332,7 @@ class _PlaceDeleteConfirmScreenState extends State<PlaceDeleteConfirmScreen> {
                                     child: CircularProgressIndicator(
                                       strokeWidth: 2,
                                       valueColor: AlwaysStoppedAnimation<Color>(
-                                        Colors.white,
+                                        AppColors.primaryGreen,
                                       ),
                                     ),
                                   )

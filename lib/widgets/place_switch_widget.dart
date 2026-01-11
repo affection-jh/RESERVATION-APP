@@ -9,6 +9,9 @@ import '../providers/reservation_provider.dart';
 import '../providers/enrollment_provider.dart';
 import '../providers/story_provider.dart';
 import '../providers/promotion_provider.dart';
+import '../providers/member_provider.dart';
+import '../providers/notification_provider.dart';
+import '../providers/admin_provider.dart';
 import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
 import '../utils/snackbar_util.dart';
@@ -51,6 +54,47 @@ class _PlaceAccessEntry {
 class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
   bool _isExpanded = false;
   bool _isSwitching = false;
+
+  Future<void> _resetAllProvidersForSwitch(BuildContext context) async {
+    // ✅ 전환 플로우 표준화:
+    // - 모든 place 의존 Provider를 비우고
+    // - AppStartupScreen(스플래시)로 스택을 리셋하여
+    //   "스플래시 → 데이터 로드 → 홈" 흐름으로 통일한다.
+    final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+    final courseProvider = Provider.of<CourseProvider>(context, listen: false);
+    final reservationProvider = Provider.of<ReservationProvider>(
+      context,
+      listen: false,
+    );
+    final enrollmentProvider = Provider.of<EnrollmentProvider>(
+      context,
+      listen: false,
+    );
+    final memberProvider = Provider.of<MemberProvider>(context, listen: false);
+    final storyProvider = Provider.of<StoryProvider>(context, listen: false);
+    final promotionProvider = Provider.of<PromotionProvider>(
+      context,
+      listen: false,
+    );
+    final notificationProvider = Provider.of<NotificationProvider>(
+      context,
+      listen: false,
+    );
+    final adminProvider = Provider.of<AdminProvider>(context, listen: false);
+
+    // 현재 플레이스 제거
+    placeProvider.clearPlace();
+
+    // 모든 데이터/구독 초기화
+    courseProvider.clear();
+    storyProvider.clear();
+    promotionProvider.clear();
+    notificationProvider.clear();
+    adminProvider.clearAdmin();
+    await memberProvider.clear();
+    await reservationProvider.clear();
+    await enrollmentProvider.clear();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -99,7 +143,7 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
     final canSwitch = widget.enabled && hasMultiplePlaces;
 
     return Padding(
-      padding: EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      padding: EdgeInsets.only(top: 10, bottom: 10, left: 20, right: 10),
       child: Column(
         children: [
           // 플레이스 정보 (클릭 가능)
@@ -112,6 +156,8 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
                   }
                 : null,
             borderRadius: BorderRadius.circular(16),
+            splashColor: Colors.transparent,
+            highlightColor: Colors.transparent,
             child: Row(
               children: [
                 // 플레이스 이미지
@@ -148,7 +194,7 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
                                   ? (hasDescription ? 18 : 20)
                                   : 20,
                               fontWeight: FontWeight.bold,
-                              color: AppColors.textPrimary.withOpacity(0.8),
+                              color: AppColors.textPrimary,
                               letterSpacing: -0.5,
                             ),
                           ),
@@ -178,119 +224,182 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
                               .keyboard_arrow_up // 펼쳐졌을 때: 위로 닫기 화살표
                         : Icons.keyboard_arrow_down, // 접혔을 때: 아래로 펼치기 화살표
                     color: AppColors.textSecondary,
-                    size: 24,
+                    size: 28,
                   ),
               ],
             ),
           ),
 
           // 플레이스 리스트 (펼쳐질 때)
-          if (_isExpanded && canSwitch) ...[
-            const SizedBox(height: 12),
-            FutureBuilder<List<Place>>(
-              future: _loadPlaces(uniquePlaceIds),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Center(child: CircularProgressIndicator()),
-                  );
-                }
-
-                if (snapshot.hasError || !snapshot.hasData) {
-                  return const SizedBox.shrink();
-                }
-
-                final places = snapshot.data!;
-                final placeMap = {for (final p in places) p.id: p};
-                final inAdminMode = authProvider.currentAdmin != null;
-
-                return Column(
-                  children: accessEntries.map((entry) {
-                    final place = placeMap[entry.placeId];
-                    if (place == null) return const SizedBox.shrink();
-
-                    final isCurrentEntry =
-                        place.id == currentPlaceId &&
-                        entry.isAdmin == inAdminMode;
-
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: InkWell(
-                        onTap: isCurrentEntry || _isSwitching
-                            ? null
-                            : () => _switchPlace(place, entry.isAdmin),
-                        borderRadius: BorderRadius.circular(12),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 12,
-                          ),
-                          decoration: BoxDecoration(
-                            color: isCurrentEntry
-                                ? AppColors.primaryGreen.withOpacity(0.1)
-                                : AppColors.backgroundWhite,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: isCurrentEntry
-                                  ? AppColors.primaryGreen
-                                  : AppColors.textSecondary.withOpacity(0.2),
-                            ),
-                          ),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      place.name,
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w500,
-                                        color: isCurrentEntry
-                                            ? AppColors.primaryGreen
-                                            : AppColors.textPrimary,
-                                      ),
-                                    ),
-                                    Text(
-                                      entry.isAdmin ? '관리자 모드' : '일반 모드',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: AppColors.textSecondary,
-                                        fontWeight: FontWeight.w400,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              if (isCurrentEntry)
-                                Icon(
-                                  Icons.check_circle,
-                                  color: AppColors.primaryGreen,
-                                  size: 20,
-                                ),
-                              if (_isSwitching && !isCurrentEntry)
-                                SizedBox(
-                                  width: 20,
-                                  height: 20,
+          if (canSwitch)
+            AnimatedSize(
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeInOut,
+              child: _isExpanded
+                  ? Column(
+                      children: [
+                        const SizedBox(height: 12),
+                        FutureBuilder<List<Place>>(
+                          future: _loadPlaces(uniquePlaceIds),
+                          builder: (context, snapshot) {
+                            if (snapshot.connectionState ==
+                                ConnectionState.waiting) {
+                              return const Padding(
+                                padding: EdgeInsets.all(16),
+                                child: Center(
                                   child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                      AppColors.primaryGreen,
-                                    ),
+                                    color: AppColors.primaryGreen,
                                   ),
                                 ),
-                            ],
-                          ),
+                              );
+                            }
+
+                            if (snapshot.hasError || !snapshot.hasData) {
+                              return const SizedBox.shrink();
+                            }
+
+                            final places = snapshot.data!;
+                            final placeMap = {for (final p in places) p.id: p};
+                            final inAdminMode =
+                                authProvider.currentAdmin != null;
+
+                            return Column(
+                              children: accessEntries.map((entry) {
+                                final place = placeMap[entry.placeId];
+                                if (place == null)
+                                  return const SizedBox.shrink();
+
+                                final isCurrentEntry =
+                                    place.id == currentPlaceId &&
+                                    entry.isAdmin == inAdminMode;
+
+                                return Padding(
+                                  padding: const EdgeInsets.only(bottom: 6),
+                                  child: Material(
+                                    color: Colors.transparent,
+                                    child: InkWell(
+                                      onTap: isCurrentEntry || _isSwitching
+                                          ? null
+                                          : () => _switchPlace(
+                                              place,
+                                              entry.isAdmin,
+                                            ),
+                                      borderRadius: BorderRadius.circular(16),
+                                      splashColor: AppColors.primaryGreen
+                                          .withOpacity(0.1),
+                                      highlightColor: AppColors.primaryGreen
+                                          .withOpacity(0.05),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 20,
+                                          vertical: 16,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: isCurrentEntry
+                                              ? Colors.black
+                                              : AppColors.backgroundWhite
+                                                    .withOpacity(0.6),
+                                          borderRadius: BorderRadius.circular(
+                                            16,
+                                          ),
+                                          boxShadow: isCurrentEntry
+                                              ? [
+                                                  BoxShadow(
+                                                    color: Colors.black
+                                                        .withOpacity(0.15),
+                                                    blurRadius: 8,
+                                                    offset: const Offset(0, 2),
+                                                  ),
+                                                ]
+                                              : [
+                                                  BoxShadow(
+                                                    color: Colors.black
+                                                        .withOpacity(0.04),
+                                                    blurRadius: 4,
+                                                    offset: const Offset(0, 1),
+                                                  ),
+                                                ],
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    place.name,
+                                                    style: TextStyle(
+                                                      fontSize: 18,
+                                                      fontWeight: isCurrentEntry
+                                                          ? FontWeight.w700
+                                                          : FontWeight.w600,
+                                                      color: isCurrentEntry
+                                                          ? Colors.white
+                                                          : AppColors
+                                                                .textPrimary,
+                                                      letterSpacing: -0.3,
+                                                    ),
+                                                  ),
+
+                                                  if (entry.isAdmin)
+                                                    Text(
+                                                      '관리자',
+                                                      style: TextStyle(
+                                                        fontSize: 15,
+                                                        color: isCurrentEntry
+                                                            ? Colors.white
+                                                                  .withOpacity(
+                                                                    0.7,
+                                                                  )
+                                                            : AppColors
+                                                                  .textSecondary,
+                                                        fontWeight:
+                                                            FontWeight.w500,
+                                                        letterSpacing: -0.2,
+                                                      ),
+                                                    ),
+                                                ],
+                                              ),
+                                            ),
+                                            if (isCurrentEntry)
+                                              Container(
+                                                padding: const EdgeInsets.all(
+                                                  4,
+                                                ),
+
+                                                child: Icon(
+                                                  Icons.check,
+                                                  color: Colors.white,
+                                                  size: 20,
+                                                ),
+                                              ),
+                                            if (_isSwitching && !isCurrentEntry)
+                                              SizedBox(
+                                                width: 18,
+                                                height: 18,
+                                                child: CircularProgressIndicator(
+                                                  strokeWidth: 2,
+                                                  valueColor:
+                                                      AlwaysStoppedAnimation<
+                                                        Color
+                                                      >(AppColors.primaryGreen),
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              }).toList(),
+                            );
+                          },
                         ),
-                      ),
-                    );
-                  }).toList(),
-                );
-              },
+                      ],
+                    )
+                  : const SizedBox.shrink(),
             ),
-          ],
         ],
       ),
     );
@@ -326,167 +435,69 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
       return;
     }
 
-    // 관리자 모드로 전환하는 경우
-    final linkedAdmin = authProvider.linkedAdmin;
+    // ✅ 공통 검증 + 스플래시 기반 전환 플로우로 통일
+    final authService = AuthService();
+
     if (switchToAdminMode) {
+      final linkedAdmin = authProvider.linkedAdmin;
       if (linkedAdmin == null) {
         SnackbarUtil.showError(context, '연동된 관리자 계정을 찾을 수 없습니다.');
         return;
       }
-
       // 관리 권한 확인: places.adminId로 로드된 목록 기준
       final adminPlaceIds = authProvider.adminManagedPlaceIds;
       if (!adminPlaceIds.contains(newPlace.id)) {
         SnackbarUtil.showError(context, '해당 플레이스에 대한 관리자 권한이 없습니다.');
         return;
       }
-
-      // 관리자 계정으로 전환 (AuthProvider는 user를 유지)
-      authProvider.setCurrentAdmin(linkedAdmin);
-
-      setState(() => _isSwitching = true);
-
-      try {
-        // 모든 프로바이더 데이터 클리어
-        final courseProvider = Provider.of<CourseProvider>(
-          context,
-          listen: false,
-        );
-        final storyProvider = Provider.of<StoryProvider>(
-          context,
-          listen: false,
-        );
-        final promotionProvider = Provider.of<PromotionProvider>(
-          context,
-          listen: false,
-        );
-
-        courseProvider.clear();
-        storyProvider.clear();
-        promotionProvider.clear();
-
-        // PlaceProvider 업데이트
-        final placeProvider = Provider.of<PlaceProvider>(
-          context,
-          listen: false,
-        );
-        placeProvider.setCurrentPlace(newPlace);
-
-        // AuthService에 마지막 접속 플레이스 저장
-        final authService = AuthService();
-        await authService.setCurrentPlace(newPlace);
-
-        // 새 플레이스 데이터 로드 (관리자는 예약/등록 정보 불필요)
-        await Future.wait([
-          courseProvider.loadCourses(newPlace.id),
-          storyProvider.loadStories(newPlace.id),
-          promotionProvider.loadPromotions(newPlace.id),
-        ]);
-
-        if (mounted) {
-          setState(() {
-            _isExpanded = false;
-            _isSwitching = false;
-          });
-          SnackbarUtil.showSuccess(context, '관리자 모드로 전환되었습니다.');
-        }
+    } else {
+      // 멤버(일반) 권한 확인
+      final memberPlaceIds = authProvider.approvedPlaceIds;
+      if (!memberPlaceIds.contains(newPlace.id)) {
+        SnackbarUtil.showError(context, '해당 플레이스에 접근 권한이 없습니다.');
         return;
-      } catch (e) {
-        if (mounted) {
-          setState(() => _isSwitching = false);
-          SnackbarUtil.showError(context, '관리자 모드 전환에 실패했습니다.');
-        }
+      }
+      if (authProvider.currentUser == null) {
+        SnackbarUtil.showError(context, '사용자 정보를 찾을 수 없습니다.');
         return;
       }
     }
 
-    // 일반 사용자 모드로 전환하는 경우 (관리자 모드 해제)
-    authProvider.clearCurrentAdmin();
-
-    // 승인 멤버십 기준으로 접근 권한 확인
-    final memberPlaceIds = authProvider.approvedPlaceIds;
-    if (!memberPlaceIds.contains(newPlace.id)) {
-      SnackbarUtil.showError(context, '해당 플레이스에 접근 권한이 없습니다.');
-      return;
-    }
-    if (authProvider.currentUser == null) {
-      SnackbarUtil.showError(context, '사용자 정보를 찾을 수 없습니다.');
-      return;
-    }
-
-    setState(() => _isSwitching = true);
+    setState(() {
+      _isExpanded = false;
+      _isSwitching = true;
+    });
 
     try {
-      // 모든 프로바이더 데이터 클리어
-      final courseProvider = Provider.of<CourseProvider>(
-        context,
-        listen: false,
-      );
-      final reservationProvider = Provider.of<ReservationProvider>(
-        context,
-        listen: false,
-      );
-      final storyProvider = Provider.of<StoryProvider>(context, listen: false);
-      final promotionProvider = Provider.of<PromotionProvider>(
-        context,
-        listen: false,
-      );
+      // ✅ 관리자 → 일반 전환 시, 현재 admin 모드를 즉시 해제해야
+      // AppStartup(멤버 플로우) 진입 후에도 UI가 admin으로 남지 않는다.
+      if (!switchToAdminMode) {
+        authProvider.clearCurrentAdmin();
+      }
 
-      final enrollmentProvider = Provider.of<EnrollmentProvider>(
-        context,
-        listen: false,
-      );
+      // 1) Provider 전체 초기화
+      await _resetAllProvidersForSwitch(context);
 
-      courseProvider.clear();
-      await reservationProvider.clear();
-      await enrollmentProvider.clear();
-      storyProvider.clear();
-      promotionProvider.clear();
-
-      // PlaceProvider 업데이트
+      // 1.5) 다음 화면에서 "현재 플레이스가 null"이어서 로드가 스킵되는 것을 방지하기 위해
+      // 전환 대상 플레이스를 미리 주입한다. (AppStartup에서도 다시 복원/검증함)
       final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
       placeProvider.setCurrentPlace(newPlace);
 
-      // AuthService에 마지막 접속 플레이스 저장
-      final authService = AuthService();
-      await authService.setCurrentPlace(newPlace);
-
-      // 새 플레이스 데이터 로드
-      final currentUser = authProvider.currentUser;
-      final userId = currentUser?.userId;
-      final loadTasks = <Future>[
-        courseProvider.loadCourses(newPlace.id),
-        storyProvider.loadStories(newPlace.id),
-        promotionProvider.loadPromotions(newPlace.id),
-      ];
-
-      // 일반 사용자인 경우에만 예약 및 등록 정보 로드
-      if (currentUser != null && userId != null) {
-        loadTasks.addAll([
-          reservationProvider.loadUserReservations(
-            userId: userId,
-            placeId: newPlace.id,
-          ),
-          enrollmentProvider.loadUserEnrollments(
-            userId: userId,
-            placeId: newPlace.id,
-          ),
-        ]);
+      // 2) 마지막 접속 모드/플레이스 저장 (AppStartup에서 복원에 사용)
+      if (switchToAdminMode) {
+        await authService.updateLastAccessedPlace(newPlace.id);
+      } else {
+        await authService.setCurrentPlace(newPlace);
       }
 
-      await Future.wait(loadTasks);
+      if (!mounted) return;
 
-      if (mounted) {
-        setState(() {
-          _isExpanded = false;
-          _isSwitching = false;
-        });
-        SnackbarUtil.showSuccess(context, '플레이스가 전환되었습니다.');
-      }
+      // 3) 스택 클리어 + AppStartupScreen으로 이동 (스플래시 → 로딩 → 홈 진입)
+      Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
     } catch (e) {
       if (mounted) {
         setState(() => _isSwitching = false);
-        SnackbarUtil.showError(context, '플레이스 전환에 실패했습니다.');
+        SnackbarUtil.showError(context, '전환에 실패했습니다.');
       }
     }
   }

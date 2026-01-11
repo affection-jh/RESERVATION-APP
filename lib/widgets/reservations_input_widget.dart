@@ -94,11 +94,11 @@ class ReservationsInputWidget extends StatelessWidget {
               ),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: AppColors.borderLight, width: 1),
+                borderSide: BorderSide(color: AppColors.borderLight, width: 0),
               ),
               enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: AppColors.borderLight, width: 1),
+                borderSide: BorderSide(color: AppColors.borderLight, width: 0),
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),

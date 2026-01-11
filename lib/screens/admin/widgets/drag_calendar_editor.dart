@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:reservation/utils/timezone_utils.dart';
 import '../../../theme/app_colors.dart';
 import '../../../models/session_draft.dart';
 import '../../../widgets/course_color_picker_bottom_sheet.dart';
@@ -74,7 +75,7 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
 
   @override
   Widget build(BuildContext context) {
-    final today = DateTime.now();
+    final today = TimezoneUtils.getSeoulToday();
     final weekStart = today.subtract(Duration(days: today.weekday % 7));
     final targetDate = weekStart.add(Duration(days: widget.dayOfWeek - 1));
     final dates = [targetDate];

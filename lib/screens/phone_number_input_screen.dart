@@ -6,6 +6,7 @@ import '../theme/app_colors.dart';
 import '../services/auth_service.dart';
 import '../constants/app_constants.dart';
 import '../utils/text_field_decoration_util.dart';
+import '../main.dart';
 
 /// 전화번호 입력 화면
 class PhoneNumberInputScreen extends StatefulWidget {
@@ -289,6 +290,67 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
                       ],
                     ),
                     const Spacer(),
+                    // 테스터 모드 바로가기 버튼
+                    Center(
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(vertical: 20),
+                        child: ElevatedButton(
+                          onPressed: () {
+                            setState(() {
+                              AppConfig.isTesterMode = !AppConfig.isTesterMode;
+                            });
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  AppConfig.isTesterMode
+                                      ? '테스터 모드 활성화'
+                                      : '테스터 모드 비활성화',
+                                ),
+                                duration: const Duration(seconds: 1),
+                                backgroundColor: AppConfig.isTesterMode
+                                    ? AppColors.primaryGreen
+                                    : AppColors.textSecondary,
+                              ),
+                            );
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppConfig.isTesterMode
+                                ? AppColors.primaryGreen
+                                : AppColors.borderLight,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 24,
+                              vertical: 12,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            elevation: 0,
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                AppConfig.isTesterMode
+                                    ? Icons.check_circle
+                                    : Icons.bug_report,
+                                size: 18,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                AppConfig.isTesterMode
+                                    ? '테스터 모드 ON'
+                                    : '테스터 모드 OFF',
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -319,7 +381,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
                             valueColor: AlwaysStoppedAnimation<Color>(
-                              Colors.white,
+                              AppColors.primaryGreen,
                             ),
                           ),
                         )

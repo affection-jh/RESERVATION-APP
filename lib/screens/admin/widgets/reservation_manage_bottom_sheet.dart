@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../../models/course.dart';
 import '../../../models/reservation.dart';
 import '../../../models/user.dart';
 import '../../../theme/app_colors.dart';
 import '../../../services/reservation_service.dart';
+import '../../../providers/reservation_provider.dart';
 import '../../../widgets/compact_calendar_widget.dart';
 import 'admin_shared_widgets.dart';
 import '../../../utils/snackbar_util.dart';
+import '../../../utils/format_utils.dart';
 import '../../../widgets/common_dialog.dart';
 
 /// 예약 관리 바텀시트 (예약 취소, 변경, 추가)
@@ -31,6 +34,37 @@ class ReservationManageBottomSheet extends StatefulWidget {
     this.onReservationChanged,
     this.onReservationAdded,
   });
+
+  static void show({
+    required BuildContext context,
+    required Course course,
+    required CourseSession session,
+    required DateTime date,
+    Reservation? reservation,
+    User? user,
+    VoidCallback? onReservationCancelled,
+    VoidCallback? onReservationChanged,
+    VoidCallback? onReservationAdded,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withOpacity(0.7),
+      isDismissible: true,
+      enableDrag: true,
+      builder: (context) => ReservationManageBottomSheet(
+        course: course,
+        session: session,
+        date: date,
+        reservation: reservation,
+        user: user,
+        onReservationCancelled: onReservationCancelled,
+        onReservationChanged: onReservationChanged,
+        onReservationAdded: onReservationAdded,
+      ),
+    );
+  }
 
   @override
   State<ReservationManageBottomSheet> createState() =>
@@ -87,6 +121,10 @@ class _ReservationManageBottomSheetState
   Future<void> _cancelReservation() async {
     if (widget.reservation == null) return;
 
+    // 바텀시트 먼저 닫기
+    Navigator.of(context).pop();
+
+    // 다이얼로그 띄우기
     final confirmed = await CommonDialog.show(
       context: context,
       title: '예약 취소',
@@ -96,29 +134,96 @@ class _ReservationManageBottomSheetState
       confirmButtonColor: Colors.red,
     );
 
-    if (confirmed == true) {
-      setState(() => _isLoading = true);
-      try {
-        final success = await _reservationService.deleteReservation(
-          reservationId: widget.reservation!.id,
-          placeId: widget.reservation!.placeId,
+    // 취소 시 바텀시트 다시 열기 (롤백)
+    if (confirmed != true) {
+      if (mounted) {
+        ReservationManageBottomSheet.show(
+          context: context,
+          course: widget.course,
+          session: widget.session,
+          date: widget.date,
+          reservation: widget.reservation,
+          user: widget.user,
+          onReservationCancelled: widget.onReservationCancelled,
+          onReservationChanged: widget.onReservationChanged,
+          onReservationAdded: widget.onReservationAdded,
         );
-        if (success) {
-          widget.onReservationCancelled?.call();
-          if (mounted) {
-            SnackbarUtil.showSuccess(context, '예약이 취소되었습니다.');
-          }
-        } else {
-          if (mounted) {
-            SnackbarUtil.showError(context, '예약 취소 중 오류가 발생했습니다.');
-          }
-        }
-      } catch (e) {
+      }
+      return;
+    }
+
+    // 확인 시 예약 취소 처리
+    // 바텀시트를 닫은 후 context 사용을 위해 rootContext 저장
+    final rootContext = context;
+
+    try {
+      // 예약 취소 진행 중 로딩 다이얼로그
+      showDialog(
+        context: rootContext,
+        barrierDismissible: false,
+        builder: (_) {
+          return WillPopScope(
+            onWillPop: () async => false,
+            child: const Center(
+              child: CircularProgressIndicator(color: AppColors.primaryGreen),
+            ),
+          );
+        },
+      );
+
+      final success = await _reservationService.deleteReservation(
+        reservationId: widget.reservation!.id,
+        placeId: widget.reservation!.placeId,
+      );
+
+      // 로딩 다이얼로그 닫기
+      if (mounted) {
+        Navigator.of(rootContext, rootNavigator: true).pop();
+      }
+
+      if (success) {
+        widget.onReservationCancelled?.call();
         if (mounted) {
-          SnackbarUtil.showError(context, '예약 취소 중 오류가 발생했습니다: $e');
+          SnackbarUtil.showSuccess(rootContext, '예약이 취소되었습니다.');
+        }
+      } else {
+        if (mounted) {
+          SnackbarUtil.showError(rootContext, '예약 취소 중 오류가 발생했습니다.');
+          // 에러 발생 시 바텀시트 다시 열기
+          ReservationManageBottomSheet.show(
+            context: rootContext,
+            course: widget.course,
+            session: widget.session,
+            date: widget.date,
+            reservation: widget.reservation,
+            user: widget.user,
+            onReservationCancelled: widget.onReservationCancelled,
+            onReservationChanged: widget.onReservationChanged,
+            onReservationAdded: widget.onReservationAdded,
+          );
         }
       }
-      setState(() => _isLoading = false);
+    } catch (e) {
+      // 로딩 다이얼로그가 떠있으면 닫기
+      if (mounted) {
+        Navigator.of(rootContext, rootNavigator: true).pop();
+      }
+
+      if (mounted) {
+        SnackbarUtil.showError(rootContext, '예약 취소 중 오류가 발생했습니다: $e');
+        // 에러 발생 시 바텀시트 다시 열기
+        ReservationManageBottomSheet.show(
+          context: rootContext,
+          course: widget.course,
+          session: widget.session,
+          date: widget.date,
+          reservation: widget.reservation,
+          user: widget.user,
+          onReservationCancelled: widget.onReservationCancelled,
+          onReservationChanged: widget.onReservationChanged,
+          onReservationAdded: widget.onReservationAdded,
+        );
+      }
     }
   }
 
@@ -192,16 +297,16 @@ class _ReservationManageBottomSheetState
 
     setState(() => _isLoading = true);
     try {
-      final success = await _reservationService.moveReservationWithinCourse(
-        reservationId: widget.reservation!.id,
+      // ✅ Provider 기반으로 처리(in-flight 상태 유지 + 캘린더 UI에서 처리 중 표시)
+      await Provider.of<ReservationProvider>(
+        context,
+        listen: false,
+      ).moveReservationWithinCourse(
+        reservation: widget.reservation!,
         newDayOfWeek: _selectedNewSession!.dayOfWeek,
         newStartTime: _selectedNewSession!.startTime,
         newReservedDate: _selectedNewDate!,
-        placeId: widget.reservation!.placeId,
       );
-      if (!success) {
-        throw Exception('예약 이동 실패');
-      }
       widget.onReservationChanged?.call();
       if (mounted) {
         Navigator.of(context).pop();
@@ -330,7 +435,9 @@ class _ReservationManageBottomSheetState
                           items: _availableUsers.map((user) {
                             return DropdownMenuItem<User>(
                               value: user,
-                              child: Text('${user.name} (${user.phoneNumber})'),
+                              child: Text(
+                                '${user.name} (${FormatUtils.formatPhoneNumber(user.phoneNumber)})',
+                              ),
                             );
                           }).toList(),
                           onChanged: (user) {
@@ -364,16 +471,20 @@ class _ReservationManageBottomSheetState
                         keyboardType: TextInputType.phone,
                       ),
                     ] else ...[
-                      // 예약 정보 표시
-                      _buildInfoRow('예약자', widget.user?.name ?? '알 수 없음'),
-                      const SizedBox(height: 12),
-                      _buildInfoRow('전화번호', widget.user?.phoneNumber ?? '-'),
-                      const SizedBox(height: 12),
-                      _buildInfoRow(
+                      // 예약 정보 표시 (모두 칩셋으로)
+                      _buildInfoChip(
+                        '예약자',
+                        widget.user?.name ?? '알 수 없음',
+                        AppColors.primaryGreen,
+                      ),
+
+                      const SizedBox(height: 6),
+                      _buildInfoChip(
                         '예약 시간',
                         _formatDateTime(
                           widget.reservation?.reservedAt ?? DateTime.now(),
                         ),
+                        AppColors.primaryGreen,
                       ),
                       const SizedBox(height: 20),
 
@@ -442,7 +553,7 @@ class _ReservationManageBottomSheetState
                                   child: CircularProgressIndicator(
                                     strokeWidth: 2,
                                     valueColor: AlwaysStoppedAnimation<Color>(
-                                      Colors.white,
+                                      AppColors.primaryGreen,
                                     ),
                                   ),
                                 )
@@ -481,7 +592,7 @@ class _ReservationManageBottomSheetState
                                   child: CircularProgressIndicator(
                                     strokeWidth: 2,
                                     valueColor: AlwaysStoppedAnimation<Color>(
-                                      Colors.white,
+                                      AppColors.primaryGreen,
                                     ),
                                   ),
                                 )
@@ -557,32 +668,35 @@ class _ReservationManageBottomSheetState
     );
   }
 
-  Widget _buildInfoRow(String label, String value) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 80,
-          child: Text(
+  Widget _buildInfoChip(String label, String value, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
             label,
             style: TextStyle(
-              fontSize: 15,
-              color: AppColors.primaryGreen,
-              fontWeight: FontWeight.w600,
+              fontSize: 14,
+              color: AppColors.textSecondary,
+              fontWeight: FontWeight.w500,
             ),
           ),
-        ),
-        Expanded(
-          child: Text(
+          const SizedBox(width: 6),
+          Text(
             value,
             style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w500,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
               color: AppColors.textPrimary,
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 

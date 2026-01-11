@@ -6,7 +6,11 @@ import '../utils/timezone_utils.dart';
 class CourseEnrollment {
   final String id;
   final String userId;
+  // 🔎 Firebase 콘솔 디버깅/가독성용 (denormalized)
+  final String? userName;
   final String courseId;
+  // 🔎 Firebase 콘솔 디버깅/가독성용 (denormalized)
+  final String? courseName;
   final String placeId;
   final DateTime enrolledAt; // 현재 등록일 (재등록 시 업데이트)
   final int totalEnrollmentCount; // 총 등록횟수 (1, 2, 3...)
@@ -22,7 +26,9 @@ class CourseEnrollment {
   CourseEnrollment({
     required this.id,
     required this.userId,
+    this.userName,
     required this.courseId,
+    this.courseName,
     required this.placeId,
     required this.enrolledAt,
     this.totalEnrollmentCount = 1,
@@ -186,7 +192,9 @@ class CourseEnrollment {
   CourseEnrollment copyWith({
     String? id,
     String? userId,
+    String? userName,
     String? courseId,
+    String? courseName,
     String? placeId,
     DateTime? enrolledAt,
     int? totalEnrollmentCount,
@@ -218,7 +226,9 @@ class CourseEnrollment {
     return CourseEnrollment(
       id: id ?? this.id,
       userId: userId ?? this.userId,
+      userName: userName ?? this.userName,
       courseId: courseId ?? this.courseId,
+      courseName: courseName ?? this.courseName,
       placeId: placeId ?? this.placeId,
       enrolledAt: enrolledAt ?? this.enrolledAt,
       totalEnrollmentCount: totalEnrollmentCount ?? this.totalEnrollmentCount,
@@ -239,7 +249,9 @@ class CourseEnrollment {
     return {
       'id': id,
       'userId': userId,
+      'userName': userName,
       'courseId': courseId,
+      'courseName': courseName,
       'placeId': placeId,
       'enrolledAt': enrolledAt.toIso8601String(),
       'totalEnrollmentCount': totalEnrollmentCount,
@@ -279,7 +291,9 @@ class CourseEnrollment {
     return CourseEnrollment(
       id: json['id'] as String,
       userId: json['userId'] as String,
+      userName: json['userName'] as String?,
       courseId: json['courseId'] as String,
+      courseName: json['courseName'] as String?,
       placeId: json['placeId'] as String,
       enrolledAt: DateTime.parse(json['enrolledAt'] as String),
       totalEnrollmentCount: json['totalEnrollmentCount'] as int? ?? 1,

@@ -768,7 +768,7 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
                               valueColor: AlwaysStoppedAnimation<Color>(
-                                Colors.white,
+                                AppColors.primaryGreen,
                               ),
                             ),
                           )

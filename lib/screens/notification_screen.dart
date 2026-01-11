@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:reservation/utils/timezone_utils.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:provider/provider.dart';
 import '../theme/app_colors.dart';
@@ -170,8 +171,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
     }
 
     // 날짜별로 그룹화 (동적)
-    final now = DateTime.now();
-    final todayStart = DateTime(now.year, now.month, now.day);
+    final todayStart = TimezoneUtils.getSeoulToday();
     final weekStart = todayStart.subtract(const Duration(days: 7));
     final monthStart = todayStart.subtract(const Duration(days: 30));
 
@@ -373,53 +373,18 @@ class _DismissibleNotificationItem extends StatefulWidget {
 
 class _DismissibleNotificationItemState
     extends State<_DismissibleNotificationItem> {
-  double _swipeProgress = 0.0;
-
   @override
   Widget build(BuildContext context) {
-    // 스와이프 진행도를 곡선 함수로 변환 (초반에 빠르게 진해지도록)
-    // sqrt를 사용하여 초반에 빠르게 변하고, 나중에는 천천히
-    final curvedProgress = _swipeProgress < 0.0
-        ? 0.0
-        : (_swipeProgress * _swipeProgress * _swipeProgress); // 세제곱으로 더 빠르게
-
-    // 스와이프 진행도에 따라 색상 진하기 조절 (0.0 ~ 1.0)
-    // 초반에 빠르게 진해지도록 더 높은 계수 사용
-    final opacity = (0.05 + curvedProgress * 0.5).clamp(0.05, 0.55);
-    final gradientOpacity = (0.02 + curvedProgress * 0.3).clamp(0.02, 0.32);
-
     return Dismissible(
       key: Key(widget.notification.id),
       direction: DismissDirection.endToStart,
-      onUpdate: (details) {
-        // 스와이프 진행도 계산 (0.0 ~ 1.0)
-        final progress = (details.progress).clamp(0.0, 1.0);
-        setState(() {
-          _swipeProgress = progress;
-        });
-      },
       onDismissed: (direction) {
         widget.onDismissed();
       },
       background: Container(
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: 24),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.centerRight,
-            end: Alignment.centerLeft,
-            colors: [
-              const Color.fromARGB(255, 255, 79, 67).withOpacity(opacity),
-              const Color.fromARGB(
-                255,
-                255,
-                79,
-                67,
-              ).withOpacity(gradientOpacity),
-              Colors.transparent,
-            ],
-          ),
-        ),
+        color: Colors.transparent,
         child: Container(
           width: 48,
           height: 48,
@@ -566,7 +531,7 @@ class _NotificationTile extends StatelessWidget {
   }
 
   String _formatTime(DateTime dateTime) {
-    final now = DateTime.now();
+    final now = TimezoneUtils.getSeoulDateTime();
     final difference = now.difference(dateTime);
 
     if (difference.inMinutes < 60) {

@@ -201,7 +201,7 @@ class _NotificationSettingsDialogState
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
                           valueColor: AlwaysStoppedAnimation<Color>(
-                            Colors.white,
+                            AppColors.primaryGreen,
                           ),
                         ),
                       )

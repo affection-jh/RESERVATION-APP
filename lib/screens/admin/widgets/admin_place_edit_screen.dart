@@ -4,11 +4,11 @@ import 'package:flutter_svg/svg.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:reservation/utils/text_field_decoration_util.dart';
-import 'package:reservation/widgets/notification_icon_widget.dart';
 import '../../../theme/app_colors.dart';
 import '../../../models/place.dart';
 import '../../../utils/snackbar_util.dart';
 import '../../../widgets/cached_image_widget.dart' show PlaceImageWidget;
+import '../../../widgets/story_card.dart';
 import '../../../services/storage_service.dart';
 import '../../../providers/place_provider.dart';
 import '../../../providers/auth_provider.dart';
@@ -335,6 +335,11 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         ),
         const SizedBox(height: 4),
         TextField(
+          style: TextStyle(
+            fontSize: 16,
+            color: AppColors.textPrimary,
+            fontWeight: FontWeight.w600,
+          ),
           controller: _nameController,
           focusNode: _nameFocusNode,
           textInputAction: TextInputAction.next,
@@ -367,6 +372,11 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         ),
         const SizedBox(height: 4),
         TextField(
+          style: TextStyle(
+            fontSize: 16,
+            color: AppColors.textPrimary,
+            fontWeight: FontWeight.w600,
+          ),
           controller: _descriptionController,
           focusNode: _descriptionFocusNode,
           textInputAction: TextInputAction.next,
@@ -411,7 +421,12 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
       decoration: BoxDecoration(
         color: AppColors.backgroundLight,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.borderLight, width: 1),
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Colors.white, Colors.white, Colors.white.withOpacity(0.0)],
+          stops: const [0.0, 0.2, 0.8],
+        ),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
@@ -422,21 +437,38 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
 
   // 홈 화면 미리보기
   Widget _buildHomePreview() {
-    return Container(
-      color: AppColors.backgroundLight,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // 헤더 (이미지 + 플레이스 이름)
-          _buildPreviewHeader(),
-          // 제목 섹션
-          _buildPreviewTitleSection(),
-        ],
+    return ShaderMask(
+      shaderCallback: (Rect bounds) {
+        return LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Colors.white, Colors.white, Colors.white.withOpacity(0.0)],
+          stops: const [0.0, 0.4, 0.8],
+        ).createShader(bounds);
+      },
+      blendMode: BlendMode.dstIn,
+      child: Container(
+        color: AppColors.backgroundLight,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 헤더
+            _buildPreviewHeader(),
+            // 제목 섹션
+            _buildPreviewTitleSection(),
+            const SizedBox(height: 20),
+            // 탭
+            _buildPreviewTabs(),
+            const SizedBox(height: 10),
+            // 프로모션 카드
+            _buildPreviewPromotionCard(),
+          ],
+        ),
       ),
     );
   }
 
-  // 미리보기 헤더 (이미지 클릭 가능, 텍스트는 플레이스 이름과 연동)
+  // 미리보기 헤더 (이미지와 플레이스 설명)
   Widget _buildPreviewHeader() {
     final currentImageUrl = _uploadedImageUrl ?? _existingImageUrl;
     final placeName = _nameController.text.trim().isEmpty
@@ -444,18 +476,18 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         : _nameController.text.trim();
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-      color: AppColors.backgroundWhite,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 30),
+      color: AppColors.backgroundLight,
       child: Row(
         children: [
-          // 플레이스 이미지 (클릭 가능)
+          // 플레이스 이미지
           GestureDetector(
             onTap: _isUploadingImage ? null : _pickImage,
             child: Stack(
               children: [
                 Container(
-                  width: 50,
-                  height: 50,
+                  width: 46,
+                  height: 46,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(16),
                     color: AppColors.backgroundLight,
@@ -468,8 +500,8 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
                       : (currentImageUrl != null && currentImageUrl.isNotEmpty)
                       ? PlaceImageWidget(
                           imageUrl: currentImageUrl,
-                          width: 50,
-                          height: 50,
+                          width: 46,
+                          height: 46,
                           borderRadius: BorderRadius.circular(16),
                         )
                       : Icon(
@@ -492,55 +524,61 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
                             valueColor: AlwaysStoppedAnimation<Color>(
-                              Colors.white,
+                              AppColors.primaryGreen,
                             ),
                           ),
                         ),
                       ),
                     ),
                   ),
-                // 편집 아이콘 (오른쪽 아래)
-                Positioned(
-                  right: -2,
-                  bottom: -2,
-                  child: Container(
-                    width: 24,
-                    height: 24,
-                    decoration: BoxDecoration(
-                      color: AppColors.primaryGreen,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: AppColors.backgroundWhite,
-                        width: 2,
-                      ),
-                    ),
-                    child: Icon(Icons.edit, size: 14, color: Colors.white),
-                  ),
-                ),
               ],
             ),
           ),
           const SizedBox(width: 12),
-          // 플레이스 이름 (플레이스 이름과 연동, 텍스트 필드 아님)
+          // 플레이스 이름
           Expanded(
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Text(
-                    placeName,
-                    style: TextStyle(
-                      color: AppColors.textPrimary,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                Text(
+                  placeName,
+                  style: TextStyle(
+                    color: AppColors.textPrimary,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
               ],
             ),
           ),
-          NotificationIconWidget(),
+          Stack(
+            children: [
+              IconButton(
+                icon: SvgPicture.asset(
+                  'assets/icons/notifiction-icon.svg',
+                  width: 20,
+                  height: 20,
+                  colorFilter: ColorFilter.mode(
+                    AppColors.textPrimary,
+                    BlendMode.srcIn,
+                  ),
+                ),
+                onPressed: () {},
+              ),
+              Positioned(
+                top: 12,
+                right: 10,
+                child: Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: Colors.red,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -548,7 +586,9 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
 
   // 미리보기 제목 섹션 (인라인 편집)
   Widget _buildPreviewTitleSection() {
-    // 현재 플레이스의 인사말을 힌트로 사용
+    final placeName = _nameController.text.trim().isEmpty
+        ? (widget.place?.name ?? '플레이스 이름')
+        : _nameController.text.trim();
     final currentGreeting = widget.place?.greetingText ?? '';
 
     return Padding(
@@ -558,8 +598,10 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         child: TextField(
           controller: _greetingTextController,
           focusNode: _greetingFocusNode,
-          textInputAction: TextInputAction.done,
+          keyboardType: TextInputType.multiline,
+          textInputAction: TextInputAction.newline,
           maxLines: null,
+          minLines: 2,
           textAlign: TextAlign.left,
           textAlignVertical: TextAlignVertical.top,
           style: TextStyle(
@@ -569,7 +611,9 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
             height: 1.4,
           ),
           decoration: InputDecoration(
-            hintText: currentGreeting,
+            hintText: currentGreeting.isNotEmpty
+                ? currentGreeting
+                : '안녕하세요,\n$placeName입니다',
             hintStyle: TextStyle(
               fontSize: 26,
               fontWeight: FontWeight.w600,
@@ -582,6 +626,57 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
           ),
           onChanged: (_) => setState(() {}),
         ),
+      ),
+    );
+  }
+
+  // 미리보기 탭
+  Widget _buildPreviewTabs() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Row(
+        children: [
+          Column(
+            children: [
+              Text(
+                '스토리',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: AppColors.primaryGreen,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(width: 24),
+          Text(
+            '추천',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.normal,
+              color: AppColors.textSecondary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 미리보기 프로모션 카드
+  Widget _buildPreviewPromotionCard() {
+    return SizedBox(
+      height: 200,
+      child: PageView(
+        children: [StoryCard(title: '', content: '', date: '', imageUrls: [])],
       ),
     );
   }
@@ -608,7 +703,9 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
                   height: 20,
                   child: CircularProgressIndicator(
                     strokeWidth: 2,
-                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      AppColors.primaryGreen,
+                    ),
                   ),
                 )
               : Text(

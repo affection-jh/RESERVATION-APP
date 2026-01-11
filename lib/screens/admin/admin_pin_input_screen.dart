@@ -3,6 +3,7 @@ import 'package:pinput/pinput.dart';
 import 'package:provider/provider.dart';
 import '../../theme/app_colors.dart';
 import '../../services/auth_service.dart';
+import '../../services/admin_service.dart';
 import '../../models/admin_user.dart';
 import '../../providers/auth_provider.dart';
 import '../admin_screen.dart';
@@ -87,26 +88,35 @@ class _AdminPinInputScreenState extends State<AdminPinInputScreen> {
 
       debugPrint('[AdminPinInput] authResult: $authResult');
 
+      // AdminService에서 현재 관리자 정보 가져오기 (placeIds 포함)
+      final adminService = AdminService();
+      final currentAdmin = adminService.currentAdmin;
+
       // AuthProvider에 관리자 정보 설정
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
-      authProvider.setCurrentAdmin(
-        AdminUser(
-          userId: authResult.user.userId,
-          name: authResult.user.name,
-          phoneNumber: authResult.user.phoneNumber,
-          email: authResult.user.email,
-          placeIds: authResult.user.placeIds,
-          createdAt: authResult.user.createdAt,
-          updatedAt: authResult.user.updatedAt,
-        ),
-      );
+      if (currentAdmin != null) {
+        authProvider.setCurrentAdmin(currentAdmin);
+      } else {
+        // AdminService에 관리자가 없으면 User 정보로 생성 (placeIds는 빈 배열)
+        authProvider.setCurrentAdmin(
+          AdminUser(
+            userId: authResult.user.userId,
+            name: authResult.user.name,
+            phoneNumber: authResult.user.phoneNumber,
+            placeIds: [], // User.placeIds는 더 이상 사용하지 않음
+            createdAt: authResult.user.createdAt,
+            updatedAt: authResult.user.updatedAt,
+          ),
+        );
+      }
 
       // 로그인 시 플레이스가 없으면 플레이스 등록 화면으로 이동
       if (mounted) {
         // 명시적 진입 선택(관리자 경로) 완료 → 플래그 해제
         await authService.clearRequireManualEntrySelection();
 
-        if (authResult.user.placeIds.isEmpty) {
+        final adminPlaceIds = currentAdmin?.placeIds ?? [];
+        if (adminPlaceIds.isEmpty) {
           // 플레이스가 없으면 플레이스 등록 화면으로 이동
           Navigator.of(context).pushAndRemoveUntil(
             MaterialPageRoute(
@@ -249,7 +259,7 @@ class _AdminPinInputScreenState extends State<AdminPinInputScreen> {
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
                               valueColor: AlwaysStoppedAnimation<Color>(
-                                Colors.white,
+                                AppColors.primaryGreen,
                               ),
                             ),
                           )

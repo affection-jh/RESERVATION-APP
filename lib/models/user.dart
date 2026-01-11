@@ -1,12 +1,12 @@
 import 'course_enrollment.dart';
 import 'reservation.dart';
+import '../utils/timezone_utils.dart';
 
 /// 일반 유저 모델
 class User {
   final String userId;
   final String name;
   final String phoneNumber; // 필수
-  final String? email; // 선택
   final List<String> placeIds; // 속한 플레이스들 (학원)
   final List<String> adminForPlaces; // 관리자로 관리하는 플레이스들 (새 필드)
   final List<CourseEnrollment> enrollments; // 등록한 코스들
@@ -19,7 +19,6 @@ class User {
     required this.userId,
     required this.name,
     required this.phoneNumber,
-    this.email,
     this.placeIds = const [],
     this.adminForPlaces = const [], // 기본값: 빈 배열 (일반 유저)
     this.enrollments = const [],
@@ -144,15 +143,13 @@ class User {
   User updateProfile({
     String? name,
     String? phoneNumber,
-    String? email,
     bool? notificationsEnabled,
   }) {
     return copyWith(
       name: name ?? this.name,
       phoneNumber: phoneNumber ?? this.phoneNumber,
-      email: email ?? this.email,
       notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
-      updatedAt: DateTime.now(),
+      updatedAt: TimezoneUtils.getSeoulDateTime(),
     );
   }
 
@@ -161,7 +158,6 @@ class User {
     String? userId,
     String? name,
     String? phoneNumber,
-    String? email,
     List<String>? placeIds,
     List<String>? adminForPlaces,
     List<CourseEnrollment>? enrollments,
@@ -174,7 +170,6 @@ class User {
       userId: userId ?? this.userId,
       name: name ?? this.name,
       phoneNumber: phoneNumber ?? this.phoneNumber,
-      email: email ?? this.email,
       placeIds: placeIds ?? this.placeIds,
       adminForPlaces: adminForPlaces ?? this.adminForPlaces,
       enrollments: enrollments ?? this.enrollments,
@@ -191,10 +186,9 @@ class User {
       'userId': userId,
       'name': name,
       'phoneNumber': phoneNumber,
-      'email': email,
       'placeIds': placeIds,
       'adminForPlaces': adminForPlaces, // 새 필드 추가
-      'enrollments': enrollments.map((e) => e.toJson()).toList(),
+      // enrollments 필드 제거: enrollments 컬렉션에서 직접 조회
       'reservations': reservations.map((r) => r.toJson()).toList(),
       'notificationsEnabled': notificationsEnabled,
       'createdAt': createdAt.toIso8601String(),
@@ -205,27 +199,29 @@ class User {
   // JSON에서 생성
   factory User.fromJson(Map<String, dynamic> json) {
     return User(
-      userId: json['userId'] as String,
-      name: json['name'] as String,
-      phoneNumber: json['phoneNumber'] as String,
-      email: json['email'] as String?,
+      userId: json['userId'] as String? ?? '',
+      name: json['name'] as String? ?? '이름 없음',
+      phoneNumber: json['phoneNumber'] as String? ?? '',
       placeIds: (json['placeIds'] as List?)?.cast<String>() ?? [],
       adminForPlaces:
           (json['adminForPlaces'] as List?)?.cast<String>() ?? [], // 새 필드 추가
-      enrollments:
-          (json['enrollments'] as List?)
-              ?.map((e) => CourseEnrollment.fromJson(e as Map<String, dynamic>))
-              .toList() ??
-          [],
+      // enrollments 필드 무시: enrollments 컬렉션에서 직접 조회
+      enrollments: const [],
       reservations:
           (json['reservations'] as List?)
               ?.map((r) => Reservation.fromJson(r as Map<String, dynamic>))
               .toList() ??
           [],
       notificationsEnabled: json['notificationsEnabled'] as bool? ?? true,
-      createdAt: DateTime.parse(json['createdAt'] as String),
+      createdAt: json['createdAt'] != null
+          ? (json['createdAt'] is String
+                ? DateTime.parse(json['createdAt'] as String)
+                : DateTime.now())
+          : DateTime.now(),
       updatedAt: json['updatedAt'] != null
-          ? DateTime.parse(json['updatedAt'] as String)
+          ? (json['updatedAt'] is String
+                ? DateTime.parse(json['updatedAt'] as String)
+                : null)
           : null,
     );
   }

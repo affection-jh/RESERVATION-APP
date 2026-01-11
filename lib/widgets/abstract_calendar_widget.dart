@@ -18,8 +18,8 @@ class AbstractCalendarWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 현재 주의 날짜들 계산
-    final today = TimezoneUtils.getSeoulDateTime();
+    // 현재 주의 날짜들 계산 (주차 계산은 "오늘 00:00" 기준)
+    final today = TimezoneUtils.getSeoulToday();
     final daysFromMonday = today.weekday - 1;
     final thisWeekMonday = today.subtract(Duration(days: daysFromMonday));
     final weekStart = thisWeekMonday.add(Duration(days: weekOffset * 7));

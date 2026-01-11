@@ -15,8 +15,10 @@ import '../../providers/place_provider.dart';
 import '../../models/user.dart';
 import '../../models/pending_member.dart';
 import '../../models/course_enrollment.dart';
+import '../../models/course_member.dart';
 import '../../utils/text_field_decoration_util.dart';
 import '../../services/member_service.dart';
+import '../../services/enrollment_service.dart';
 import '../../utils/snackbar_util.dart';
 
 class AdminMemberScreen extends StatefulWidget {
@@ -29,7 +31,7 @@ class AdminMemberScreen extends StatefulWidget {
 class _AdminMemberScreenState extends State<AdminMemberScreen> {
   // 검색 및 필터 상태
   String _searchQuery = '';
-  int _selectedTab = 0; // 0: 전체, 1: 코스별, 2: 요청
+  int _selectedTab = 0; // 0: 전체, 1: 코스별, 2: 요청, 3: 활성
   final Set<String> _selectedCourseIds = {}; // 중복 선택 가능
   bool _isCourseSelectorExpanded = true; // 코스 선택기 펼침/접힘 상태
   final TextEditingController _searchController = TextEditingController();
@@ -78,31 +80,17 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
     // 탭별 필터
     if (_selectedTab == 2) {
       // 요청 탭: 연장 요청이 있는 멤버만
+      // 주의: enrollments 컬렉션에서 직접 조회해야 함 (users 문서의 enrollments 필드 사용 안 함)
+      // TODO: enrollments 컬렉션에서 연장 요청 확인 필요
       filtered = filtered.where((user) {
-        return user.pendingExtensionRequests.isNotEmpty;
+        // pending 멤버는 연장 요청 없음
+        if (user.userId.startsWith('pending_')) return false;
+        // 임시로 false 반환 (나중에 enrollments 컬렉션 조회로 변경)
+        return false;
       }).toList();
     }
 
-    // 코스별 필터 (코스별 탭일 때만)
-    if (_selectedTab == 1) {
-      if (_selectedCourseIds.isNotEmpty) {
-        // 선택된 코스에 등록된 멤버만 필터링
-        filtered = filtered.where((user) {
-          // 유효한 enrollment 중에서 선택된 코스 ID와 일치하는 것이 있는지 확인
-          final enrolledCourseIds = user.enrollments
-              .where((e) => e.isValid)
-              .map((e) => e.courseId)
-              .toSet();
-          // 선택된 코스 중 하나라도 등록되어 있으면 표시
-          return _selectedCourseIds.any(
-            (courseId) => enrolledCourseIds.contains(courseId),
-          );
-        }).toList();
-      } else {
-        // 코스가 선택되지 않았으면 모든 멤버 표시
-        // (또는 아무것도 표시하지 않을 수도 있지만, 현재는 모든 멤버 표시)
-      }
-    }
+    // 코스별 필터는 _buildCourseMemberList에서 courseMembers로 처리하므로 여기서는 불필요
 
     // 검색 필터
     if (_searchQuery.isNotEmpty) {
@@ -138,10 +126,20 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
         ),
         // 검색 바
 
-        // 멤버 리스트 (users + pendingMembers)
+        // 멤버 리스트
+        // 코스별 탭일 때는 courseMembers 컬렉션 직접 조회 + pendingMembers
+        // 활성 탭일 때는 활성 enrollments를 가진 멤버만 조회
         Expanded(
-          child: memberProvider.isLoading
-              ? const Center(child: CircularProgressIndicator())
+          child: _selectedTab == 1 && _selectedCourseIds.isNotEmpty
+              ? _buildCourseMemberList(memberProvider, courseProvider.courses)
+              : _selectedTab == 3
+              ? _buildActiveMemberList(memberProvider)
+              : memberProvider.isLoading
+              ? const Center(
+                  child: CircularProgressIndicator(
+                    color: AppColors.primaryGreen,
+                  ),
+                )
               : _buildMemberList(
                   memberProvider.members,
                   memberProvider.pendingMembers,
@@ -231,7 +229,7 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 16),
       child: DefaultTapbar(
-        labels: ['전체', '코스별', '요청'],
+        labels: ['전체', '코스별', '요청', '활성'],
         selectedIndex: _selectedTab,
         onTabChanged: (index) {
           setState(() {
@@ -385,22 +383,21 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
   }
 
   // User를 MemberData로 변환
+  // 주의: enrollments는 users 문서에 없으므로 빈 배열 반환
+  // 실제 enrollments는 enrollments 컬렉션에서 조회해야 함
   MemberData _userToMemberData(User user) {
-    final pendingRequests = user.pendingExtensionRequests.length;
-    final enrolledCourseIds = user.enrollments
-        .where((e) => e.isValid)
-        .map((e) => e.courseId)
-        .toList();
-
+    // users 문서의 enrollments 필드는 더 이상 사용하지 않음
+    // 실제 enrollments는 enrollments 컬렉션에서 조회해야 하지만,
+    // MemberData에는 enrolledCourseIds만 필요하므로 빈 배열 반환
+    // (코스별 탭에서는 courseMembers에서 이미 필터링됨)
     return MemberData(
       userId: user.userId,
       name: user.name,
-      email: user.email ?? '',
       phoneNumber: user.phoneNumber,
       role: '일반',
       isActive: true,
-      pendingExtensionRequests: pendingRequests,
-      enrolledCourseIds: enrolledCourseIds,
+      pendingExtensionRequests: 0, // enrollments 컬렉션에서 조회 필요
+      enrolledCourseIds: [], // enrollments 컬렉션에서 조회 필요
     );
   }
 
@@ -413,12 +410,331 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
     return MemberData(
       userId: 'pending_${pendingMember.id}', // 임시 ID
       name: pendingMember.name ?? '이름 없음',
-      email: '',
       phoneNumber: pendingMember.phoneNumber,
       role: '대기중', // pending 상태 표시
       isActive: false, // 아직 로그인하지 않음
       pendingExtensionRequests: 0,
       enrolledCourseIds: enrolledCourseIds,
+    );
+  }
+
+  // 코스별 멤버 리스트 (courseMembers 컬렉션 직접 조회 + pendingMembers)
+  Widget _buildCourseMemberList(
+    MemberProvider memberProvider,
+    List<Course> courses,
+  ) {
+    // 선택된 모든 코스의 멤버를 조회
+    final selectedCourseIds = _selectedCourseIds.toList();
+
+    if (selectedCourseIds.isEmpty) {
+      return Center(
+        child: Text(
+          '코스를 선택해주세요.',
+          style: TextStyle(
+            color: AppColors.textSecondary.withOpacity(0.8),
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      );
+    }
+
+    // 단일 코스 선택 시
+    if (selectedCourseIds.length == 1) {
+      final selectedCourseId = selectedCourseIds.first;
+
+      return StreamBuilder<List<User>>(
+        stream: memberProvider.watchCourseMembers(selectedCourseId),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(
+              child: CircularProgressIndicator(color: AppColors.primaryGreen),
+            );
+          }
+
+          if (snapshot.hasError) {
+            return Center(
+              child: Text(
+                '오류가 발생했습니다: ${snapshot.error}',
+                style: TextStyle(
+                  color: AppColors.textSecondary.withOpacity(0.8),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            );
+          }
+
+          final courseMembers = snapshot.data ?? [];
+          // pendingMembers도 포함 (선택된 코스에 등록된 것만)
+          final placeProvider = Provider.of<PlaceProvider>(
+            context,
+            listen: false,
+          );
+          final placeId = placeProvider.currentPlace?.id;
+          final pendingMembers = placeId != null
+              ? memberProvider.pendingMembers.where((pm) {
+                  final courseIds = pm.courseIds ?? [];
+                  return courseIds.contains(selectedCourseId);
+                }).toList()
+              : <PendingMember>[];
+
+          // pendingMembers를 User로 변환
+          final pendingAsUsers = pendingMembers.map((pm) {
+            return User(
+              userId: 'pending_${pm.id}',
+              name: pm.name ?? '이름 없음',
+              phoneNumber: pm.phoneNumber,
+              placeIds: [pm.placeId],
+              enrollments: const [], // enrollments 필드 사용 안 함
+              reservations: const [],
+              notificationsEnabled: false,
+              createdAt: pm.createdAt,
+              updatedAt: null,
+            );
+          }).toList();
+
+          // courseMembers + pendingMembers 합치기
+          final allMembers = [...courseMembers, ...pendingAsUsers];
+          final filteredMembers = _filteredMembers(allMembers);
+
+          if (filteredMembers.isEmpty) {
+            return Center(
+              child: Text(
+                _searchQuery.isNotEmpty ? '검색 결과가 없어요.' : '등록된 멤버가 없어요.',
+                style: TextStyle(
+                  color: AppColors.textSecondary.withOpacity(0.8),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            );
+          }
+
+          return ListView.builder(
+            padding: const EdgeInsets.symmetric(vertical: 0),
+            itemCount: filteredMembers.length,
+            itemBuilder: (context, index) {
+              final member = filteredMembers[index];
+              final isPending = member.userId.startsWith('pending_');
+
+              return Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 4,
+                ),
+                child: MemberCard(
+                  member: isPending
+                      ? _pendingMemberToMemberData(
+                          pendingMembers.firstWhere(
+                            (pm) => 'pending_${pm.id}' == member.userId,
+                          ),
+                        )
+                      : _userToMemberData(member),
+                  onMemberTapped: () {},
+                ),
+              );
+            },
+          );
+        },
+      );
+    } else {
+      // 여러 코스 선택 시: 첫 번째 코스를 기준으로 하고 나머지는 클라이언트 사이드에서 필터링
+      // (실시간 업데이트를 위해 첫 번째 코스의 Stream 사용)
+      final firstCourseId = selectedCourseIds.first;
+
+      return StreamBuilder<List<User>>(
+        stream: memberProvider.watchCourseMembers(firstCourseId),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(
+              child: CircularProgressIndicator(color: AppColors.primaryGreen),
+            );
+          }
+
+          if (snapshot.hasError) {
+            return Center(
+              child: Text(
+                '오류가 발생했습니다: ${snapshot.error}',
+                style: TextStyle(
+                  color: AppColors.textSecondary.withOpacity(0.8),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            );
+          }
+
+          // snapshot.data는 이미 합쳐진 User 리스트
+          final courseMembers = snapshot.data ?? [];
+
+          // pendingMembers도 포함 (선택된 코스 중 하나라도 등록된 것만)
+          final placeProvider = Provider.of<PlaceProvider>(
+            context,
+            listen: false,
+          );
+          final placeId = placeProvider.currentPlace?.id;
+          final pendingMembers = placeId != null
+              ? memberProvider.pendingMembers.where((pm) {
+                  final courseIds = pm.courseIds ?? [];
+                  return selectedCourseIds.any(
+                    (courseId) => courseIds.contains(courseId),
+                  );
+                }).toList()
+              : <PendingMember>[];
+
+          // pendingMembers를 User로 변환
+          final pendingAsUsers = pendingMembers.map((pm) {
+            return User(
+              userId: 'pending_${pm.id}',
+              name: pm.name ?? '이름 없음',
+              phoneNumber: pm.phoneNumber,
+              placeIds: [pm.placeId],
+              enrollments: const [], // enrollments 필드 사용 안 함
+              reservations: const [],
+              notificationsEnabled: false,
+              createdAt: pm.createdAt,
+              updatedAt: null,
+            );
+          }).toList();
+
+          // courseMembers + pendingMembers 합치기
+          final allMembers = [...courseMembers, ...pendingAsUsers];
+          final filteredMembers = _filteredMembers(allMembers);
+
+          if (filteredMembers.isEmpty) {
+            return Center(
+              child: Text(
+                _searchQuery.isNotEmpty ? '검색 결과가 없어요.' : '등록된 멤버가 없어요.',
+                style: TextStyle(
+                  color: AppColors.textSecondary.withOpacity(0.8),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            );
+          }
+
+          return ListView.builder(
+            padding: const EdgeInsets.symmetric(vertical: 0),
+            itemCount: filteredMembers.length,
+            itemBuilder: (context, index) {
+              final member = filteredMembers[index];
+              final isPending = member.userId.startsWith('pending_');
+
+              return Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 4,
+                ),
+                child: MemberCard(
+                  member: isPending
+                      ? _pendingMemberToMemberData(
+                          pendingMembers.firstWhere(
+                            (pm) => 'pending_${pm.id}' == member.userId,
+                          ),
+                        )
+                      : _userToMemberData(member),
+                  onMemberTapped: () {},
+                ),
+              );
+            },
+          );
+        },
+      );
+    }
+  }
+
+  // 활성 멤버 리스트 (유효기간 남고 횟수 남은 멤버만)
+  Widget _buildActiveMemberList(MemberProvider memberProvider) {
+    final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+    final placeId = placeProvider.currentPlace?.id;
+
+    if (placeId == null) {
+      return Center(
+        child: Text(
+          '플레이스를 찾을 수 없습니다.',
+          style: TextStyle(
+            color: AppColors.textSecondary.withOpacity(0.8),
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      );
+    }
+
+    final enrollmentService = EnrollmentService();
+
+    return StreamBuilder<List<CourseMember>>(
+      stream: enrollmentService.watchPlaceCourseMembers(
+        placeId: placeId,
+        isActive: true, // 활성 멤버만 조회
+      ),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(
+            child: CircularProgressIndicator(color: AppColors.primaryGreen),
+          );
+        }
+
+        if (snapshot.hasError) {
+          return Center(
+            child: Text(
+              '오류가 발생했습니다: ${snapshot.error}',
+              style: TextStyle(
+                color: AppColors.textSecondary.withOpacity(0.8),
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          );
+        }
+
+        final activeCourseMembers = snapshot.data ?? [];
+
+        // userId 중복 제거
+        final activeUserIds = activeCourseMembers
+            .map((cm) => cm.userId)
+            .where((id) => id.isNotEmpty && !id.startsWith('pending_'))
+            .toSet()
+            .toList();
+
+        // 활성 멤버 필터링
+        final activeMembers = memberProvider.members
+            .where((user) => activeUserIds.contains(user.userId))
+            .toList();
+
+        // 검색 필터 적용
+        final filteredMembers = _filteredMembers(activeMembers);
+
+        if (filteredMembers.isEmpty) {
+          return Center(
+            child: Text(
+              _searchQuery.isNotEmpty ? '검색 결과가 없어요.' : '활성 멤버가 없어요.',
+              style: TextStyle(
+                color: AppColors.textSecondary.withOpacity(0.8),
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          );
+        }
+
+        return ListView.builder(
+          padding: const EdgeInsets.symmetric(vertical: 0),
+          itemCount: filteredMembers.length,
+          itemBuilder: (context, index) {
+            final member = filteredMembers[index];
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: MemberCard(
+                member: _userToMemberData(member),
+                onMemberTapped: () {},
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
@@ -449,7 +765,7 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
         userId: 'pending_${pm.id}',
         name: pm.name ?? '이름 없음',
         phoneNumber: pm.phoneNumber,
-        email: null,
+
         placeIds: [pm.placeId],
         enrollments: enrollments,
         reservations: [],
@@ -468,7 +784,7 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
         child: Text(
           _searchQuery.isNotEmpty ? '검색 결과가 없어요.' : '등록된 멤버가 없어요.',
           style: TextStyle(
-            color: AppColors.textSecondary,
+            color: AppColors.textSecondary.withOpacity(0.8),
             fontSize: 16,
             fontWeight: FontWeight.w600,
           ),

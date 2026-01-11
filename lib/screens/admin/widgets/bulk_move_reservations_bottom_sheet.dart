@@ -207,7 +207,7 @@ class _BulkMoveReservationsBottomSheetState
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
                             valueColor: AlwaysStoppedAnimation<Color>(
-                              Colors.white,
+                              AppColors.primaryGreen,
                             ),
                           ),
                         ),

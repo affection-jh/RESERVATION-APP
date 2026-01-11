@@ -63,11 +63,6 @@ class _CourseColorSelectionScreenState
   reservation_models.PeriodType _uniformPeriodType =
       reservation_models.PeriodType.weeks;
   int _uniformPeriodValue = 1;
-  ValidPeriodMode _uniformPeriodMode = ValidPeriodMode.period;
-  DateTime _uniformValidFrom = TimezoneUtils.getSeoulDateTime();
-  DateTime _uniformValidUntil = TimezoneUtils.getSeoulDateTime().add(
-    const Duration(days: 7),
-  );
   final TextEditingController _uniformTotalReservationsController =
       TextEditingController();
   final TextEditingController _uniformPeriodController =
@@ -524,34 +519,36 @@ class _CourseColorSelectionScreenState
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 ValidPeriodInputWidget(
-                  validFrom: _uniformValidFrom,
-                  validUntil: _uniformValidUntil,
+                  // 일괄 적용 유효기간은 "등록/재등록 시점(now) 기준으로 계산"되는 상대 기간만 설정한다.
+                  // 코스 생성 시점의 절대 날짜를 저장/적용하면 나중에 유효기간이 꼬일 수 있으므로 캘린더 모드는 지원하지 않음.
+                  validFrom: TimezoneUtils.getSeoulDateTime(),
+                  validUntil: TimezoneUtils.getSeoulDateTime().add(
+                    switch (_uniformPeriodType) {
+                      reservation_models.PeriodType.weeks => Duration(
+                        days: _uniformPeriodValue * 7,
+                      ),
+                      reservation_models.PeriodType.days => Duration(
+                        days: _uniformPeriodValue,
+                      ),
+                      reservation_models.PeriodType.months => Duration(
+                        days: _uniformPeriodValue * 30,
+                      ),
+                    },
+                  ),
                   periodType: _uniformPeriodType,
                   periodValue: _uniformPeriodValue,
-                  mode: _uniformPeriodMode,
+                  mode: ValidPeriodMode.period,
                   enabled: true,
                   minPeriodValue: 0,
                   maxPeriodValue: 999,
                   hideLabel: false,
-                  hideCalendarToggle: false,
-                  onModeChanged: (mode) {
-                    setState(() {
-                      _uniformPeriodMode = mode;
-                    });
+                  hideCalendarToggle: true, // 일괄 적용 모드에서는 캘린더(절대 날짜) 모드 미지원
+                  onModeChanged: (_) {
+                    // 캘린더 토글이 숨겨져 있어 호출되지 않지만, 타입상 required라 no-op 처리
                   },
-                  onValidFromChanged: (date) {
-                    setState(() {
-                      _uniformValidFrom = date;
-                      // 종료일이 시작일보다 이전이면 종료일도 조정
-                      if (_uniformValidUntil.isBefore(date)) {
-                        _uniformValidUntil = date.add(const Duration(days: 30));
-                      }
-                    });
-                  },
-                  onValidUntilChanged: (date) {
-                    setState(() {
-                      _uniformValidUntil = date;
-                    });
+                  onValidFromChanged: null, // calendar 모드 미지원
+                  onValidUntilChanged: (_) {
+                    // calendar 모드 미지원: 종료일 직접 지정 불가
                   },
                   onPeriodTypeChanged: (type) {
                     setState(() {

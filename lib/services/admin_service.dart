@@ -3,6 +3,7 @@ import '../models/admin_user.dart';
 import '../models/user.dart';
 import '../models/course_enrollment.dart';
 import '../models/place.dart';
+import '../utils/timezone_utils.dart';
 import 'user_service.dart';
 
 /// 어드민 관리 서비스
@@ -55,14 +56,12 @@ class AdminService {
     required String userId,
     required String name,
     required String phoneNumber,
-    String? email,
   }) async {
     final admin = AdminUser(
       userId: userId,
       name: name,
       phoneNumber: phoneNumber,
-      email: email,
-      createdAt: DateTime.now(),
+      createdAt: TimezoneUtils.getSeoulDateTime(),
     );
 
     // 실제로는 서버에 저장해야 함
@@ -95,7 +94,6 @@ class AdminService {
     required String userId,
     String? name,
     String? phoneNumber,
-    String? email,
   }) async {
     if (_currentAdmin == null || _currentAdmin!.userId != userId) {
       throw Exception('로그인된 어드민이 아닙니다.');
@@ -104,7 +102,6 @@ class AdminService {
     final updatedAdmin = _currentAdmin!.updateProfile(
       name: name,
       phoneNumber: phoneNumber,
-      email: email,
     );
 
     return await updateAdmin(updatedAdmin);

@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/firestore_service.dart';
+import '../utils/timezone_utils.dart';
 
 /// 스토리 모델 (Firestore용)
 class Story {
@@ -73,6 +74,11 @@ class StoryProvider with ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get error => _error;
 
+  void _sortStoriesLatestFirst() {
+    // 최신(createdAt desc) 순으로 정렬하여 UI에서 항상 최신이 먼저 보이게 함
+    _stories.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+  }
+
   /// 스토리 목록 로드 (중복 로드 방지)
   Future<void> loadStories(String placeId) async {
     debugPrint('[StoryProvider.loadStories] 시작 - placeId: $placeId');
@@ -95,6 +101,7 @@ class StoryProvider with ChangeNotifier {
         '[StoryProvider.loadStories] FirestoreService.getStoriesByPlace 호출 - placeId: $placeId',
       );
       _stories = await _firestoreService.getStoriesByPlace(placeId);
+      _sortStoriesLatestFirst();
       debugPrint(
         '[StoryProvider.loadStories] 로드 완료 - 스토리 개수: ${_stories.length}',
       );
@@ -130,13 +137,16 @@ class StoryProvider with ChangeNotifier {
         placeId: placeId,
         title: title,
         content: content,
-        createdAt: DateTime.now(),
+        createdAt: TimezoneUtils.getSeoulDateTime(),
         imageUrls: imageUrls,
         backgroundImageUrl: backgroundImageUrl,
       );
 
       final createdStory = await _firestoreService.createStory(story);
-      _stories = [..._stories, createdStory];
+      // ✅ 로컬 리스트에 먼저 반영할 때도 최신순 유지:
+      // - 추가 직후(리로드 없이도) 가장 앞에 보이도록 prepend 후 정렬
+      _stories = [createdStory, ..._stories];
+      _sortStoriesLatestFirst();
       _error = null;
       notifyListeners();
       return createdStory;
@@ -160,6 +170,7 @@ class StoryProvider with ChangeNotifier {
       if (index != -1) {
         _stories[index] = updatedStory;
       }
+      _sortStoriesLatestFirst();
       _error = null;
       notifyListeners();
     } catch (e) {
@@ -179,6 +190,7 @@ class StoryProvider with ChangeNotifier {
     try {
       await _firestoreService.deleteStory(storyId);
       _stories = _stories.where((s) => s.id != storyId).toList();
+      _sortStoriesLatestFirst();
       _error = null;
       notifyListeners();
     } catch (e) {

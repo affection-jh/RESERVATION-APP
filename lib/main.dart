@@ -31,6 +31,11 @@ import 'services/fcm_service.dart';
 import 'utils/navigator_key.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
+// 테스터 모드 플래그 (static 변수)
+class AppConfig {
+  static bool isTesterMode = false;
+}
+
 // 백그라운드 메시지 핸들러 (최상위 함수로 선언)
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -213,6 +218,17 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // auth/place가 나중에 세팅되는 케이스(자동로그인/플레이스 선택)에서
+    // initState 때 한 번 스킵되면 구독이 영원히 시작되지 않는 문제 방지.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _loadInitialData();
+    });
+  }
+
   /// 초기 데이터 일괄 로드
   ///
   /// AppStartupScreen에서 이미 데이터를 로드했을 수 있으므로,
@@ -237,17 +253,10 @@ class _MainScreenState extends State<MainScreen> {
       listen: false,
     );
 
-    // 일반 사용자인 경우에만 데이터 로드
-    if (authProvider.currentUser == null) {
-      _isInitialDataLoaded = true;
-      return;
-    }
-
+    // user/place가 아직 준비되지 않았으면 완료 플래그를 세우지 않고 다음 기회를 기다린다.
+    if (authProvider.currentUser == null) return;
     final currentPlace = placeProvider.currentPlace;
-    if (currentPlace == null) {
-      _isInitialDataLoaded = true;
-      return;
-    }
+    if (currentPlace == null) return;
 
     try {
       // 메인 진입 시에는 "구독/필수 데이터" 위주로 안전하게 로드한다.

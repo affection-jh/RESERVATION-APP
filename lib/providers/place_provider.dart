@@ -100,8 +100,6 @@ class PlaceProvider with ChangeNotifier {
     String? description,
     String? appBarText,
     String? greetingText,
-    String? highlightedText,
-    int? highlightColorValue,
     String? imageUrl,
     required String adminId,
   }) async {
@@ -117,8 +115,6 @@ class PlaceProvider with ChangeNotifier {
         location: location,
         appBarText: appBarText,
         greetingText: greetingText,
-        highlightedText: highlightedText,
-        highlightColorValue: highlightColorValue,
         imageUrl: imageUrl,
         courses: [],
       );
@@ -164,17 +160,12 @@ class PlaceProvider with ChangeNotifier {
   Future<void> updatePlaceSettings({
     String? appBarText,
     String? greetingText,
-    String? highlightedText,
-    int? highlightColorValue,
   }) async {
     if (_currentPlace == null) return;
 
     final updatedPlace = _currentPlace!.copyWith(
       appBarText: appBarText ?? _currentPlace!.appBarText,
       greetingText: greetingText ?? _currentPlace!.greetingText,
-      highlightedText: highlightedText ?? _currentPlace!.highlightedText,
-      highlightColorValue:
-          highlightColorValue ?? _currentPlace!.highlightColorValue,
     );
 
     await updatePlace(updatedPlace);
@@ -187,15 +178,15 @@ class PlaceProvider with ChangeNotifier {
 
     try {
       await _firestoreService.deletePlace(placeId);
-      
+
       // Provider에서 제거
       _places.remove(placeId);
-      
+
       // 현재 플레이스가 삭제된 플레이스인 경우 초기화
       if (_currentPlace?.id == placeId) {
         _currentPlace = null;
       }
-      
+
       _error = null;
       notifyListeners();
     } catch (e) {

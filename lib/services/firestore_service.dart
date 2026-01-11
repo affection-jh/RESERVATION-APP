@@ -40,9 +40,11 @@ class FirestoreService {
   }
 
   /// Timestamp를 DateTime으로 변환 (private)
+  /// ⚠️ 서버 시간이 없으면 서울 시간대 현재 시간 반환 (서버 없으면 클라이언트 시간 사용)
   DateTime _timestampToDateTime(dynamic timestamp) {
     if (timestamp == null) {
-      return DateTime.now();
+      // 서버 시간이 없으면 서울 시간대 현재 시간 반환
+      return TimezoneUtils.getSeoulDateTime();
     }
     if (timestamp is Timestamp) {
       return timestamp.toDate();
@@ -131,89 +133,6 @@ class FirestoreService {
     } on FirebaseFunctionsException catch (e) {
       // 서버 에러를 그대로 전달
       throw Exception(e.message ?? '플레이스 삭제 중 오류가 발생했습니다.');
-    }
-  }
-
-  /// 서브컬렉션 삭제 (페이지네이션)
-  Future<void> _deleteSubcollection(String collectionPath) async {
-    const pageSize = 500;
-    DocumentSnapshot? lastDoc;
-    int totalDeleted = 0;
-
-    while (true) {
-      var query = _firestore.collection(collectionPath).limit(pageSize);
-
-      if (lastDoc != null) {
-        query = query.startAfterDocument(lastDoc);
-      }
-
-      final snapshot = await query.get();
-
-      if (snapshot.docs.isEmpty) {
-        break;
-      }
-
-      final batch = _firestore.batch();
-      for (var doc in snapshot.docs) {
-        batch.delete(doc.reference);
-      }
-      await batch.commit();
-
-      totalDeleted += snapshot.docs.length;
-      debugPrint(
-        '🗑️ [FirestoreService] 서브컬렉션 삭제 진행: $collectionPath - $totalDeleted개 삭제됨',
-      );
-
-      lastDoc = snapshot.docs.last;
-
-      if (snapshot.docs.length < pageSize) {
-        break;
-      }
-    }
-
-    if (totalDeleted > 0) {
-      debugPrint(
-        '✅ [FirestoreService] 서브컬렉션 삭제 완료: $collectionPath - 총 $totalDeleted개',
-      );
-    }
-  }
-
-  /// 쿼리 결과 문서들 삭제 (페이지네이션)
-  Future<void> _deleteDocumentsByQuery(Query query) async {
-    const pageSize = 500;
-    DocumentSnapshot? lastDoc;
-    int totalDeleted = 0;
-
-    while (true) {
-      var paginatedQuery = query.limit(pageSize);
-
-      if (lastDoc != null) {
-        paginatedQuery = paginatedQuery.startAfterDocument(lastDoc);
-      }
-
-      final snapshot = await paginatedQuery.get();
-
-      if (snapshot.docs.isEmpty) {
-        break;
-      }
-
-      final batch = _firestore.batch();
-      for (var doc in snapshot.docs) {
-        batch.delete(doc.reference);
-      }
-      await batch.commit();
-
-      totalDeleted += snapshot.docs.length;
-
-      lastDoc = snapshot.docs.last;
-
-      if (snapshot.docs.length < pageSize) {
-        break;
-      }
-    }
-
-    if (totalDeleted > 0) {
-      debugPrint('✅ [FirestoreService] 쿼리 결과 삭제 완료: 총 $totalDeleted개');
     }
   }
 
@@ -348,8 +267,9 @@ class FirestoreService {
     final placeRef = _firestore.collection('places').doc(placeId);
 
     // 0. 활성 예약 확인 (미래 날짜 예약이 있는지 확인)
-    final today = DateTime.now();
-    final todayString = _formatDate(today);
+    final todayString = TimezoneUtils.formatDateToSeoul(
+      TimezoneUtils.getSeoulDateTime(),
+    );
     final activeReservationsQuery = _firestore
         .collection('places')
         .doc(placeId)
@@ -421,7 +341,7 @@ class FirestoreService {
     if (data['active'] is Map<String, dynamic> ||
         data['scheduled'] is Map<String, dynamic>) {
       // 서버와 일관성을 위해 서울 시간대 사용
-      final now = TimezoneUtils.getSeoulDateTime();
+      final seoulNow = TimezoneUtils.getSeoulDateTime();
       final activeRaw = data['active'];
       final scheduledRaw = data['scheduled'];
 
@@ -434,12 +354,12 @@ class FirestoreService {
         scheduled = CoursePolicy.fromJson(scheduledRaw);
       }
 
-      // effectiveFrom <= now 인 후보들 중 가장 최신(effectiveFrom) 선택
+      // effectiveFrom <= seoulNow 인 후보들 중 가장 최신(effectiveFrom) 선택
       final candidates = <CoursePolicy>[];
-      if (active != null && !active.effectiveFrom.isAfter(now)) {
+      if (active != null && !active.effectiveFrom.isAfter(seoulNow)) {
         candidates.add(active);
       }
-      if (scheduled != null && !scheduled.effectiveFrom.isAfter(now)) {
+      if (scheduled != null && !scheduled.effectiveFrom.isAfter(seoulNow)) {
         candidates.add(scheduled);
       }
 
@@ -521,12 +441,33 @@ class FirestoreService {
     Reservation reservation, {
     bool force = false,
   }) async {
+    debugPrint('[FirestoreService] createReservation 시작');
+    debugPrint('[FirestoreService] reservation.userId: ${reservation.userId}');
+    debugPrint(
+      '[FirestoreService] reservation.courseId: ${reservation.courseId}',
+    );
+    debugPrint(
+      '[FirestoreService] reservation.placeId: ${reservation.placeId}',
+    );
+    debugPrint(
+      '[FirestoreService] reservation.dayOfWeek: ${reservation.dayOfWeek}',
+    );
+    debugPrint(
+      '[FirestoreService] reservation.startTime: ${reservation.startTime}',
+    );
+    debugPrint(
+      '[FirestoreService] reservation.reservedDate: ${reservation.reservedDate}',
+    );
+    debugPrint('[FirestoreService] force: $force');
+
     final dateString = _formatDate(reservation.reservedDate);
+    debugPrint('[FirestoreService] formatted dateString: $dateString');
+
     final callable = FirebaseFunctions.instance.httpsCallable(
       'createReservation',
     );
 
-    final result = await callable.call({
+    final requestData = {
       'placeId': reservation.placeId,
       'courseId': reservation.courseId,
       'dayOfWeek': reservation.dayOfWeek,
@@ -536,15 +477,41 @@ class FirestoreService {
       'userId': reservation.userId,
       // 관리자 강제 추가(정원/오픈 전/마감 전 등) - 명시적 확인을 거친 경우에만 true
       'force': force,
-    });
+    };
+    debugPrint('[FirestoreService] Cloud Function 호출 데이터: $requestData');
 
-    final data = result.data as Map<dynamic, dynamic>;
-    final id = (data['id'] as String?) ?? '';
-    if (id.isEmpty) {
-      throw Exception('예약 생성에 실패했습니다. (서버 응답 오류)');
+    try {
+      debugPrint('[FirestoreService] Cloud Function 호출 시작');
+      final result = await callable.call(requestData);
+      debugPrint('[FirestoreService] Cloud Function 응답 수신');
+      debugPrint('[FirestoreService] 응답 데이터 타입: ${result.data.runtimeType}');
+      debugPrint('[FirestoreService] 응답 데이터: ${result.data}');
+
+      final data = result.data as Map<dynamic, dynamic>;
+      final id = (data['id'] as String?) ?? '';
+      debugPrint('[FirestoreService] 추출된 예약 ID: $id');
+
+      if (id.isEmpty) {
+        debugPrint('[FirestoreService] 예약 ID가 비어있습니다. 서버 응답: $data');
+        throw Exception('예약 생성에 실패했습니다. (서버 응답 오류)');
+      }
+
+      debugPrint('[ReservationProvider] 예약 생성 성공: $id');
+      return reservation.copyWith(id: id);
+    } catch (e, stackTrace) {
+      debugPrint('[FirestoreService] Cloud Function 호출 실패');
+      debugPrint('[FirestoreService] 에러 타입: ${e.runtimeType}');
+      debugPrint('[FirestoreService] 에러 메시지: $e');
+      debugPrint('[FirestoreService] 스택 트레이스: $stackTrace');
+
+      // Firebase Functions 에러의 경우 상세 정보 추출
+      if (e is Exception) {
+        final errorString = e.toString();
+        debugPrint('[FirestoreService] Exception 문자열: $errorString');
+      }
+
+      rethrow;
     }
-
-    return reservation.copyWith(id: id);
   }
 
   /// 예약 삭제 (트랜잭션 사용)
@@ -552,10 +519,29 @@ class FirestoreService {
     required String reservationId,
     required String placeId,
   }) async {
+    debugPrint('[FirestoreService] deleteReservation 시작');
+    debugPrint('[FirestoreService] reservationId: $reservationId');
+    debugPrint('[FirestoreService] placeId: $placeId');
     final callable = FirebaseFunctions.instance.httpsCallable(
       'cancelReservation',
     );
-    await callable.call({'reservationId': reservationId, 'placeId': placeId});
+    try {
+      debugPrint('[FirestoreService] Cloud Function(cancelReservation) 호출 시작');
+      final result = await callable.call({
+        'reservationId': reservationId,
+        'placeId': placeId,
+      });
+      debugPrint('[FirestoreService] Cloud Function(cancelReservation) 응답 수신');
+      debugPrint('[FirestoreService] 응답 데이터 타입: ${result.data.runtimeType}');
+      debugPrint('[FirestoreService] 응답 데이터: ${result.data}');
+      debugPrint('[FirestoreService] deleteReservation 완료');
+    } catch (e, stackTrace) {
+      debugPrint('[FirestoreService] deleteReservation 실패');
+      debugPrint('[FirestoreService] 에러 타입: ${e.runtimeType}');
+      debugPrint('[FirestoreService] 에러: $e');
+      debugPrint('[FirestoreService] 스택 트레이스: $stackTrace');
+      rethrow;
+    }
   }
 
   /// 코스 등록(수강) 취소 (관리자)
@@ -612,24 +598,6 @@ class FirestoreService {
 
   /// 세션 취소 (관리자)
   /// 특정 날짜의 세션을 취소하고 모든 예약자에게 알림 전송
-  Future<void> cancelSession({
-    required String placeId,
-    required String courseId,
-    required int dayOfWeek,
-    required String startTime,
-    required DateTime reservedDate,
-  }) async {
-    final reservedDateString = _formatDate(reservedDate);
-    final callable = FirebaseFunctions.instance.httpsCallable('cancelSession');
-    await callable.call({
-      'placeId': placeId,
-      'courseId': courseId,
-      'dayOfWeek': dayOfWeek,
-      'startTime': startTime,
-      'reservedDateString': reservedDateString,
-    });
-  }
-
   /// 사용자별 예약 조회 (플레이스별 서브컬렉션)
   ///
   /// [userId] 조회할 사용자 ID
@@ -882,20 +850,22 @@ class FirestoreService {
   // ==================== Date Capacity Overrides ====================
 
   /// 날짜별 수용인원 오버라이드 조회
+  /// 고정ID 패턴: ${sessionId}_${date}
   Future<DateCapacityOverride?> getCapacityOverride(
     String sessionId,
     String date,
   ) async {
-    final query = _firestore
+    // 고정ID 패턴: ${sessionId}_${date}
+    final overrideId = '${sessionId}_$date';
+    final docRef = _firestore
         .collection('dateCapacityOverrides')
-        .where('sessionId', isEqualTo: sessionId)
-        .where('date', isEqualTo: date)
-        .limit(1);
+        .doc(overrideId);
 
-    final snapshot = await query.get();
-    if (snapshot.docs.isEmpty) return null;
+    final snapshot = await docRef.get();
+    if (!snapshot.exists) return null;
 
-    final data = snapshot.docs.first.data();
+    final data = snapshot.data()!;
+    data['id'] = overrideId;
     data['createdAt'] = _timestampToDateTime(
       data['createdAt'],
     ).toIso8601String();
@@ -909,33 +879,44 @@ class FirestoreService {
   }
 
   /// 날짜별 수용인원 오버라이드 설정
+  /// 고정ID 패턴: ${sessionId}_${date}
   Future<DateCapacityOverride> setCapacityOverride({
     required String sessionId,
     required String date,
     required int capacity,
   }) async {
-    // 기존 오버라이드 확인
-    final existing = await getCapacityOverride(sessionId, date);
+    // 고정ID 패턴: ${sessionId}_${date}
+    final overrideId = '${sessionId}_$date';
+    final docRef = _firestore
+        .collection('dateCapacityOverrides')
+        .doc(overrideId);
 
-    if (existing != null) {
+    final existingDoc = await docRef.get();
+    final now = TimezoneUtils.getSeoulDateTime();
+
+    if (existingDoc.exists) {
       // 업데이트
-      final docRef = _firestore
-          .collection('dateCapacityOverrides')
-          .doc(existing.id);
       await docRef.update({
         'capacity': capacity,
-        'updatedAt': _dateTimeToTimestamp(DateTime.now()),
+        'updatedAt': _dateTimeToTimestamp(now),
       });
-      return existing.copyWith(capacity: capacity, updatedAt: DateTime.now());
-    } else {
-      // 생성
-      final docRef = _firestore.collection('dateCapacityOverrides').doc();
-      final override = DateCapacityOverride(
-        id: docRef.id,
+      final data = existingDoc.data()!;
+      return DateCapacityOverride(
+        id: overrideId,
         sessionId: sessionId,
         date: date,
         capacity: capacity,
-        createdAt: DateTime.now(),
+        createdAt: _timestampToDateTime(data['createdAt']),
+        updatedAt: now,
+      );
+    } else {
+      // 생성
+      final override = DateCapacityOverride(
+        id: overrideId,
+        sessionId: sessionId,
+        date: date,
+        capacity: capacity,
+        createdAt: now,
       );
       await docRef.set({
         ...override.toJson(),
@@ -946,17 +927,15 @@ class FirestoreService {
   }
 
   /// 날짜별 수용인원 오버라이드 삭제
+  /// 고정ID 패턴: ${sessionId}_${date}
   Future<void> deleteCapacityOverride(String sessionId, String date) async {
-    final query = _firestore
+    // 고정ID 패턴: ${sessionId}_${date}
+    final overrideId = '${sessionId}_$date';
+    final docRef = _firestore
         .collection('dateCapacityOverrides')
-        .where('sessionId', isEqualTo: sessionId)
-        .where('date', isEqualTo: date)
-        .limit(1);
+        .doc(overrideId);
 
-    final snapshot = await query.get();
-    if (snapshot.docs.isNotEmpty) {
-      await snapshot.docs.first.reference.delete();
-    }
+    await docRef.delete();
   }
 
   // ==================== Stories ====================

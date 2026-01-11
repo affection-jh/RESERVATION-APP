@@ -9,8 +9,6 @@ class Place {
   final String? location; // 주소
   final String? appBarText; // 앱바에 표시될 텍스트
   final String? greetingText; // 홈 화면 인사말
-  final String? highlightedText; // 형광펜으로 강조할 텍스트
-  final int? highlightColorValue; // 형광펜 색상 (ARGB 값)
   final String? imageUrl; // 플레이스 이미지 URL
   final List<Course> courses; // 이 플레이스에서 진행되는 코스들
 
@@ -22,8 +20,6 @@ class Place {
     this.location,
     this.appBarText,
     this.greetingText,
-    this.highlightedText,
-    this.highlightColorValue,
     this.imageUrl,
     this.courses = const [],
   });
@@ -55,13 +51,11 @@ class Place {
       'id': id,
       'name': name,
       'adminId': adminId,
-      'description': description,
-      'location': location,
-      'appBarText': appBarText,
-      'greetingText': greetingText,
-      'highlightedText': highlightedText,
-      'highlightColorValue': highlightColorValue,
-      'imageUrl': imageUrl,
+      if (description != null) 'description': description,
+      if (location != null) 'location': location,
+      if (appBarText != null) 'appBarText': appBarText,
+      if (greetingText != null) 'greetingText': greetingText,
+      if (imageUrl != null) 'imageUrl': imageUrl,
       'courses': courses.map((c) => c.toJson()).toList(),
     };
   }
@@ -102,8 +96,6 @@ class Place {
       location: json['location'] as String?,
       appBarText: json['appBarText'] as String?,
       greetingText: json['greetingText'] as String?,
-      highlightedText: json['highlightedText'] as String?,
-      highlightColorValue: json['highlightColorValue'] as int?,
       imageUrl: json['imageUrl'] as String?,
       courses: coursesList,
     );
@@ -118,8 +110,6 @@ class Place {
     String? location,
     String? appBarText,
     String? greetingText,
-    String? highlightedText,
-    int? highlightColorValue,
     String? imageUrl,
     List<Course>? courses,
   }) {
@@ -131,8 +121,6 @@ class Place {
       location: location ?? this.location,
       appBarText: appBarText ?? this.appBarText,
       greetingText: greetingText ?? this.greetingText,
-      highlightedText: highlightedText ?? this.highlightedText,
-      highlightColorValue: highlightColorValue ?? this.highlightColorValue,
       imageUrl: imageUrl ?? this.imageUrl,
       courses: courses ?? this.courses,
     );

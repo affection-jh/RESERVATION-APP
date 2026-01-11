@@ -44,6 +44,7 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
   StreamSubscription<Set<String>>? _reservedSessionIdsSub;
   Set<String> _reservedSessionIds = <String>{};
   Map<int, List<SessionDraft>> _initialDaySessionsSnapshot = {};
+  bool _shownIndexErrorOnce = false;
 
   // 드래그 상태 추적
   bool _isAnyDragging = false;
@@ -80,12 +81,30 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
     _reservedSessionIdsSub?.cancel();
     _reservedSessionIdsSub = _firestoreService
         .watchReservedSessionIdsForCourse(widget.course.id)
-        .listen((ids) {
-          if (!mounted) return;
-          setState(() {
-            _reservedSessionIds = ids;
-          });
-        });
+        .listen(
+          (ids) {
+            if (!mounted) return;
+            setState(() {
+              _reservedSessionIds = ids;
+            });
+          },
+          onError: (e, _) {
+            // Firestore 인덱스 누락 등으로 스트림이 실패해도 화면이 죽지 않도록 방어
+            debugPrint(
+              '[CourseScheduleEditScreen] watchReservedSessionIdsForCourse error: $e',
+            );
+            if (!mounted) return;
+            setState(() {
+              _reservedSessionIds = <String>{};
+            });
+            if (_shownIndexErrorOnce) return;
+            _shownIndexErrorOnce = true;
+            SnackbarUtil.showError(
+              context,
+              '예약 세션 조회를 위해 Firestore 인덱스가 필요합니다. (콘솔에서 indexes 생성 후 다시 시도)',
+            );
+          },
+        );
   }
 
   // CourseSession을 SessionDraft로 변환
@@ -169,7 +188,7 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
     final confirmed = await CommonDialog.show(
       context: context,
       title: '변경사항이 있습니다',
-      message: '저장하지 않고 나가시면 변경된 내용이 사라집니다.',
+      message: '저장하지 않고 나가시면]\n변경된 내용이 사라집니다.',
       secondaryMessage: '정말 나가시겠습니까?',
       cancelText: '취소',
       confirmText: '나가기',
@@ -305,7 +324,7 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
                               valueColor: AlwaysStoppedAnimation<Color>(
-                                AppColors.textSecondary,
+                                AppColors.primaryGreen,
                               ),
                             ),
                           ),
@@ -626,8 +645,16 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
               );
 
               // 실제 예약이 존재하는 날짜로 이동(없으면 현재 주 날짜로 fallback)
-              final reservedDate = await _firestoreService
-                  .findFirstReservedDateForSession(sessionId);
+              DateTime? reservedDate;
+              try {
+                reservedDate = await _firestoreService
+                    .findFirstReservedDateForSession(sessionId);
+              } catch (e) {
+                debugPrint(
+                  '[CourseScheduleEditScreen] findFirstReservedDateForSession failed: $e',
+                );
+                reservedDate = null;
+              }
               final date =
                   reservedDate ?? _dateForDayOfWeekInCurrentWeek(dayOfWeek);
 
@@ -1503,11 +1530,23 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
     // 요일이 추가/삭제되었는지 확인
     final originalDays = _initialDaySessionsSnapshot.keys.toSet();
     final currentDays = _daySessions.keys.toSet();
-    if (!_setsEqual(originalDays, currentDays)) {
+    final daysChanged = !_setsEqual(originalDays, currentDays);
+
+    // 요일이 추가/삭제된 경우, 모든 현재 요일에 세션이 있는지 확인
+    if (daysChanged) {
+      // 현재 선택된 모든 요일에 세션이 있는지 확인
+      for (final day in currentDays) {
+        final sessions = _daySessions[day] ?? [];
+        if (sessions.isEmpty) {
+          // 하나라도 세션이 없으면 저장 불가
+          return false;
+        }
+      }
+      // 모든 요일에 세션이 있으면 저장 가능
       return true;
     }
 
-    // 각 요일의 세션 데이터가 변경되었는지 확인
+    // 요일이 변경되지 않은 경우, 각 요일의 세션 데이터가 변경되었는지 확인
     for (final day in currentDays) {
       final originalSessions = _initialDaySessionsSnapshot[day] ?? [];
       final currentSessions = _daySessions[day] ?? [];

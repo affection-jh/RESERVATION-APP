@@ -1,9 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
 import '../../../models/course.dart' as reservation_models;
+import '../../../models/course_enrollment.dart';
+import '../../../models/pending_member.dart';
+import '../../../models/user.dart';
 import '../../../providers/course_provider.dart';
 import '../../../providers/member_provider.dart';
+import '../../../services/firestore_service.dart';
 import '../../../theme/app_colors.dart';
 import '../../../utils/text_field_decoration_util.dart';
 import '../../../utils/timezone_utils.dart';
@@ -61,11 +66,13 @@ class CourseEnrollmentConfig {
 class CourseMemberRegistrationScreen extends StatefulWidget {
   final Function(List<Map<String, dynamic>>) onSave;
   final String courseId;
+  final String placeId;
 
   const CourseMemberRegistrationScreen({
     super.key,
     required this.onSave,
     required this.courseId,
+    required this.placeId,
   });
 
   @override
@@ -76,6 +83,8 @@ class CourseMemberRegistrationScreen extends StatefulWidget {
 class _CourseMemberRegistrationScreenState
     extends State<CourseMemberRegistrationScreen> {
   CourseMemberRegistrationMode _mode = CourseMemberRegistrationMode.inputNew;
+  String _lastMemberSearchLogKey = '';
+  String? _memberLoadRequestedPlaceId;
 
   // 신규 입력 컨트롤러
   late TextEditingController _nameCtrl;
@@ -86,12 +95,19 @@ class _CourseMemberRegistrationScreenState
   // 기존 멤버 검색
   final TextEditingController _searchCtrl = TextEditingController();
 
+  // 선택된 멤버 (기존 멤버에서 추가 모드)
+  String? _selectedMemberName;
+  String? _selectedMemberPhone;
+
   // 현재 추가할 멤버의 설정
   CourseEnrollmentConfig? _currentConfig;
   ValidPeriodMode _currentValidPeriodMode = ValidPeriodMode.period;
   late TextEditingController _currentTotalReservationsCtrl;
 
   bool _isSaving = false;
+  bool _isExistingMember = false; // 기존 멤버 여부 (신규 추가 막기용)
+  bool _isCheckingPhone = false;
+  String? _phoneErrorText;
 
   @override
   void initState() {
@@ -103,7 +119,36 @@ class _CourseMemberRegistrationScreenState
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeCurrentConfig();
+      _loadMembersIfNeeded();
     });
+  }
+
+  /// 현재 플레이스의 멤버를 로드 (필요한 경우에만)
+  Future<void> _loadMembersIfNeeded() async {
+    if (!mounted) return;
+    final memberProvider = Provider.of<MemberProvider>(context, listen: false);
+    final placeId = widget.placeId;
+
+    // 멤버가 이미 로드되어 있지 않은 경우에만 로드
+    if (memberProvider.members.isEmpty) {
+      try {
+        if (kDebugMode) {
+          debugPrint(
+            '[CourseMemberRegistrationScreen] loadMembersIfNeeded placeId=$placeId (members empty -> load)',
+          );
+        }
+        await memberProvider.loadMembers(placeId);
+      } catch (e) {
+        // 에러 발생 시에도 계속 진행
+        debugPrint('멤버 로드 실패: $e');
+      }
+    } else {
+      if (kDebugMode) {
+        debugPrint(
+          '[CourseMemberRegistrationScreen] loadMembersIfNeeded placeId=$placeId (already loaded count=${memberProvider.members.length})',
+        );
+      }
+    }
   }
 
   @override
@@ -180,6 +225,76 @@ class _CourseMemberRegistrationScreenState
     return digits;
   }
 
+  Future<bool> _isPhoneDuplicateInFirebase(String phoneNumber) async {
+    final normalizedPhone = _normalizePhone(phoneNumber);
+    if (normalizedPhone.length != 11) return false;
+
+    try {
+      final memberProvider = Provider.of<MemberProvider>(
+        context,
+        listen: false,
+      );
+      final firestoreService = FirestoreService();
+      final placeId = widget.placeId;
+
+      // 1. 현재 플레이스의 멤버 목록에서 확인
+      for (final member in memberProvider.members) {
+        if (_normalizePhone(member.phoneNumber) == normalizedPhone) {
+          return true;
+        }
+      }
+
+      // 2. pendingMembers에서 확인
+      final pendingId = '${placeId}_$normalizedPhone';
+      final pendingRef = firestoreService.firestore
+          .collection('pendingMembers')
+          .doc(pendingId);
+      final pendingDoc = await pendingRef.get();
+
+      if (pendingDoc.exists) {
+        final data = pendingDoc.data();
+        final status = data?['status'] as String?;
+        // status가 null이거나 'approved'인 경우 중복으로 간주
+        if (status == null || status == 'approved') {
+          return true;
+        }
+      }
+
+      return false;
+    } catch (e) {
+      debugPrint('❌ [전화번호 중복 체크 오류] $e');
+      return false;
+    }
+  }
+
+  Future<void> _checkPhoneInFirebase(String phoneNumber) async {
+    if (_isCheckingPhone) return;
+
+    setState(() {
+      _isCheckingPhone = true;
+      _phoneErrorText = null;
+      _isExistingMember = false;
+    });
+
+    final isDuplicate = await _isPhoneDuplicateInFirebase(phoneNumber);
+
+    if (!mounted) return;
+
+    if (isDuplicate) {
+      setState(() {
+        _phoneErrorText = '이미 등록된 멤버입니다. 기존 멤버에서 추가해주세요.';
+        _isCheckingPhone = false;
+        _isExistingMember = true; // 기존 멤버 플래그 설정
+      });
+    } else {
+      setState(() {
+        _phoneErrorText = null;
+        _isCheckingPhone = false;
+        _isExistingMember = false;
+      });
+    }
+  }
+
   bool _isConfigValid() {
     return (_currentConfig?.totalReservations ?? 0) > 0 &&
         (_currentConfig?.periodValue ?? 0) > 0;
@@ -202,12 +317,6 @@ class _CourseMemberRegistrationScreenState
     });
   }
 
-  void _resetNewInput() {
-    _nameCtrl.clear();
-    _phoneCtrl.text = '010';
-    _nameFocusNode.requestFocus();
-  }
-
   Future<void> _addAndSaveMember({
     required String name,
     required String phoneNumber,
@@ -223,8 +332,50 @@ class _CourseMemberRegistrationScreenState
 
     if (_isSaving) return;
 
+    // 기존 멤버 중복 체크 (동기적으로 먼저 체크)
+    final memberProvider = Provider.of<MemberProvider>(context, listen: false);
+
+    // 동기 체크: memberProvider.members에서 즉시 확인
+    bool isExistingMemberSync = false;
+    for (final member in memberProvider.members) {
+      if (_normalizePhone(member.phoneNumber) == normalizedPhone) {
+        isExistingMemberSync = true;
+        break;
+      }
+    }
+
+    if (isExistingMemberSync) {
+      setState(() {
+        _phoneErrorText = '이미 등록된 멤버입니다. 기존 멤버에서 추가해주세요.';
+        _isExistingMember = true; // 기존 멤버 플래그 설정 (신규 추가 완전 차단)
+      });
+      return;
+    }
+
+    // 비동기 체크: pendingMembers도 확인
+    setState(() {
+      _isCheckingPhone = true;
+      _phoneErrorText = null;
+      _isExistingMember = false;
+    });
+
+    final isDuplicate = await _isPhoneDuplicateInFirebase(trimmedPhone);
+
+    if (!mounted) return;
+
+    if (isDuplicate) {
+      setState(() {
+        _phoneErrorText = '이미 등록된 멤버입니다. 기존 멤버에서 추가해주세요.';
+        _isCheckingPhone = false;
+        _isExistingMember = true; // 기존 멤버 플래그 설정 (신규 추가 완전 차단)
+      });
+      return;
+    }
+
     setState(() {
       _isSaving = true;
+      _isCheckingPhone = false;
+      _isExistingMember = false;
     });
 
     try {
@@ -245,11 +396,9 @@ class _CourseMemberRegistrationScreenState
 
       await widget.onSave(payload);
 
+      // 저장 성공 후 화면 닫기
       if (mounted) {
-        // 저장 성공 후 입력 필드 초기화
-        _resetNewInput();
-        // 설정도 다시 초기화
-        _initializeCurrentConfig();
+        Navigator.of(context).pop();
       }
     } finally {
       if (mounted) {
@@ -340,7 +489,10 @@ class _CourseMemberRegistrationScreenState
         isPhoneValid &&
         reservationsValid &&
         periodValid &&
-        !_isSaving;
+        !_isSaving &&
+        !_isExistingMember && // 기존 멤버는 신규 추가 불가 (기존 멤버에서 추가만 가능)
+        !_isCheckingPhone && // 전화번호 체크 중이면 추가 불가
+        _phoneErrorText == null; // 전화번호 에러가 없어야 함
 
     return Column(
       children: [
@@ -349,10 +501,10 @@ class _CourseMemberRegistrationScreenState
             onTap: () => FocusScope.of(context).unfocus(),
             behavior: HitTestBehavior.translucent,
             child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  SizedBox(height: 10),
                   DefaultTapbar(
                     labels: ['신규 입력', '기존 멤버에서 추가'],
                     selectedIndex: _modeIndex,
@@ -360,73 +512,95 @@ class _CourseMemberRegistrationScreenState
                   ),
                   const SizedBox(height: 24),
 
-                  TextField(
-                    controller: _nameCtrl,
-                    focusNode: _nameFocusNode,
-                    textInputAction: TextInputAction.next,
-                    onSubmitted: (_) => _phoneFocusNode.requestFocus(),
-                    style: TextStyle(
-                      fontSize: 18,
-                      color: AppColors.textPrimary,
-                    ),
-                    decoration: TextFieldDecorationUtil.defaultDecoration(
-                      hintText: '이름을 입력하세요',
-                      fillColor: AppColors.backgroundLight,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-
-                  TextField(
-                    controller: _phoneCtrl,
-                    focusNode: _phoneFocusNode,
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.digitsOnly,
-                      LengthLimitingTextInputFormatter(13),
-                    ],
-                    onChanged: (value) {
-                      final digitsOnly = value.replaceAll(RegExp(r'[^\d]'), '');
-                      String formatted = digitsOnly.isEmpty
-                          ? '010'
-                          : digitsOnly;
-
-                      String result = '';
-                      if (formatted.length <= 3) {
-                        result = formatted;
-                      } else if (formatted.length <= 7) {
-                        result =
-                            '${formatted.substring(0, 3)}-${formatted.substring(3)}';
-                      } else if (formatted.length <= 11) {
-                        result =
-                            '${formatted.substring(0, 3)}-${formatted.substring(3, 7)}-${formatted.substring(7)}';
-                      } else {
-                        result =
-                            '${formatted.substring(0, 3)}-${formatted.substring(3, 7)}-${formatted.substring(7, 11)}';
-                      }
-
-                      if (_phoneCtrl.text != result) {
-                        _phoneCtrl.value = TextEditingValue(
-                          text: result,
-                          selection: TextSelection.collapsed(
-                            offset: result.length,
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Column(
+                      children: [
+                        TextField(
+                          controller: _nameCtrl,
+                          focusNode: _nameFocusNode,
+                          textInputAction: TextInputAction.next,
+                          onSubmitted: (_) => _phoneFocusNode.requestFocus(),
+                          style: TextStyle(
+                            fontSize: 18,
+                            color: AppColors.textPrimary,
                           ),
-                        );
-                      }
-                      setState(() {});
-                    },
-                    style: TextStyle(
-                      fontSize: 18,
-                      color: AppColors.textPrimary,
-                    ),
-                    decoration: TextFieldDecorationUtil.defaultDecoration(
-                      hintText: '전화번호를 입력하세요',
-                      fillColor: AppColors.backgroundLight,
+                          decoration: TextFieldDecorationUtil.defaultDecoration(
+                            hintText: '이름을 입력하세요',
+                            fillColor: AppColors.backgroundLight,
+                          ),
+                        ),
+
+                        const SizedBox(height: 10),
+
+                        TextField(
+                          controller: _phoneCtrl,
+                          focusNode: _phoneFocusNode,
+                          keyboardType: TextInputType.number,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly,
+                            LengthLimitingTextInputFormatter(13),
+                          ],
+                          onChanged: (value) {
+                            final digitsOnly = value.replaceAll(
+                              RegExp(r'[^\d]'),
+                              '',
+                            );
+                            String formatted = digitsOnly.isEmpty
+                                ? '010'
+                                : digitsOnly;
+
+                            String result = '';
+                            if (formatted.length <= 3) {
+                              result = formatted;
+                            } else if (formatted.length <= 7) {
+                              result =
+                                  '${formatted.substring(0, 3)}-${formatted.substring(3)}';
+                            } else if (formatted.length <= 11) {
+                              result =
+                                  '${formatted.substring(0, 3)}-${formatted.substring(3, 7)}-${formatted.substring(7)}';
+                            } else {
+                              result =
+                                  '${formatted.substring(0, 3)}-${formatted.substring(3, 7)}-${formatted.substring(7, 11)}';
+                            }
+
+                            if (_phoneCtrl.text != result) {
+                              _phoneCtrl.value = TextEditingValue(
+                                text: result,
+                                selection: TextSelection.collapsed(
+                                  offset: result.length,
+                                ),
+                              );
+                            }
+
+                            // 전화번호 입력 시 실시간 중복 체크
+                            final normalizedPhone = _normalizePhone(result);
+                            if (normalizedPhone.length == 11) {
+                              _checkPhoneInFirebase(result);
+                            } else {
+                              setState(() {
+                                _phoneErrorText = null;
+                                _isExistingMember = false;
+                              });
+                            }
+                          },
+                          style: TextStyle(
+                            fontSize: 18,
+                            color: AppColors.textPrimary,
+                          ),
+                          decoration: TextFieldDecorationUtil.defaultDecoration(
+                            hintText: '전화번호를 입력하세요',
+                            fillColor: AppColors.backgroundLight,
+                            hasError: _phoneErrorText != null,
+                          ).copyWith(errorText: _phoneErrorText),
+                        ),
+                        const SizedBox(height: 24),
+
+                        _buildCurrentCourseConfigCard(course),
+                        const SizedBox(height: 80),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 24),
-
-                  _buildCurrentCourseConfigCard(course),
-                  const SizedBox(height: 80),
                 ],
               ),
             ),
@@ -452,7 +626,9 @@ class _CourseMemberRegistrationScreenState
                       height: 20,
                       child: CircularProgressIndicator(
                         strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          AppColors.primaryGreen,
+                        ),
                       ),
                     )
                   : const Text(
@@ -487,98 +663,294 @@ class _CourseMemberRegistrationScreenState
       (c) => c.id == widget.courseId,
     );
 
+    // 멤버가 선택되었고 설정이 유효한지 확인
+    final hasSelectedMember =
+        _selectedMemberName != null && _selectedMemberPhone != null;
+    final reservationsValid = (_currentConfig?.totalReservations ?? 0) > 0;
+    final periodValid = (_currentConfig?.periodValue ?? 0) > 0;
+    final canAdd =
+        hasSelectedMember && reservationsValid && periodValid && !_isSaving;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Expanded(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                SizedBox(height: 10),
                 DefaultTapbar(
                   labels: ['신규 입력', '기존 멤버에서 추가'],
                   selectedIndex: _modeIndex,
-                  onTabChanged: _onTabChanged,
+                  onTabChanged: (index) {
+                    setState(() {
+                      _mode = index == 0
+                          ? CourseMemberRegistrationMode.inputNew
+                          : CourseMemberRegistrationMode.selectExisting;
+                      // 탭 변경 시 선택된 멤버 초기화
+                      _selectedMemberName = null;
+                      _selectedMemberPhone = null;
+                      _currentConfig = null;
+                    });
+                    _initializeCurrentConfig();
+                  },
                 ),
                 const SizedBox(height: 24),
 
-                TextField(
-                  controller: _searchCtrl,
-                  onChanged: (_) => setState(() {}),
-                  decoration: TextFieldDecorationUtil.defaultDecoration(
-                    hintText: '이름 또는 전화번호로 검색',
-                    prefixIcon: Icon(
-                      Icons.search,
-                      color: AppColors.textSecondary,
-                    ),
-                    fillColor: AppColors.backgroundLight,
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Column(
+                    children: [
+                      TextField(
+                        style: TextStyle(
+                          fontSize: 18,
+                          color: AppColors.textPrimary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        controller: _searchCtrl,
+                        onChanged: (_) => setState(() {}),
+                        decoration: TextFieldDecorationUtil.defaultDecoration(
+                          hintText: '이름 또는 전화번호로 검색',
+                          prefixIcon: Icon(
+                            Icons.search,
+                            color: AppColors.textSecondary,
+                          ),
+                          fillColor: AppColors.backgroundLight,
+                        ),
+                      ),
+
+                      const SizedBox(height: 16),
+
+                      Consumer<MemberProvider>(
+                        builder: (context, memberProvider, _) {
+                          // hot reload 이후에도 멤버 로드가 보장되도록 build 시점에서도 트리거
+                          if (memberProvider.members.isEmpty &&
+                              !memberProvider.isLoading &&
+                              _memberLoadRequestedPlaceId != widget.placeId) {
+                            _memberLoadRequestedPlaceId = widget.placeId;
+                            if (kDebugMode) {
+                              debugPrint(
+                                '[CourseMemberRegistrationScreen] trigger loadMembers in build placeId=${widget.placeId}',
+                              );
+                            }
+                            Future.microtask(() async {
+                              try {
+                                await Provider.of<MemberProvider>(
+                                  context,
+                                  listen: false,
+                                ).loadMembers(widget.placeId);
+                              } catch (e) {
+                                debugPrint('멤버 로드 실패(build): $e');
+                              }
+                            });
+                          }
+
+                          final q = _searchCtrl.text.trim();
+                          if (kDebugMode) {
+                            final key =
+                                'q=$q|members=${memberProvider.members.length}|loading=${memberProvider.isLoading}|mode=$_mode';
+                            if (_lastMemberSearchLogKey != key) {
+                              _lastMemberSearchLogKey = key;
+                              debugPrint(
+                                '[CourseMemberRegistrationScreen] search state $key',
+                              );
+                            }
+                          }
+
+                          bool matches(String name, String phone) {
+                            if (q.isEmpty) return true;
+                            final nq = q.replaceAll(RegExp(r'\s'), '');
+                            return name.contains(q) ||
+                                phone.contains(q) ||
+                                _normalizePhone(phone).contains(nq) ||
+                                name.replaceAll(' ', '').contains(nq);
+                          }
+
+                          // pendingMembers도 "전체 멤버"로 포함 (AdminMemberScreen과 동일한 방식)
+                          final now = TimezoneUtils.getSeoulDateTime();
+                          final pendingAsUsers = memberProvider.pendingMembers
+                              .map((PendingMember pm) {
+                                final courseIds = pm.courseIds ?? [];
+                                final enrollments = courseIds.map((courseId) {
+                                  return CourseEnrollment(
+                                    id: 'pending_${pm.id}_$courseId',
+                                    userId: 'pending_${pm.id}',
+                                    courseId: courseId.toString(),
+                                    placeId: pm.placeId,
+                                    enrolledAt: pm.createdAt,
+                                    validFrom: now.subtract(
+                                      const Duration(days: 1),
+                                    ),
+                                    validUntil: now.add(
+                                      const Duration(days: 3650),
+                                    ),
+                                    totalReservations: 1,
+                                    remainingReservations: 1,
+                                  );
+                                }).toList();
+
+                                return User(
+                                  userId: 'pending_${pm.id}',
+                                  name: (pm.name ?? '이름 없음').trim().isEmpty
+                                      ? '이름 없음'
+                                      : (pm.name ?? '이름 없음').trim(),
+                                  phoneNumber: pm.phoneNumber,
+                                  placeIds: [pm.placeId],
+                                  enrollments: enrollments,
+                                  reservations: const [],
+                                  notificationsEnabled: false,
+                                  createdAt: pm.createdAt,
+                                  updatedAt: null,
+                                );
+                              })
+                              .toList();
+
+                          final allMembers = <User>[
+                            ...memberProvider.members,
+                            ...pendingAsUsers,
+                          ];
+
+                          final users = allMembers.where((u) {
+                            if (u.isEnrolledInCourse(widget.courseId))
+                              return false;
+                            return matches(u.name, u.phoneNumber);
+                          }).toList();
+
+                          if (kDebugMode) {
+                            debugPrint(
+                              '[CourseMemberRegistrationScreen] filter result q="$q" totalMembers=${allMembers.length} (users=${memberProvider.members.length}, pending=${memberProvider.pendingMembers.length}) result=${users.length}',
+                            );
+                          }
+
+                          if (memberProvider.isLoading) {
+                            return const Center(
+                              child: Padding(
+                                padding: EdgeInsets.all(40),
+                                child: CircularProgressIndicator(
+                                  color: AppColors.primaryGreen,
+                                ),
+                              ),
+                            );
+                          }
+
+                          // 멤버가 선택되었으면 설정 UI 표시
+                          if (_selectedMemberName != null &&
+                              _selectedMemberPhone != null) {
+                            return Column(
+                              children: [
+                                _buildCurrentCourseConfigCard(course),
+                                const SizedBox(height: 80),
+                              ],
+                            );
+                          }
+
+                          // 검색어가 없으면 멤버 리스트 숨김
+                          if (q.isEmpty) {
+                            return const SizedBox.shrink();
+                          }
+
+                          // 검색어가 있는데 결과가 없으면
+                          if (users.isEmpty) {
+                            return Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(40),
+                                child: Text(
+                                  '검색 결과가 없어요.',
+                                  style: TextStyle(
+                                    color: AppColors.textSecondary,
+                                  ),
+                                ),
+                              ),
+                            );
+                          }
+
+                          // 검색어가 있고 결과가 있으면 멤버 리스트 표시
+                          return Column(
+                            children: [
+                              ...users.map(
+                                (u) => _buildExistingRow(
+                                  name: u.name,
+                                  phone: u.phoneNumber,
+                                  statusLabel: u.userId.startsWith('pending_')
+                                      ? '대기'
+                                      : null,
+                                  onTap: () {
+                                    setState(() {
+                                      _selectedMemberName = u.name;
+                                      _selectedMemberPhone = u.phoneNumber;
+                                    });
+                                    // 설정 초기화
+                                    _initializeCurrentConfig();
+                                  },
+                                ),
+                              ),
+                              const SizedBox(height: 80),
+                            ],
+                          );
+                        },
+                      ),
+                    ],
                   ),
-                ),
-                const SizedBox(height: 16),
-
-                Consumer<MemberProvider>(
-                  builder: (context, memberProvider, _) {
-                    final q = _searchCtrl.text.trim();
-
-                    bool matches(String name, String phone) {
-                      if (q.isEmpty) return true;
-                      final nq = q.replaceAll(RegExp(r'\s'), '');
-                      return name.contains(q) ||
-                          phone.contains(q) ||
-                          _normalizePhone(phone).contains(nq) ||
-                          name.replaceAll(' ', '').contains(nq);
-                    }
-
-                    final users = memberProvider.members.where((u) {
-                      if (u.isEnrolledInCourse(widget.courseId)) return false;
-                      return matches(u.name, u.phoneNumber);
-                    }).toList();
-
-                    if (memberProvider.isLoading) {
-                      return const Center(
-                        child: Padding(
-                          padding: EdgeInsets.all(40),
-                          child: CircularProgressIndicator(),
-                        ),
-                      );
-                    }
-
-                    if (users.isEmpty) {
-                      return Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(40),
-                          child: Text(
-                            '검색 결과가 없어요.',
-                            style: TextStyle(color: AppColors.textSecondary),
-                          ),
-                        ),
-                      );
-                    }
-
-                    return Column(
-                      children: [
-                        _buildCurrentCourseConfigCard(course),
-                        const SizedBox(height: 16),
-                        ...users.map(
-                          (u) => _buildExistingRow(
-                            name: u.name,
-                            phone: u.phoneNumber,
-                            onTap: () => _addAndSaveMember(
-                              name: u.name,
-                              phoneNumber: u.phoneNumber,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 80),
-                      ],
-                    );
-                  },
                 ),
               ],
             ),
           ),
         ),
+
+        // 하단 추가 버튼 (멤버가 선택되었을 때만 표시)
+        if (hasSelectedMember)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+            decoration: const BoxDecoration(color: AppColors.backgroundWhite),
+            child: SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: canAdd
+                    ? () => _addAndSaveMember(
+                        name: _selectedMemberName!,
+                        phoneNumber: _selectedMemberPhone!,
+                      )
+                    : null,
+                icon: Icon(
+                  Icons.add,
+                  color: canAdd ? Colors.white : AppColors.textSecondary,
+                ),
+                label: _isSaving
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            AppColors.primaryGreen,
+                          ),
+                        ),
+                      )
+                    : const Text(
+                        '추가',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: canAdd
+                      ? AppColors.primaryGreen
+                      : AppColors.textSecondary.withOpacity(0.3),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 18),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  elevation: 0,
+                  disabledBackgroundColor: AppColors.textPrimary.withOpacity(
+                    0.1,
+                  ),
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -587,6 +959,7 @@ class _CourseMemberRegistrationScreenState
     required String name,
     required String phone,
     required VoidCallback onTap,
+    String? statusLabel,
   }) {
     return InkWell(
       onTap: onTap,
@@ -604,13 +977,21 @@ class _CourseMemberRegistrationScreenState
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    name,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
-                    ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          name,
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textPrimary,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 2),
                   Text(phone, style: TextStyle(color: AppColors.textSecondary)),
@@ -641,15 +1022,80 @@ class _CourseMemberRegistrationScreenState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            '예약 가능 횟수',
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-              color: AppColors.textSecondary,
+          // 선택된 멤버 정보 칩 (카드 상단)
+          if (_selectedMemberName != null && _selectedMemberPhone != null)
+            Container(
+              margin: const EdgeInsets.only(bottom: 18),
+              child: Row(
+                children: [
+                  // 멤버 정보 칩
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.backgroundLight,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              _selectedMemberName!,
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.textPrimary,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            '•',
+                            style: TextStyle(color: AppColors.textSecondary),
+                          ),
+                          const SizedBox(width: 4),
+                          Flexible(
+                            child: Padding(
+                              padding: const EdgeInsets.only(bottom: 2),
+                              child: Text(
+                                _selectedMemberPhone!,
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  color: AppColors.textSecondary,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: Icon(
+                      Icons.close,
+                      color: AppColors.textSecondary,
+                      size: 20,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        _selectedMemberName = null;
+                        _selectedMemberPhone = null;
+                        _currentConfig = null;
+                      });
+                      _initializeCurrentConfig();
+                    },
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: 12),
           ReservationsInputWidget(
             controller: _currentTotalReservationsCtrl,
             currentValue: currentValue,

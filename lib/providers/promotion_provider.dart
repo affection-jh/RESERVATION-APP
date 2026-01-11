@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/firestore_service.dart';
+import '../utils/timezone_utils.dart';
 
 /// 프로모션 모델 (Firestore용)
 class Promotion {
@@ -111,7 +112,7 @@ class PromotionProvider with ChangeNotifier {
         tag: tag,
         imageUrl: imageUrl,
         backgroundColorValue: backgroundColorValue,
-        createdAt: DateTime.now(),
+        createdAt: TimezoneUtils.getSeoulDateTime(),
       );
 
       final createdPromotion = await _firestoreService.createPromotion(

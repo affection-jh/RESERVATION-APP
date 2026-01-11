@@ -233,6 +233,7 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
                                 height: 20,
                                 child: CircularProgressIndicator(
                                   strokeWidth: 3,
+                                  color: AppColors.primaryGreen,
                                 ),
                               ),
                             )

@@ -390,7 +390,7 @@ class ReservationCourseCard extends StatelessWidget {
             // 오른쪽 콘텐츠
             Expanded(
               child: SizedBox(
-                height: 100, // 이미지 높이와 동일하게 고정
+                height: 110, // 이미지 높이와 동일하게 고정
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -440,39 +440,43 @@ class ReservationCourseCard extends StatelessWidget {
                         ],
                       ],
                     ),
+
                     // 자세히 버튼 (오른쪽 정렬)
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          color: AppColors.primaryGreen,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.only(top: 2),
-                              child: Text(
-                                '자세히',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
-                                  color: AppColors.backgroundWhite,
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppColors.primaryGreen,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.only(top: 2),
+                                child: Text(
+                                  '자세히',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.backgroundWhite,
+                                  ),
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 4),
-                            Icon(
-                              Icons.arrow_forward_ios,
-                              size: 14,
-                              color: AppColors.backgroundWhite,
-                            ),
-                          ],
+                              const SizedBox(width: 4),
+                              Icon(
+                                Icons.arrow_forward_ios,
+                                size: 14,
+                                color: AppColors.backgroundWhite,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -884,9 +888,7 @@ class _AdminPlaceSelectorState extends State<AdminPlaceSelector> {
                             border: Border.all(
                               color: isCurrentPlace
                                   ? AppColors.primaryGreen
-                                  : AppColors.textSecondary.withOpacity(
-                                      0.2,
-                                    ),
+                                  : AppColors.textSecondary.withOpacity(0.2),
                             ),
                           ),
                           child: Row(

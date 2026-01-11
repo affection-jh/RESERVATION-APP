@@ -16,7 +16,7 @@ class EnrollmentService {
   }
 
   DateTime _timestampToDateTime(dynamic timestamp) {
-    if (timestamp == null) return DateTime.now();
+    if (timestamp == null) return TimezoneUtils.getSeoulDateTime();
     if (timestamp is Timestamp) return timestamp.toDate();
     if (timestamp is String) return DateTime.parse(timestamp);
     throw Exception('Invalid timestamp format');
@@ -41,13 +41,12 @@ class EnrollmentService {
       debugPrint('🔥 [EnrollmentService] validFrom: ${enrollment.validFrom}');
       debugPrint('🔥 [EnrollmentService] validUntil: ${enrollment.validUntil}');
 
-      // ID가 없으면 자동 생성
+      // ID가 없으면 고정 ID 생성 (중복 방지: userId+placeId+courseId)
       CourseEnrollment enrollmentToCreate = enrollment;
       if (enrollment.id.isEmpty) {
-        final enrollmentRef = _firestoreService.firestore
-            .collection('enrollments')
-            .doc();
-        enrollmentToCreate = enrollment.copyWith(id: enrollmentRef.id);
+        final deterministicId =
+            '${enrollment.userId}_${enrollment.placeId}_${enrollment.courseId}';
+        enrollmentToCreate = enrollment.copyWith(id: deterministicId);
         debugPrint(
           '✨ [EnrollmentService] enrollment ID 자동 생성: ${enrollmentToCreate.id}',
         );
@@ -161,11 +160,11 @@ class EnrollmentService {
             continue;
           }
 
-          final enrollmentRef = _firestoreService.firestore
-              .collection('enrollments')
-              .doc();
+          // ✅ 고정 ID로 중복 생성 방지
+          final enrollmentId = '${userId}_${placeId}_$courseId';
+
           final enrollment = CourseEnrollment(
-            id: enrollmentRef.id,
+            id: enrollmentId,
             userId: userId,
             courseId: courseId,
             placeId: placeId,
@@ -209,6 +208,7 @@ class EnrollmentService {
   // ==================== Firestore 직접 접근 메서드 ====================
 
   /// 등록 정보 생성 (Firestore 직접 접근)
+  /// ✅ 트랜잭션으로 원자적 저장 보장 (enrollment 문서 + 서브컬렉션 모두 성공하거나 모두 실패)
   Future<CourseEnrollment> _createEnrollmentDirect(
     CourseEnrollment enrollment,
   ) async {
@@ -226,64 +226,65 @@ class EnrollmentService {
     json.remove('extensionRequests');
     json.remove('extensionRequest'); // 하위 호환성 필드도 제거
 
-    // enrollment 문서 저장
-    await docRef.set(json);
+    // ✅ 트랜잭션으로 원자적 저장 (enrollment 문서 + 서브컬렉션 모두 성공하거나 모두 실패)
+    await _firestore.runTransaction((transaction) async {
+      // ✅ 트랜잭션 내부에서 중복 확인 (race condition 방지)
+      final existing = await transaction.get(docRef);
+      if (existing.exists) {
+        throw Exception('Enrollment already exists: ${enrollment.id}');
+      }
 
-    // 서브컬렉션에 히스토리 데이터 저장
-    final batch = _firestore.batch();
+      // enrollment 문서 저장
+      transaction.set(docRef, json);
 
-    // 재등록 이력 저장
-    for (final record in enrollment.reenrollmentHistory) {
-      final recordRef = docRef
-          .collection('reenrollmentHistory')
-          .doc();
-      batch.set(recordRef, {
-        'enrollmentNumber': record.enrollmentNumber,
-        'totalReservations': record.totalReservations,
-        'enrolledAt': _dateTimeToTimestamp(record.enrolledAt),
-        'validFrom': _dateTimeToTimestamp(record.validFrom),
-        'validUntil': _dateTimeToTimestamp(record.validUntil),
-        'cancelledAt': record.cancelledAt != null
-            ? _dateTimeToTimestamp(record.cancelledAt!)
-            : null,
-      });
-    }
+      // 재등록 이력 저장
+      for (final record in enrollment.reenrollmentHistory) {
+        final recordRef = docRef.collection('reenrollmentHistory').doc();
+        transaction.set(recordRef, {
+          'enrollmentNumber': record.enrollmentNumber,
+          'totalReservations': record.totalReservations,
+          'enrolledAt': _dateTimeToTimestamp(record.enrolledAt),
+          'validFrom': _dateTimeToTimestamp(record.validFrom),
+          'validUntil': _dateTimeToTimestamp(record.validUntil),
+          'cancelledAt': record.cancelledAt != null
+              ? _dateTimeToTimestamp(record.cancelledAt!)
+              : null,
+        });
+      }
 
-    // 관리자 액션 저장
-    for (final action in enrollment.adminActions) {
-      final actionRef = docRef
-          .collection('adminActions')
-          .doc(action.id);
-      batch.set(actionRef, {
-        'actionType': action.actionType.name,
-        'performedAt': _dateTimeToTimestamp(action.performedAt),
-        'performedBy': action.performedBy,
-        'details': action.details,
-        'oldValue': action.oldValue,
-        'newValue': action.newValue,
-      });
-    }
+      // 관리자 액션 저장
+      for (final action in enrollment.adminActions) {
+        final actionRef = docRef.collection('adminActions').doc(action.id);
+        transaction.set(actionRef, {
+          'actionType': action.actionType.name,
+          'performedAt': _dateTimeToTimestamp(action.performedAt),
+          'performedBy': action.performedBy,
+          'details': action.details,
+          'oldValue': action.oldValue,
+          'newValue': action.newValue,
+        });
+      }
 
-    // 연장 요청 저장
-    for (final request in enrollment.extensionRequests) {
-      final requestRef = docRef
-          .collection('extensionRequests')
-          .doc(request.id);
-      batch.set(requestRef, {
-        'requestedAt': _dateTimeToTimestamp(request.requestedAt),
-        'reason': request.reason,
-        'status': request.status.name,
-        'approvedAt': request.approvedAt != null
-            ? _dateTimeToTimestamp(request.approvedAt!)
-            : null,
-        'rejectedAt': request.rejectedAt != null
-            ? _dateTimeToTimestamp(request.rejectedAt!)
-            : null,
-        'rejectionReason': request.rejectionReason,
-      });
-    }
+      // 연장 요청 저장
+      for (final request in enrollment.extensionRequests) {
+        final requestRef = docRef
+            .collection('extensionRequests')
+            .doc(request.id);
+        transaction.set(requestRef, {
+          'requestedAt': _dateTimeToTimestamp(request.requestedAt),
+          'reason': request.reason,
+          'status': request.status.name,
+          'approvedAt': request.approvedAt != null
+              ? _dateTimeToTimestamp(request.approvedAt!)
+              : null,
+          'rejectedAt': request.rejectedAt != null
+              ? _dateTimeToTimestamp(request.rejectedAt!)
+              : null,
+          'rejectionReason': request.rejectionReason,
+        });
+      }
+    });
 
-    await batch.commit();
     return enrollment;
   }
 
@@ -309,6 +310,155 @@ class EnrollmentService {
     // enrollment 문서 업데이트 (기본 정보만)
     await docRef.update(json);
     return enrollment;
+  }
+
+  /// 재등록 처리 (트랜잭션으로 원자적 저장)
+  ///
+  /// enrollment 업데이트 + 재등록 이력 2개 추가 + 관리자 액션 추가를 하나의 트랜잭션으로 처리
+  Future<void> reenrollWithHistory({
+    required CourseEnrollment updatedEnrollment,
+    required ReenrollmentRecord oldRecord, // 기존 등록 정보
+    required ReenrollmentRecord newRecord, // 새 재등록 정보
+    required AdminAction adminAction,
+  }) async {
+    await _firestore.runTransaction((transaction) async {
+      final docRef = _firestore
+          .collection('enrollments')
+          .doc(updatedEnrollment.id);
+
+      // enrollment 문서 업데이트
+      final json = updatedEnrollment.toJson();
+      json['enrolledAt'] = _dateTimeToTimestamp(updatedEnrollment.enrolledAt);
+      json['validFrom'] = _dateTimeToTimestamp(updatedEnrollment.validFrom);
+      json['validUntil'] = _dateTimeToTimestamp(updatedEnrollment.validUntil);
+      json.remove('reenrollmentHistory');
+      json.remove('adminActions');
+      json.remove('extensionRequests');
+      json.remove('extensionRequest');
+
+      transaction.update(docRef, json);
+
+      // 기존 등록 정보를 히스토리에 추가
+      final oldRecordRef = docRef.collection('reenrollmentHistory').doc();
+      transaction.set(oldRecordRef, {
+        'enrollmentNumber': oldRecord.enrollmentNumber,
+        'totalReservations': oldRecord.totalReservations,
+        'enrolledAt': _dateTimeToTimestamp(oldRecord.enrolledAt),
+        'validFrom': _dateTimeToTimestamp(oldRecord.validFrom),
+        'validUntil': _dateTimeToTimestamp(oldRecord.validUntil),
+        'cancelledAt': oldRecord.cancelledAt != null
+            ? _dateTimeToTimestamp(oldRecord.cancelledAt!)
+            : null,
+      });
+
+      // 새 재등록 정보를 히스토리에 추가
+      final newRecordRef = docRef.collection('reenrollmentHistory').doc();
+      transaction.set(newRecordRef, {
+        'enrollmentNumber': newRecord.enrollmentNumber,
+        'totalReservations': newRecord.totalReservations,
+        'enrolledAt': _dateTimeToTimestamp(newRecord.enrolledAt),
+        'validFrom': _dateTimeToTimestamp(newRecord.validFrom),
+        'validUntil': _dateTimeToTimestamp(newRecord.validUntil),
+        'cancelledAt': newRecord.cancelledAt != null
+            ? _dateTimeToTimestamp(newRecord.cancelledAt!)
+            : null,
+      });
+
+      // 관리자 액션 추가
+      final actionRef = docRef.collection('adminActions').doc(adminAction.id);
+      transaction.set(actionRef, {
+        'actionType': adminAction.actionType.name,
+        'performedAt': _dateTimeToTimestamp(adminAction.performedAt),
+        'performedBy': adminAction.performedBy,
+        'details': adminAction.details,
+        'oldValue': adminAction.oldValue,
+        'newValue': adminAction.newValue,
+      });
+    });
+  }
+
+  /// enrollment 업데이트 + 관리자 액션 추가 (트랜잭션)
+  Future<void> updateEnrollmentWithAdminAction({
+    required CourseEnrollment updatedEnrollment,
+    required AdminAction adminAction,
+  }) async {
+    await _firestore.runTransaction((transaction) async {
+      final docRef = _firestore
+          .collection('enrollments')
+          .doc(updatedEnrollment.id);
+
+      // enrollment 문서 업데이트
+      final json = updatedEnrollment.toJson();
+      json['enrolledAt'] = _dateTimeToTimestamp(updatedEnrollment.enrolledAt);
+      json['validFrom'] = _dateTimeToTimestamp(updatedEnrollment.validFrom);
+      json['validUntil'] = _dateTimeToTimestamp(updatedEnrollment.validUntil);
+      json.remove('reenrollmentHistory');
+      json.remove('adminActions');
+      json.remove('extensionRequests');
+      json.remove('extensionRequest');
+
+      transaction.update(docRef, json);
+
+      // 관리자 액션 추가
+      final actionRef = docRef.collection('adminActions').doc(adminAction.id);
+      transaction.set(actionRef, {
+        'actionType': adminAction.actionType.name,
+        'performedAt': _dateTimeToTimestamp(adminAction.performedAt),
+        'performedBy': adminAction.performedBy,
+        'details': adminAction.details,
+        'oldValue': adminAction.oldValue,
+        'newValue': adminAction.newValue,
+      });
+    });
+  }
+
+  /// enrollment 업데이트 + 재등록 이력 추가 + 관리자 액션 추가 (트랜잭션)
+  Future<void> cancelEnrollmentWithHistory({
+    required CourseEnrollment updatedEnrollment,
+    required ReenrollmentRecord cancelledRecord,
+    required AdminAction adminAction,
+  }) async {
+    await _firestore.runTransaction((transaction) async {
+      final docRef = _firestore
+          .collection('enrollments')
+          .doc(updatedEnrollment.id);
+
+      // enrollment 문서 업데이트
+      final json = updatedEnrollment.toJson();
+      json['enrolledAt'] = _dateTimeToTimestamp(updatedEnrollment.enrolledAt);
+      json['validFrom'] = _dateTimeToTimestamp(updatedEnrollment.validFrom);
+      json['validUntil'] = _dateTimeToTimestamp(updatedEnrollment.validUntil);
+      json.remove('reenrollmentHistory');
+      json.remove('adminActions');
+      json.remove('extensionRequests');
+      json.remove('extensionRequest');
+
+      transaction.update(docRef, json);
+
+      // 취소된 재등록 이력 추가
+      final recordRef = docRef.collection('reenrollmentHistory').doc();
+      transaction.set(recordRef, {
+        'enrollmentNumber': cancelledRecord.enrollmentNumber,
+        'totalReservations': cancelledRecord.totalReservations,
+        'enrolledAt': _dateTimeToTimestamp(cancelledRecord.enrolledAt),
+        'validFrom': _dateTimeToTimestamp(cancelledRecord.validFrom),
+        'validUntil': _dateTimeToTimestamp(cancelledRecord.validUntil),
+        'cancelledAt': cancelledRecord.cancelledAt != null
+            ? _dateTimeToTimestamp(cancelledRecord.cancelledAt!)
+            : null,
+      });
+
+      // 관리자 액션 추가
+      final actionRef = docRef.collection('adminActions').doc(adminAction.id);
+      transaction.set(actionRef, {
+        'actionType': adminAction.actionType.name,
+        'performedAt': _dateTimeToTimestamp(adminAction.performedAt),
+        'performedBy': adminAction.performedBy,
+        'details': adminAction.details,
+        'oldValue': adminAction.oldValue,
+        'newValue': adminAction.newValue,
+      });
+    });
   }
 
   /// 사용자별 등록 정보 조회
@@ -549,6 +699,65 @@ class EnrollmentService {
     debugPrint('✅ [EnrollmentService] 코스 enrollments 삭제 완료: 총 $totalDeleted개');
   }
 
+  /// 특정 사용자와 플레이스의 모든 enrollments 삭제 (페이지네이션 사용)
+  ///
+  /// 멤버 삭제 시 해당 멤버의 모든 코스 등록 정보를 삭제합니다.
+  /// 대규모 데이터(10,000명 이상)도 메모리 효율적으로 처리합니다.
+  /// 페이지네이션을 사용하여 작은 단위로 나눠서 조회하고 삭제합니다.
+  Future<void> deleteEnrollmentsByUserAndPlace(
+    String userId,
+    String placeId,
+  ) async {
+    const pageSize = 500; // 한 번에 조회할 문서 수
+    DocumentSnapshot? lastDoc;
+    int totalDeleted = 0;
+
+    while (true) {
+      // 페이지네이션 쿼리
+      var query = _firestore
+          .collection('enrollments')
+          .where('userId', isEqualTo: userId)
+          .where('placeId', isEqualTo: placeId)
+          .limit(pageSize);
+
+      // 이전 페이지의 마지막 문서부터 시작
+      if (lastDoc != null) {
+        query = query.startAfterDocument(lastDoc);
+      }
+
+      final snapshot = await query.get();
+
+      // 더 이상 문서가 없으면 종료
+      if (snapshot.docs.isEmpty) {
+        break;
+      }
+
+      // 배치 삭제 (Firestore 배치는 최대 500개까지)
+      final batch = _firestore.batch();
+      for (var doc in snapshot.docs) {
+        batch.delete(doc.reference);
+      }
+      await batch.commit();
+
+      totalDeleted += snapshot.docs.length;
+      debugPrint(
+        '🗑️ [EnrollmentService] 멤버 enrollments 삭제 진행: $totalDeleted개 삭제됨',
+      );
+
+      // 마지막 문서 저장 (다음 페이지를 위해)
+      lastDoc = snapshot.docs.last;
+
+      // 마지막 페이지인 경우 종료
+      if (snapshot.docs.length < pageSize) {
+        break;
+      }
+    }
+
+    debugPrint(
+      '✅ [EnrollmentService] 멤버 enrollments 삭제 완료: 총 $totalDeleted개 (userId: $userId, placeId: $placeId)',
+    );
+  }
+
   /// 코스별 멤버 조회
   Stream<List<CourseMember>> watchCourseMembers({
     required String courseId,
@@ -564,23 +773,24 @@ class EnrollmentService {
       query = query.where('isActive', isEqualTo: isActive);
     }
 
-    return query.snapshots().map((snapshot) {
-      return snapshot.docs.map((doc) {
-        final data = doc.data();
-        data['enrolledAt'] = _timestampToDateTime(
-          data['enrolledAt'],
-        ).toIso8601String();
-        data['createdAt'] = _timestampToDateTime(
-          data['createdAt'],
-        ).toIso8601String();
-        if (data['updatedAt'] != null) {
-          data['updatedAt'] = _timestampToDateTime(
-            data['updatedAt'],
-          ).toIso8601String();
-        }
-        return CourseMember.fromJson(data);
-      }).toList();
-    });
+    return (query.snapshots() as Stream<QuerySnapshot<Map<String, dynamic>>>)
+        .map((snapshot) {
+          return snapshot.docs.map((doc) {
+            final data = doc.data();
+            data['enrolledAt'] = _timestampToDateTime(
+              data['enrolledAt'],
+            ).toIso8601String();
+            data['createdAt'] = _timestampToDateTime(
+              data['createdAt'],
+            ).toIso8601String();
+            if (data['updatedAt'] != null) {
+              data['updatedAt'] = _timestampToDateTime(
+                data['updatedAt'],
+              ).toIso8601String();
+            }
+            return CourseMember.fromJson(data);
+          }).toList();
+        });
   }
 
   /// 플레이스별 코스 멤버 조회
@@ -603,23 +813,24 @@ class EnrollmentService {
       query = query.where('isActive', isEqualTo: isActive);
     }
 
-    return query.snapshots().map((snapshot) {
-      return snapshot.docs.map((doc) {
-        final data = doc.data();
-        data['enrolledAt'] = _timestampToDateTime(
-          data['enrolledAt'],
-        ).toIso8601String();
-        data['createdAt'] = _timestampToDateTime(
-          data['createdAt'],
-        ).toIso8601String();
-        if (data['updatedAt'] != null) {
-          data['updatedAt'] = _timestampToDateTime(
-            data['updatedAt'],
-          ).toIso8601String();
-        }
-        return CourseMember.fromJson(data);
-      }).toList();
-    });
+    return (query.snapshots() as Stream<QuerySnapshot<Map<String, dynamic>>>)
+        .map((snapshot) {
+          return snapshot.docs.map((doc) {
+            final data = doc.data();
+            data['enrolledAt'] = _timestampToDateTime(
+              data['enrolledAt'],
+            ).toIso8601String();
+            data['createdAt'] = _timestampToDateTime(
+              data['createdAt'],
+            ).toIso8601String();
+            if (data['updatedAt'] != null) {
+              data['updatedAt'] = _timestampToDateTime(
+                data['updatedAt'],
+              ).toIso8601String();
+            }
+            return CourseMember.fromJson(data);
+          }).toList();
+        });
   }
 
   // ==================== 서브컬렉션: 재등록 이력 ====================
@@ -635,7 +846,7 @@ class EnrollmentService {
           .doc(enrollmentId)
           .collection('reenrollmentHistory')
           .doc();
-      
+
       await recordRef.set({
         'enrollmentNumber': record.enrollmentNumber,
         'totalReservations': record.totalReservations,
@@ -703,20 +914,20 @@ class EnrollmentService {
         .limit(limit)
         .snapshots()
         .map((snapshot) {
-      return snapshot.docs.map((doc) {
-        final data = doc.data();
-        return ReenrollmentRecord(
-          enrollmentNumber: data['enrollmentNumber'] as int,
-          totalReservations: data['totalReservations'] as int,
-          enrolledAt: _timestampToDateTime(data['enrolledAt']),
-          validFrom: _timestampToDateTime(data['validFrom']),
-          validUntil: _timestampToDateTime(data['validUntil']),
-          cancelledAt: data['cancelledAt'] != null
-              ? _timestampToDateTime(data['cancelledAt'])
-              : null,
-        );
-      }).toList();
-    });
+          return snapshot.docs.map((doc) {
+            final data = doc.data();
+            return ReenrollmentRecord(
+              enrollmentNumber: data['enrollmentNumber'] as int,
+              totalReservations: data['totalReservations'] as int,
+              enrolledAt: _timestampToDateTime(data['enrolledAt']),
+              validFrom: _timestampToDateTime(data['validFrom']),
+              validUntil: _timestampToDateTime(data['validUntil']),
+              cancelledAt: data['cancelledAt'] != null
+                  ? _timestampToDateTime(data['cancelledAt'])
+                  : null,
+            );
+          }).toList();
+        });
   }
 
   // ==================== 서브컬렉션: 관리자 액션 ====================
@@ -732,7 +943,7 @@ class EnrollmentService {
           .doc(enrollmentId)
           .collection('adminActions')
           .doc(action.id);
-      
+
       await actionRef.set({
         'actionType': action.actionType.name,
         'performedAt': _dateTimeToTimestamp(action.performedAt),
@@ -800,22 +1011,22 @@ class EnrollmentService {
         .limit(limit)
         .snapshots()
         .map((snapshot) {
-      return snapshot.docs.map((doc) {
-        final data = doc.data();
-        return AdminAction(
-          id: doc.id,
-          actionType: AdminActionType.values.firstWhere(
-            (e) => e.name == data['actionType'],
-            orElse: () => AdminActionType.other,
-          ),
-          performedAt: _timestampToDateTime(data['performedAt']),
-          performedBy: data['performedBy'] as String,
-          details: data['details'] as String?,
-          oldValue: data['oldValue'] as Map<String, dynamic>?,
-          newValue: data['newValue'] as Map<String, dynamic>?,
-        );
-      }).toList();
-    });
+          return snapshot.docs.map((doc) {
+            final data = doc.data();
+            return AdminAction(
+              id: doc.id,
+              actionType: AdminActionType.values.firstWhere(
+                (e) => e.name == data['actionType'],
+                orElse: () => AdminActionType.other,
+              ),
+              performedAt: _timestampToDateTime(data['performedAt']),
+              performedBy: data['performedBy'] as String,
+              details: data['details'] as String?,
+              oldValue: data['oldValue'] as Map<String, dynamic>?,
+              newValue: data['newValue'] as Map<String, dynamic>?,
+            );
+          }).toList();
+        });
   }
 
   // ==================== 서브컬렉션: 연장 요청 ====================
@@ -831,7 +1042,7 @@ class EnrollmentService {
           .doc(enrollmentId)
           .collection('extensionRequests')
           .doc(request.id);
-      
+
       await requestRef.set({
         'requestedAt': _dateTimeToTimestamp(request.requestedAt),
         'reason': request.reason,
@@ -907,25 +1118,25 @@ class EnrollmentService {
         .limit(limit)
         .snapshots()
         .map((snapshot) {
-      return snapshot.docs.map((doc) {
-        final data = doc.data();
-        return ExtensionRequest(
-          id: doc.id,
-          requestedAt: _timestampToDateTime(data['requestedAt']),
-          reason: data['reason'] as String,
-          status: ExtensionRequestStatus.values.firstWhere(
-            (e) => e.name == data['status'],
-            orElse: () => ExtensionRequestStatus.pending,
-          ),
-          approvedAt: data['approvedAt'] != null
-              ? _timestampToDateTime(data['approvedAt'])
-              : null,
-          rejectedAt: data['rejectedAt'] != null
-              ? _timestampToDateTime(data['rejectedAt'])
-              : null,
-          rejectionReason: data['rejectionReason'] as String?,
-        );
-      }).toList();
-    });
+          return snapshot.docs.map((doc) {
+            final data = doc.data();
+            return ExtensionRequest(
+              id: doc.id,
+              requestedAt: _timestampToDateTime(data['requestedAt']),
+              reason: data['reason'] as String,
+              status: ExtensionRequestStatus.values.firstWhere(
+                (e) => e.name == data['status'],
+                orElse: () => ExtensionRequestStatus.pending,
+              ),
+              approvedAt: data['approvedAt'] != null
+                  ? _timestampToDateTime(data['approvedAt'])
+                  : null,
+              rejectedAt: data['rejectedAt'] != null
+                  ? _timestampToDateTime(data['rejectedAt'])
+                  : null,
+              rejectionReason: data['rejectionReason'] as String?,
+            );
+          }).toList();
+        });
   }
 }

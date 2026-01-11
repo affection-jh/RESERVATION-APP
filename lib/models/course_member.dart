@@ -67,17 +67,37 @@ class CourseMember {
 
   /// JSON에서 생성
   factory CourseMember.fromJson(Map<String, dynamic> json) {
+    // enrolledAt 처리 (Timestamp 또는 String)
+    DateTime enrolledAt;
+    final enrolledAtData = json['enrolledAt'];
+    if (enrolledAtData is String) {
+      enrolledAt = DateTime.parse(enrolledAtData);
+    } else {
+      enrolledAt = DateTime.now();
+    }
+
+    // createdAt 처리 (Timestamp 또는 String)
+    DateTime createdAt;
+    final createdAtData = json['createdAt'];
+    if (createdAtData is String) {
+      createdAt = DateTime.parse(createdAtData);
+    } else {
+      createdAt = DateTime.now();
+    }
+
     return CourseMember(
-      id: json['id'] as String,
-      userId: json['userId'] as String,
-      courseId: json['courseId'] as String,
-      placeId: json['placeId'] as String,
-      enrollmentId: json['enrollmentId'] as String,
-      enrolledAt: DateTime.parse(json['enrolledAt'] as String),
-      isActive: json['isActive'] as bool,
-      createdAt: DateTime.parse(json['createdAt'] as String),
+      id: json['id'] as String? ?? '',
+      userId: json['userId'] as String? ?? '',
+      courseId: json['courseId'] as String? ?? '',
+      placeId: json['placeId'] as String? ?? '',
+      enrollmentId: json['enrollmentId'] as String? ?? '',
+      enrolledAt: enrolledAt,
+      isActive: json['isActive'] as bool? ?? true,
+      createdAt: createdAt,
       updatedAt: json['updatedAt'] != null
-          ? DateTime.parse(json['updatedAt'] as String)
+          ? (json['updatedAt'] is String
+                ? DateTime.parse(json['updatedAt'] as String)
+                : null)
           : null,
     );
   }

@@ -475,7 +475,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                                             height: 20,
                                             child: CircularProgressIndicator(
                                               strokeWidth: 2,
-                                              color: Colors.red,
+                                              color: AppColors.primaryGreen,
                                             ),
                                           )
                                         : SvgPicture.asset(
@@ -590,7 +590,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                             height: 20,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
-                              color: Colors.white,
+                              color: AppColors.primaryGreen,
                             ),
                           )
                         : Text(
@@ -974,17 +974,11 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                     fillColor: AppColors.backgroundLight,
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(
-                        color: AppColors.borderLight,
-                        width: 1,
-                      ),
+                      borderSide: BorderSide.none,
                     ),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(
-                        color: AppColors.borderLight,
-                        width: 1,
-                      ),
+                      borderSide: BorderSide.none,
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),

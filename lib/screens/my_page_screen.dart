@@ -18,9 +18,10 @@ import '../providers/auth_provider.dart';
 import '../providers/place_provider.dart';
 
 import '../providers/enrollment_provider.dart';
-import '../services/user_service.dart';
 import '../utils/snackbar_util.dart';
 import '../widgets/cached_image_widget.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+import 'dart:async';
 
 class MyPageScreen extends StatefulWidget {
   final Map<String, dynamic>? highlightReservation; // 강조할 예약 정보
@@ -38,13 +39,46 @@ class _MyPageScreenState extends State<MyPageScreen> {
   CourseSession? _highlightedSession;
   DateTime? _highlightedDate;
   // _isPlaceListExpanded: 현재 화면에서는 사용되지 않음 (필요 시 다시 추가)
+  StreamSubscription<ReservationOperationEvent>? _reservationOpSub;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _init();
+      _subscribeReservationOperationEvents();
     });
+  }
+
+  void _subscribeReservationOperationEvents() {
+    _reservationOpSub?.cancel();
+    final rp = Provider.of<ReservationProvider>(context, listen: false);
+    _reservationOpSub = rp.operationEvents.listen((event) async {
+      // 마이페이지에서는 특히 "취소 성공" 피드백이 중요 (바텀시트가 닫혀 있어도)
+      if (event.type == ReservationOperationType.cancel &&
+          event.success == true &&
+          event.reservation != null) {
+        if (!mounted) return;
+        final r = event.reservation!;
+        try {
+          await Provider.of<EnrollmentProvider>(
+            context,
+            listen: false,
+          ).loadUserEnrollments(userId: r.userId, placeId: r.placeId);
+          await Provider.of<ReservationProvider>(
+            context,
+            listen: false,
+          ).loadUserReservations(userId: r.userId, placeId: r.placeId);
+        } catch (_) {}
+        SnackbarUtil.showSuccess(context, '예약이 취소되었습니다.');
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _reservationOpSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _init() async {
@@ -74,11 +108,16 @@ class _MyPageScreenState extends State<MyPageScreen> {
     // PlaceProvider에 현재 플레이스가 있는지 확인
     var currentPlace = placeProvider.currentPlace;
 
-    // 플레이스가 없으면 사용자의 첫 번째 플레이스 로드
-    if (currentPlace == null && authProvider.currentUser!.placeIds.isNotEmpty) {
-      final firstPlaceId = authProvider.currentUser!.placeIds.first;
-      await placeProvider.loadPlace(firstPlaceId);
-      currentPlace = placeProvider.currentPlace;
+    // 플레이스가 없으면 placeMemberships에서 첫 번째 플레이스 로드
+    if (currentPlace == null) {
+      final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      final approvedPlaceIds = authProvider.approvedPlaceIds;
+      if (approvedPlaceIds.isNotEmpty) {
+        final firstPlaceId = approvedPlaceIds.first;
+        await placeProvider.loadPlace(firstPlaceId);
+        currentPlace = placeProvider.currentPlace;
+      }
     }
 
     if (currentPlace == null) return;
@@ -372,10 +411,10 @@ class _MyPageScreenState extends State<MyPageScreen> {
                           ),
                           child: Column(
                             children: [
-                              const SizedBox(height: 30),
+                              const SizedBox(height: 8),
 
                               Text(
-                                '에약 내역이 없어요',
+                                '예약 내역이 없어요',
                                 style: TextStyle(
                                   fontSize: 16,
                                   color: AppColors.textSecondary.withOpacity(
@@ -384,7 +423,7 @@ class _MyPageScreenState extends State<MyPageScreen> {
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
-                              const SizedBox(height: 30),
+                              const SizedBox(height: 8),
                             ],
                           ),
                         ),
@@ -461,69 +500,72 @@ class _MyPageScreenState extends State<MyPageScreen> {
                             }
                           },
                           profileBottomWidget: const PlaceSwitchWidget(),
-                          settingsItems:
-                              SettingsItemsBuilder.buildSettingsItems(
-                                context: context,
-                                isNotificationEnabled: isNotificationEnabled,
-                                onNotificationTap: () async {
-                                  final result =
-                                      await NotificationSettingsDialog.show(
-                                        context: context,
-                                        initialValue: isNotificationEnabled,
-                                      );
-                                  if (result == true && context.mounted) {
-                                    // 다이얼로그에서 설정이 변경되었으면 화면 새로고침
-                                    setState(() {});
-                                  }
-                                },
-                                onLogout: () async {
-                                  await authProvider.logout();
-                                },
-                                onWithdraw: () async {
-                                  try {
-                                    final authProvider =
-                                        Provider.of<AuthProvider>(
-                                          context,
-                                          listen: false,
-                                        );
-                                    final userService = UserService();
-                                    final user = authProvider.currentUser;
+                          settingsItems: SettingsItemsBuilder.buildSettingsItems(
+                            context: context,
+                            isNotificationEnabled: isNotificationEnabled,
+                            onNotificationTap: () async {
+                              final result =
+                                  await NotificationSettingsDialog.show(
+                                    context: context,
+                                    initialValue: isNotificationEnabled,
+                                  );
+                              if (result == true && context.mounted) {
+                                // 다이얼로그에서 설정이 변경되었으면 화면 새로고침
+                                setState(() {});
+                              }
+                            },
+                            onLogout: () async {
+                              await authProvider.logout();
+                            },
+                            onWithdraw: () async {
+                              try {
+                                final authProvider = Provider.of<AuthProvider>(
+                                  context,
+                                  listen: false,
+                                );
+                                final user = authProvider.currentUser;
 
-                                    if (user == null) {
-                                      SnackbarUtil.showError(
-                                        context,
-                                        '사용자 정보를 찾을 수 없습니다.',
-                                      );
-                                      return;
-                                    }
+                                if (user == null) {
+                                  SnackbarUtil.showError(
+                                    context,
+                                    '사용자 정보를 찾을 수 없습니다.',
+                                  );
+                                  return;
+                                }
 
-                                    // UserService를 통해 사용자 데이터 삭제
-                                    await userService.deleteUser(user.userId);
+                                // 유저 계정 삭제 (모든 플레이스에서 제거 + Firebase Auth 삭제)
+                                final functions = FirebaseFunctions.instance;
+                                final deleteAccountCallable = functions
+                                    .httpsCallable('deleteUserAccount');
 
-                                    // 로그아웃 처리
-                                    await authProvider.logout();
+                                await deleteAccountCallable.call({
+                                  'userId': user.userId,
+                                });
 
-                                    if (context.mounted) {
-                                      SnackbarUtil.showSuccess(
-                                        context,
-                                        '회원탈퇴가 완료되었습니다.',
-                                      );
-                                      Navigator.pushNamedAndRemoveUntil(
-                                        context,
-                                        '/',
-                                        (route) => false,
-                                      );
-                                    }
-                                  } catch (e) {
-                                    if (context.mounted) {
-                                      SnackbarUtil.showError(
-                                        context,
-                                        '회원탈퇴 중 오류가 발생했습니다.',
-                                      );
-                                    }
-                                  }
-                                },
-                              ),
+                                // 로그아웃 처리
+                                await authProvider.logout();
+
+                                if (context.mounted) {
+                                  SnackbarUtil.showSuccess(
+                                    context,
+                                    '회원탈퇴가 완료되었습니다.',
+                                  );
+                                  Navigator.pushNamedAndRemoveUntil(
+                                    context,
+                                    '/',
+                                    (route) => false,
+                                  );
+                                }
+                              } catch (e) {
+                                if (context.mounted) {
+                                  SnackbarUtil.showError(
+                                    context,
+                                    '회원탈퇴 중 오류가 발생했습니다.',
+                                  );
+                                }
+                              }
+                            },
+                          ),
                         );
                       },
                     ),
@@ -618,7 +660,7 @@ class _MyPageScreenState extends State<MyPageScreen> {
         enrollment.isExpired || enrollment.remainingReservations == 0;
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -650,7 +692,7 @@ class _MyPageScreenState extends State<MyPageScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           // 코스 이름
-                          SizedBox(height: 4),
+                          SizedBox(height: 6),
                           Text(
                             course.name,
                             style: TextStyle(
@@ -677,7 +719,6 @@ class _MyPageScreenState extends State<MyPageScreen> {
                               ),
                             ),
                           ),
-                          SizedBox(height: 4),
                         ],
                       ),
                     ),

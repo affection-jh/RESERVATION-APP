@@ -14,7 +14,6 @@ class SessionReservation {
   final int reservedCount; // 예약된 인원 수
   final DateTime lastUpdated;
   final DateTime? createdAt;
-  final bool isCancelled; // 세션 취소 여부
 
   SessionReservation({
     required this.id,
@@ -28,7 +27,6 @@ class SessionReservation {
     required this.reservedCount,
     required this.lastUpdated,
     this.createdAt,
-    this.isCancelled = false,
   });
 
   /// 남은 좌석 수
@@ -59,7 +57,6 @@ class SessionReservation {
     int? reservedCount,
     DateTime? lastUpdated,
     DateTime? createdAt,
-    bool? isCancelled,
   }) {
     return SessionReservation(
       id: id ?? this.id,
@@ -73,7 +70,6 @@ class SessionReservation {
       reservedCount: reservedCount ?? this.reservedCount,
       lastUpdated: lastUpdated ?? this.lastUpdated,
       createdAt: createdAt ?? this.createdAt,
-      isCancelled: isCancelled ?? this.isCancelled,
     );
   }
 
@@ -110,7 +106,6 @@ class SessionReservation {
       createdAt: json['createdAt'] != null
           ? DateTime.parse(json['createdAt'] as String)
           : null,
-      isCancelled: json['isCancelled'] as bool? ?? false,
     );
   }
 

@@ -234,7 +234,7 @@ class _NameEditBottomSheetState extends State<NameEditBottomSheet> {
                                   child: CircularProgressIndicator(
                                     strokeWidth: 2,
                                     valueColor: AlwaysStoppedAnimation<Color>(
-                                      Colors.white,
+                                      AppColors.primaryGreen,
                                     ),
                                   ),
                                 )

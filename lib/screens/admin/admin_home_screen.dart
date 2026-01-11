@@ -5,7 +5,6 @@ import '../../widgets/story_card.dart';
 import '../../widgets/place_switch_widget.dart';
 import '../../widgets/compact_calendar_widget.dart';
 import '../../widgets/week_tab_bar.dart';
-import '../../widgets/count_indicator_tab_bar.dart';
 import '../../widgets/notification_icon_widget.dart';
 import '../../models/admin_models.dart';
 import 'widgets/session_detail_screen.dart';
@@ -182,7 +181,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
                   // 캘린더
                   _buildCalendarSection(),
 
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 52),
 
                   // 탭
                   _buildTabs(),
@@ -285,7 +284,6 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
           decoration: BoxDecoration(
             color: AppColors.backgroundWhite,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.borderLight),
           ),
           child: Center(
             child: Column(
@@ -312,7 +310,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
       return SizedBox(
         height: 300,
         child: Padding(
-          padding: const EdgeInsets.only(left: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 16),
           child: _buildEditableStoryCard(stories[0], 0),
         ),
       );
@@ -402,58 +400,72 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
     );
   }
 
+  // 스토리 추가 화면 표시
+  void _showStoryAddScreen(BuildContext context) {
+    final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+    final storyProvider = Provider.of<StoryProvider>(context, listen: false);
+    final currentPlace = placeProvider.currentPlace;
+
+    if (currentPlace == null) return;
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => StoryAddScreen(
+          existingStory: null, // 새 스토리 추가
+          onSave: (storyData) async {
+            await storyProvider.createStory(
+              placeId: currentPlace.id,
+              title: storyData.title,
+              content: storyData.content,
+              imageUrls: storyData.imageUrls,
+              backgroundImageUrl: storyData.backgroundImageUrl,
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   // 탭
   Widget _buildTabs() {
     final storyProvider = Provider.of<StoryProvider>(context);
+    final stories = storyProvider.stories;
 
-    return CountIndicatorTabBar(
-      labels: const ['스토리'],
-      counts: [storyProvider.stories.length],
-      selectedIndex: _selectedTab,
-      onTabChanged: (index) {
-        setState(() {
-          _selectedTab = index;
-        });
-      },
-      trailing: IconButton(
-        icon: Icon(Icons.add_circle, color: AppColors.primaryGreen, size: 34),
-        onPressed: () {
-          if (_selectedTab == 0) {
-            // 스토리 추가
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (context) => StoryAddScreen(
-                  onSave: (story) async {
-                    final placeProvider = Provider.of<PlaceProvider>(
-                      context,
-                      listen: false,
-                    );
-                    final storyProvider = Provider.of<StoryProvider>(
-                      context,
-                      listen: false,
-                    );
-
-                    if (placeProvider.currentPlace == null) return;
-
-                    await storyProvider.createStory(
-                      placeId: placeProvider.currentPlace!.id,
-                      title: story.title,
-                      content: story.content,
-                      imageUrls: story.imageUrls,
-                      backgroundImageUrl: story.backgroundImageUrl,
-                    );
-
-                    // 스토리 목록 다시 로드하여 카운트 업데이트
-                    await storyProvider.loadStories(
-                      placeProvider.currentPlace!.id,
-                    );
-                  },
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Row(
+        children: [
+          // 스토리 개수만큼 점 표시
+          if (stories.isNotEmpty)
+            Row(
+              children: List.generate(
+                stories.length,
+                (index) => Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      color: _storyPageIndex == index
+                          ? AppColors.primaryGreen
+                          : AppColors.primaryGreen.withOpacity(0.3),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
                 ),
               ),
-            );
-          }
-        },
-        tooltip: '스토리 추가',
+            ),
+
+          Spacer(),
+          IconButton(
+            icon: Icon(
+              Icons.add_circle,
+              color: AppColors.primaryGreen,
+              size: 34,
+            ),
+            onPressed: () => _showStoryAddScreen(context),
+          ),
+        ],
       ),
     );
   }

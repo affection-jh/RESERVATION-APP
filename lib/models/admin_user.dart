@@ -1,9 +1,10 @@
+import '../utils/timezone_utils.dart';
+
 /// 어드민 유저 모델
 class AdminUser {
   final String userId;
   final String name;
   final String phoneNumber;
-  final String? email;
   final String? authPin; // 관리자 인증 PIN (해시화된 값)
   final List<String> placeIds; // 관리하는 플레이스들
   final String? lastAccessedPlaceId; // 최근 접속한 플레이스 ID
@@ -15,7 +16,6 @@ class AdminUser {
     required this.userId,
     required this.name,
     required this.phoneNumber,
-    this.email,
     this.authPin,
     this.placeIds = const [],
     this.lastAccessedPlaceId,
@@ -41,7 +41,7 @@ class AdminUser {
     }
     return copyWith(
       placeIds: [...placeIds, placeId],
-      updatedAt: DateTime.now(),
+      updatedAt: TimezoneUtils.getSeoulDateTime(),
     );
   }
 
@@ -54,15 +54,13 @@ class AdminUser {
   AdminUser updateProfile({
     String? name,
     String? phoneNumber,
-    String? email,
     bool? notificationsEnabled,
   }) {
     return copyWith(
       name: name ?? this.name,
       phoneNumber: phoneNumber ?? this.phoneNumber,
-      email: email ?? this.email,
       notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
-      updatedAt: DateTime.now(),
+      updatedAt: TimezoneUtils.getSeoulDateTime(),
     );
   }
 
@@ -71,7 +69,6 @@ class AdminUser {
     String? userId,
     String? name,
     String? phoneNumber,
-    String? email,
     String? authPin,
     List<String>? placeIds,
     String? lastAccessedPlaceId,
@@ -83,7 +80,6 @@ class AdminUser {
       userId: userId ?? this.userId,
       name: name ?? this.name,
       phoneNumber: phoneNumber ?? this.phoneNumber,
-      email: email ?? this.email,
       authPin: authPin ?? this.authPin,
       placeIds: placeIds ?? this.placeIds,
       lastAccessedPlaceId: lastAccessedPlaceId ?? this.lastAccessedPlaceId,
@@ -99,7 +95,6 @@ class AdminUser {
       'userId': userId,
       'name': name,
       'phoneNumber': phoneNumber,
-      'email': email,
       'authPin': authPin,
       'placeIds': placeIds,
       'lastAccessedPlaceId': lastAccessedPlaceId,
@@ -115,7 +110,6 @@ class AdminUser {
       userId: json['userId'] as String,
       name: json['name'] as String,
       phoneNumber: json['phoneNumber'] as String,
-      email: json['email'] as String?,
       authPin: json['authPin'] as String?,
       placeIds: (json['placeIds'] as List?)?.cast<String>() ?? [],
       lastAccessedPlaceId: json['lastAccessedPlaceId'] as String?,

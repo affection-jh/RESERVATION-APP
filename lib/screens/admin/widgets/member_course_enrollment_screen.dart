@@ -571,7 +571,7 @@ class _MemberCourseEnrollmentScreenState
                                 child: CircularProgressIndicator(
                                   strokeWidth: 2,
                                   valueColor: AlwaysStoppedAnimation<Color>(
-                                    Colors.white,
+                                    AppColors.primaryGreen,
                                   ),
                                 ),
                               )

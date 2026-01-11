@@ -7,6 +7,7 @@ import '../providers/place_provider.dart';
 import '../providers/course_provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/enrollment_provider.dart';
+import '../providers/reservation_provider.dart';
 import '../widgets/cached_image_widget.dart';
 import '../utils/storage_service.dart';
 import '../utils/snackbar_util.dart';
@@ -82,21 +83,31 @@ class _ReservationScreenState extends State<ReservationScreen> {
       context,
       listen: false,
     );
+    final reservationProvider = Provider.of<ReservationProvider>(
+      context,
+      listen: false,
+    );
 
     // PlaceProvider에 현재 플레이스가 있는지 확인
     final currentPlace = placeProvider.currentPlace;
     if (currentPlace == null) return;
 
-    // 코스가 이미 로드되어 있으면 스킵
-    if (courseProvider.courses.isNotEmpty) return;
-
     try {
-      // 현재 플레이스의 코스 로드
-      await courseProvider.loadCourses(currentPlace.id);
+      // 코스 로드 (이미 로드되어 있으면 스킵)
+      if (courseProvider.courses.isEmpty) {
+        await courseProvider.loadCourses(currentPlace.id);
+      }
 
-      // enrollment 로드 (정책 엔진 기반 잠금/탭 가능에 사용)
+      // enrollment 로드 (정렬/예약 버튼 활성화에 사용)
       final userId = authProvider.currentUser?.userId;
       if (userId != null) {
+        // ✅ "예약 가능 여부"는 enrollment(남은 횟수/유효기간) + reservation(이미 예약 여부)
+        // 두 스트림이 동시에 최신이어야 UI가 틀어지지 않는다.
+        // Provider 내부에서 (userId/placeId 동일 시) 중복 구독을 방지하므로 항상 호출해도 안전.
+        await reservationProvider.loadUserReservations(
+          userId: userId,
+          placeId: currentPlace.id,
+        );
         await enrollmentProvider.loadUserEnrollments(
           userId: userId,
           placeId: currentPlace.id,
@@ -114,7 +125,10 @@ class _ReservationScreenState extends State<ReservationScreen> {
   }
 
   // 필터링된 코스 목록
-  List<Course> filteredCourses(List<Course> courses) {
+  List<Course> filteredCourses(
+    List<Course> courses, {
+    required Map<String, dynamic> enrollmentsByCourseId,
+  }) {
     final searchQuery = _searchController.text.trim().toLowerCase();
     List<Course> filtered;
 
@@ -127,15 +141,23 @@ class _ReservationScreenState extends State<ReservationScreen> {
           .toList();
     }
 
-    // 즐겨찾기 항목을 위로 정렬
+    // 정렬 우선순위:
+    // 1) 즐겨찾기
+    // 2) 등록한 코스(enrollment 존재)
     filtered.sort((a, b) {
       final aIsFavorite = _favoriteCourses.contains(a.id);
       final bIsFavorite = _favoriteCourses.contains(b.id);
 
       if (aIsFavorite && !bIsFavorite) return -1;
       if (!aIsFavorite && bIsFavorite) return 1;
-      // 둘 다 즐겨찾기이거나 둘 다 아닌 경우 원래 순서 유지
-      return 0;
+
+      final aIsEnrolled = enrollmentsByCourseId.containsKey(a.id);
+      final bIsEnrolled = enrollmentsByCourseId.containsKey(b.id);
+      if (aIsEnrolled && !bIsEnrolled) return -1;
+      if (!aIsEnrolled && bIsEnrolled) return 1;
+
+      // tie-breaker: 이름 기준(정렬 안정성 확보)
+      return a.name.compareTo(b.name);
     });
 
     return filtered;
@@ -144,7 +166,11 @@ class _ReservationScreenState extends State<ReservationScreen> {
   @override
   Widget build(BuildContext context) {
     final courseProvider = Provider.of<CourseProvider>(context);
-    final filtered = filteredCourses(courseProvider.courses);
+    final enrollmentProvider = Provider.of<EnrollmentProvider>(context);
+    final filtered = filteredCourses(
+      courseProvider.courses,
+      enrollmentsByCourseId: enrollmentProvider.enrollmentsByCourseId,
+    );
 
     return Scaffold(
       backgroundColor: AppColors.backgroundLight,
@@ -330,6 +356,13 @@ class _ReservationScreenState extends State<ReservationScreen> {
     final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
     final currentPlace = placeProvider.currentPlace;
     final isFavorite = _favoriteCourses.contains(course.id);
+    final enrollmentProvider = Provider.of<EnrollmentProvider>(
+      context,
+      listen: false,
+    );
+    final isEnrolled = enrollmentProvider.enrollmentsByCourseId.containsKey(
+      course.id,
+    );
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -368,7 +401,7 @@ class _ReservationScreenState extends State<ReservationScreen> {
                               padding: const EdgeInsets.all(4),
                               child: Container(
                                 decoration: BoxDecoration(
-                                  color: courseColor,
+                                  color: AppColors.backgroundLight,
                                   shape: BoxShape.circle,
                                 ),
                                 child: ClipOval(
@@ -398,7 +431,7 @@ class _ReservationScreenState extends State<ReservationScreen> {
                                       width: 80,
                                       height: 80,
                                       decoration: BoxDecoration(
-                                        color: courseColor,
+                                        color: AppColors.backgroundLight,
                                         shape: BoxShape.circle,
                                       ),
                                       child: Center(
@@ -471,21 +504,25 @@ class _ReservationScreenState extends State<ReservationScreen> {
                           const SizedBox(width: 12),
                           // 오른쪽: 예약하기 버튼
                           GestureDetector(
-                            onTap: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (context) =>
-                                      CalendarScreen(course: course),
-                                ),
-                              );
-                            },
+                            onTap: isEnrolled
+                                ? () {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (context) =>
+                                            CalendarScreen(course: course),
+                                      ),
+                                    );
+                                  }
+                                : null,
                             child: Container(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 26,
                                 vertical: 10,
                               ),
                               decoration: BoxDecoration(
-                                color: Colors.black,
+                                color: isEnrolled
+                                    ? Colors.black
+                                    : Colors.black12,
                                 borderRadius: BorderRadius.circular(16),
                               ),
                               child: Text(
@@ -493,7 +530,9 @@ class _ReservationScreenState extends State<ReservationScreen> {
                                 style: TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.w600,
-                                  color: Colors.white,
+                                  color: isEnrolled
+                                      ? Colors.white
+                                      : AppColors.textSecondary,
                                   letterSpacing: -0.2,
                                 ),
                               ),

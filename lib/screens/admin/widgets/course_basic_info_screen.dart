@@ -263,17 +263,17 @@ class _CourseBasicInfoScreenState extends State<CourseBasicInfoScreen> {
                           const SizedBox(height: 40),
                           // 코스 이미지 업로드
                           _buildImageUpload(),
-                          const SizedBox(height: 44),
+                          const SizedBox(height: 34),
                           // 코스명
                           Text(
                             '코스명',
                             style: TextStyle(
                               fontSize: 16,
-                              fontWeight: FontWeight.w500,
+                              fontWeight: FontWeight.w600,
                               color: AppColors.textSecondary,
                             ),
                           ),
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 4),
                           _buildModernTextField(
                             controller: _nameController,
                             focusNode: _nameFocusNode,
@@ -286,11 +286,11 @@ class _CourseBasicInfoScreenState extends State<CourseBasicInfoScreen> {
                             '설명',
                             style: TextStyle(
                               fontSize: 16,
-                              fontWeight: FontWeight.w500,
+                              fontWeight: FontWeight.w600,
                               color: AppColors.textSecondary,
                             ),
                           ),
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 4),
                           _buildModernTextField(
                             controller: _descriptionController,
                             focusNode: _descriptionFocusNode,
@@ -413,12 +413,6 @@ class _CourseBasicInfoScreenState extends State<CourseBasicInfoScreen> {
             decoration: BoxDecoration(
               color: AppColors.backgroundLight,
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: (_selectedImage != null || _uploadedImageUrl != null)
-                    ? AppColors.primaryGreen
-                    : AppColors.borderLight,
-                width: 1,
-              ),
             ),
             child: _buildImageContent(),
           ),
@@ -484,7 +478,7 @@ class _CourseBasicInfoScreenState extends State<CourseBasicInfoScreen> {
               color: Colors.black.withOpacity(0.5),
               child: const Center(
                 child: CircularProgressIndicator(
-                  color: Colors.white,
+                  color: AppColors.primaryGreen,
                   strokeWidth: 2,
                 ),
               ),

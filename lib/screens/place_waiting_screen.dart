@@ -17,6 +17,7 @@ import '../providers/story_provider.dart';
 import '../services/firestore_service.dart';
 import '../services/member_service.dart';
 import '../services/auth_service.dart';
+import '../utils/timezone_utils.dart';
 import '../widgets/invitation_request_bottom_sheet.dart';
 import '../widgets/common_dialog.dart';
 import '../widgets/cached_image_widget.dart';
@@ -40,6 +41,7 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
   final FirestoreService _firestoreService = FirestoreService();
   final MemberService _memberService = MemberService();
   final AuthService _authService = AuthService();
+  final UserService _userService = UserService();
   String? _userId;
   StreamSubscription<List<PlaceMembership>>? _membershipSubscription;
   List<PlaceMembership> _memberships = [];
@@ -48,6 +50,40 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
   bool _hasAutoNavigated = false;
   bool _requireManualEntrySelection = false;
   bool _isEnteringPlace = false;
+
+  /// AuthProvider.currentUser를 보장한다.
+  ///
+  /// - 가능한 경우: Firebase Auth UID로 users/{uid} 문서를 우선 로드
+  /// - 실패 시: phoneNumber 기반 조회(이미 정규화된 값 기대)를 시도
+  /// - 어떤 경우에도 화면 흐름을 막지 않는다.
+  Future<void> _ensureAuthProviderUser({
+    required String uid,
+    String? phoneNumber,
+  }) async {
+    try {
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      if (authProvider.currentUser?.userId == uid) return;
+
+      // 1) UID 기반 문서 우선 (rules/request.auth.uid와 정합성)
+      try {
+        final user = await _userService.getUser(uid);
+        authProvider.setCurrentUser(user);
+        return;
+      } catch (_) {
+        // ignore
+      }
+
+      // 2) phoneNumber 기반 조회 (폴백)
+      if (phoneNumber != null && phoneNumber.trim().isNotEmpty) {
+        final user = await _authService.findUserByPhone(phoneNumber);
+        if (user != null) {
+          authProvider.setCurrentUser(user);
+        }
+      }
+    } catch (_) {
+      // ignore
+    }
+  }
 
   @override
   void initState() {
@@ -134,6 +170,24 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
             _userId = uid;
             _isLoading = true;
           });
+          // ✅ Main 진입 시 enrollments/reservations 로드를 위해 currentUser 보장
+          String? fallbackPhone;
+          try {
+            fallbackPhone = widget.phoneNumber.isNotEmpty
+                ? widget.phoneNumber
+                : (firebaseUser.phoneNumber ?? '');
+            fallbackPhone = fallbackPhone.replaceAll(RegExp(r'[^\d+]'), '');
+            if (fallbackPhone.startsWith('+82')) {
+              fallbackPhone = '0${fallbackPhone.substring(3)}';
+            } else if (fallbackPhone.startsWith('+')) {
+              fallbackPhone = fallbackPhone.substring(
+                fallbackPhone.length - 10,
+              );
+            }
+          } catch (_) {
+            fallbackPhone = null;
+          }
+          await _ensureAuthProviderUser(uid: uid, phoneNumber: fallbackPhone);
           // 멤버십 구독 시작 (userId가 uid일 수도 있음)
           _startMembershipSubscription();
           return;
@@ -157,6 +211,9 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
         _userId = uid; // request.auth.uid 사용 (Firestore rules와 일치)
         _isLoading = true;
       });
+
+      // ✅ Main 진입 시 enrollments/reservations 로드를 위해 currentUser 보장
+      await _ensureAuthProviderUser(uid: uid, phoneNumber: user.phoneNumber);
 
       // 멤버십 구독 시작
       _startMembershipSubscription();
@@ -190,13 +247,16 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
   void _startMembershipSubscription() {
     if (_userId == null) return;
 
+    // 이미 같은 userId로 구독 중이면 재구독하지 않음
+    if (_membershipSubscription != null) {
+      return;
+    }
+
     _membershipSubscription = _memberService
         .watchUserMemberships(_userId!)
         .listen((memberships) async {
-          // 승인된 멤버십만 필터링
-          final approvedMemberships = memberships
-              .where((m) => m.status == PlaceMembershipStatus.approved)
-              .toList();
+          // status 제거로 모든 멤버십이 승인된 것으로 처리
+          final approvedMemberships = memberships;
 
           // 플레이스 정보 가져오기 (배치 처리로 최적화)
           final placesMap = <String, Place>{};
@@ -646,7 +706,7 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
         // 플레이스 리스트
         Expanded(
           child: ListView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
             itemCount: places.length,
             itemBuilder: (context, index) {
               return _buildPlaceCard(places[index]);
@@ -668,7 +728,7 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
           borderRadius: BorderRadius.circular(16),
         ),
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(8),
           child: Row(
             children: [
               // 플레이스 이미지 (PlaceImageWidget 사용)
@@ -778,7 +838,7 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
             userId: tempUserId,
             name: '사용자',
             phoneNumber: widget.phoneNumber,
-            createdAt: DateTime.now(),
+            createdAt: TimezoneUtils.getSeoulDateTime(),
           ),
         );
       } else {

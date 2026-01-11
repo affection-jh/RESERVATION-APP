@@ -221,8 +221,6 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
               ),
             ),
 
-            // 편집 아이콘 (관리자 마이페이지에서만)
-            const SizedBox(width: 12),
             GestureDetector(
               onTap: () {
                 Navigator.of(context)
@@ -240,15 +238,15 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
                     });
               },
               child: Container(
-                padding: const EdgeInsets.all(8),
+                padding: const EdgeInsets.only(right: 8),
                 decoration: BoxDecoration(
                   color: AppColors.backgroundLight,
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(
                   Icons.more_vert,
-                  size: 24,
-                  color: AppColors.textPrimary,
+                  size: 22,
+                  color: AppColors.textPrimary.withOpacity(0.8),
                 ),
               ),
             ),
