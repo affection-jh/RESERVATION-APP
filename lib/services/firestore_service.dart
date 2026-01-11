@@ -119,91 +119,19 @@ class FirestoreService {
     return place;
   }
 
-  /// 플레이스 삭제
+  /// 플레이스 삭제 (서버 중앙화)
   ///
-  /// 플레이스 삭제 시 관련된 모든 데이터를 정리합니다:
-  /// - places/{placeId} 문서 삭제
-  /// - places/{placeId}/reservations 하위 컬렉션 삭제
-  /// - enrollments 컬렉션에서 해당 placeId 문서 삭제
-  /// - courseMembers 컬렉션에서 해당 placeId 문서 삭제
-  /// - placeMemberships 컬렉션에서 해당 placeId 문서 삭제
-  /// - pendingMembers 컬렉션에서 해당 placeId 문서 삭제
-  /// - sessionReservations 컬렉션에서 해당 placeId 문서 삭제
-  /// - notifications 컬렉션에서 해당 placeId 문서 삭제
-  /// - stories, promotions 등 관련 데이터 삭제
+  /// Cloud Function을 통해 플레이스 삭제를 수행합니다.
+  /// 서버에서 활성 예약 확인 및 관련 데이터 정리를 안전하게 처리합니다.
   Future<void> deletePlace(String placeId) async {
-    // 0. 활성 예약 확인 (미래 날짜 예약이 있는지 확인)
-    final today = DateTime.now();
-    final todayString = _formatDate(today);
-    final activeReservationsQuery = _firestore
-        .collection('places')
-        .doc(placeId)
-        .collection('reservations')
-        .where('reservedDateString', isGreaterThanOrEqualTo: todayString)
-        .limit(1);
-
-    final activeReservationsSnapshot = await activeReservationsQuery.get();
-    if (activeReservationsSnapshot.docs.isNotEmpty) {
-      throw Exception('활성 예약이 있는 플레이스는 삭제할 수 없습니다. 먼저 예약을 취소해주세요.');
+    final callable = FirebaseFunctions.instance.httpsCallable('deletePlace');
+    try {
+      await callable.call({'placeId': placeId});
+      debugPrint('✅ [FirestoreService] 플레이스 삭제 완료: $placeId');
+    } on FirebaseFunctionsException catch (e) {
+      // 서버 에러를 그대로 전달
+      throw Exception(e.message ?? '플레이스 삭제 중 오류가 발생했습니다.');
     }
-
-    // 1. reservations 하위 컬렉션 삭제 (페이지네이션)
-    await _deleteSubcollection('places/$placeId/reservations');
-
-    // 2. enrollments 컬렉션에서 해당 placeId 문서 삭제 (페이지네이션)
-    await _deleteDocumentsByQuery(
-      _firestore.collection('enrollments').where('placeId', isEqualTo: placeId),
-    );
-
-    // 2-1. courseMembers 컬렉션에서 해당 placeId 문서 삭제 (페이지네이션)
-    await _deleteDocumentsByQuery(
-      _firestore
-          .collection('courseMembers')
-          .where('placeId', isEqualTo: placeId),
-    );
-
-    // 3. placeMemberships 컬렉션에서 해당 placeId 문서 삭제 (페이지네이션)
-    await _deleteDocumentsByQuery(
-      _firestore
-          .collection('placeMemberships')
-          .where('placeId', isEqualTo: placeId),
-    );
-
-    // 4. pendingMembers 컬렉션에서 해당 placeId 문서 삭제 (페이지네이션)
-    await _deleteDocumentsByQuery(
-      _firestore
-          .collection('pendingMembers')
-          .where('placeId', isEqualTo: placeId),
-    );
-
-    // 5. stories 컬렉션에서 해당 placeId 문서 삭제 (페이지네이션)
-    await _deleteDocumentsByQuery(
-      _firestore.collection('stories').where('placeId', isEqualTo: placeId),
-    );
-
-    // 6. promotions 컬렉션에서 해당 placeId 문서 삭제 (페이지네이션)
-    await _deleteDocumentsByQuery(
-      _firestore.collection('promotions').where('placeId', isEqualTo: placeId),
-    );
-
-    // 6-1. sessionReservations 컬렉션에서 해당 placeId 문서 삭제 (페이지네이션)
-    await _deleteDocumentsByQuery(
-      _firestore
-          .collection('sessionReservations')
-          .where('placeId', isEqualTo: placeId),
-    );
-
-    // 6-2. notifications 컬렉션에서 해당 placeId 문서 삭제 (페이지네이션)
-    await _deleteDocumentsByQuery(
-      _firestore
-          .collection('notifications')
-          .where('placeId', isEqualTo: placeId),
-    );
-
-    // 7. places/{placeId} 문서 삭제
-    await _firestore.collection('places').doc(placeId).delete();
-
-    debugPrint('✅ [FirestoreService] 플레이스 삭제 완료: $placeId');
   }
 
   /// 서브컬렉션 삭제 (페이지네이션)

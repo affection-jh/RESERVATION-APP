@@ -157,12 +157,6 @@ class _NotificationScreenState extends State<NotificationScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.notifications_none_outlined,
-              size: 64,
-              color: AppColors.textSecondary.withOpacity(0.3),
-            ),
-            const SizedBox(height: 16),
             Text(
               '알림이 없습니다',
               style: TextStyle(

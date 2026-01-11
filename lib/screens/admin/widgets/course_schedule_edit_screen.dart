@@ -1236,8 +1236,9 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
       }
     } on FirebaseFunctionsException catch (e) {
       final details = e.details;
-      final detailsMap =
-          details is Map ? Map<String, dynamic>.from(details) : null;
+      final detailsMap = details is Map
+          ? Map<String, dynamic>.from(details)
+          : null;
       final requiresBulkMove = detailsMap?['requiresBulkMove'] == true;
       if (requiresBulkMove) {
         final courseName =

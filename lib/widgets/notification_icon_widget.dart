@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:provider/provider.dart';
+import 'package:reservation/theme/app_colors.dart';
 import '../providers/notification_provider.dart';
 
 /// 알림 아이콘 위젯 (공통)
@@ -26,11 +27,11 @@ class NotificationIconWidget extends StatelessWidget {
               clipBehavior: Clip.none,
               children: [
                 SvgPicture.asset(
-                  'assets/icons/home-icon.svg',
-                  width: 26,
-                  height: 26,
+                  'assets/icons/notifiction-icon.svg',
+                  width: 24,
+                  height: 24,
                   colorFilter: const ColorFilter.mode(
-                    Colors.black,
+                    AppColors.textPrimary,
                     BlendMode.srcIn,
                   ),
                 ),
