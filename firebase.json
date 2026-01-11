@@ -1,0 +1,40 @@
+{
+    "functions": {
+        "source": "functions",
+        "predeploy": [
+            "npm --prefix \"$RESOURCE_DIR\" run build"
+        ]
+    },
+    "firestore": {
+        "rules": "firestore.rules",
+        "indexes": "firestore.indexes.json"
+    },
+    "flutter": {
+        "platforms": {
+            "android": {
+                "default": {
+                    "projectId": "reservation-f1b95",
+                    "appId": "1:754574811934:android:6b9aef7c01b661aefedf0f",
+                    "fileOutput": "android/app/google-services.json"
+                }
+            },
+            "ios": {
+                "default": {
+                    "projectId": "reservation-f1b95",
+                    "appId": "1:754574811934:ios:a2fd0eaeff6cf5c3fedf0f",
+                    "uploadDebugSymbols": false,
+                    "fileOutput": "ios/Runner/GoogleService-Info.plist"
+                }
+            },
+            "dart": {
+                "lib/firebase_options.dart": {
+                    "projectId": "reservation-f1b95",
+                    "configurations": {
+                        "android": "1:754574811934:android:6b9aef7c01b661aefedf0f",
+                        "ios": "1:754574811934:ios:a2fd0eaeff6cf5c3fedf0f"
+                    }
+                }
+            }
+        }
+    }
+}

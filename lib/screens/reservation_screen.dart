@@ -1,0 +1,583 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../theme/app_colors.dart';
+import '../models/course.dart';
+import 'admin/widgets/calendar_screen.dart';
+import '../providers/place_provider.dart';
+import '../providers/course_provider.dart';
+import '../providers/auth_provider.dart';
+import '../providers/enrollment_provider.dart';
+import '../widgets/cached_image_widget.dart';
+import '../utils/storage_service.dart';
+import '../utils/snackbar_util.dart';
+
+class ReservationScreen extends StatefulWidget {
+  const ReservationScreen({super.key});
+
+  @override
+  State<ReservationScreen> createState() => _ReservationScreenState();
+}
+
+class _ReservationScreenState extends State<ReservationScreen> {
+  String selectedTime = '12시';
+  String selectedSeat = '전체 좌석';
+  final TextEditingController _searchController = TextEditingController();
+  final StorageService _storageService = StorageService();
+  Set<String> _favoriteCourses = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDataIfNeeded();
+    _loadFavorites();
+  }
+
+  /// 즐겨찾기 목록 로드
+  Future<void> _loadFavorites() async {
+    final favorites = await _storageService.getFavoriteCourses();
+    if (mounted) {
+      setState(() {
+        _favoriteCourses = favorites.toSet();
+      });
+    }
+  }
+
+  /// 즐겨찾기 토글
+  Future<void> _toggleFavorite(String courseId) async {
+    final wasFavorite = _favoriteCourses.contains(courseId);
+    await _storageService.toggleFavoriteCourse(courseId);
+    if (mounted) {
+      setState(() {
+        if (wasFavorite) {
+          _favoriteCourses.remove(courseId);
+        } else {
+          _favoriteCourses.add(courseId);
+        }
+      });
+
+      try {
+        // 스낵바 표시
+        if (wasFavorite) {
+          SnackbarUtil.showInfo(context, '즐겨찾기에서 제거되었습니다');
+        } else {
+          SnackbarUtil.showSuccess(context, '즐겨찾기에 추가되었습니다');
+        }
+      } catch (e) {
+        // 코스를 찾을 수 없는 경우
+        if (wasFavorite) {
+          SnackbarUtil.showInfo(context, '즐겨찾기에서 제거되었습니다');
+        } else {
+          SnackbarUtil.showSuccess(context, '즐겨찾기에 추가되었습니다');
+        }
+      }
+    }
+  }
+
+  /// 데이터가 로드되지 않았으면 로드
+  Future<void> _loadDataIfNeeded() async {
+    final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+    final courseProvider = Provider.of<CourseProvider>(context, listen: false);
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final enrollmentProvider = Provider.of<EnrollmentProvider>(
+      context,
+      listen: false,
+    );
+
+    // PlaceProvider에 현재 플레이스가 있는지 확인
+    final currentPlace = placeProvider.currentPlace;
+    if (currentPlace == null) return;
+
+    // 코스가 이미 로드되어 있으면 스킵
+    if (courseProvider.courses.isNotEmpty) return;
+
+    try {
+      // 현재 플레이스의 코스 로드
+      await courseProvider.loadCourses(currentPlace.id);
+
+      // enrollment 로드 (정책 엔진 기반 잠금/탭 가능에 사용)
+      final userId = authProvider.currentUser?.userId;
+      if (userId != null) {
+        await enrollmentProvider.loadUserEnrollments(
+          userId: userId,
+          placeId: currentPlace.id,
+        );
+      }
+    } catch (e) {
+      // 에러 발생 시에도 계속 진행
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  // 필터링된 코스 목록
+  List<Course> filteredCourses(List<Course> courses) {
+    final searchQuery = _searchController.text.trim().toLowerCase();
+    List<Course> filtered;
+
+    if (searchQuery.isEmpty) {
+      // unmodifiable list를 수정 가능한 리스트로 복사
+      filtered = List.from(courses);
+    } else {
+      filtered = courses
+          .where((course) => course.name.toLowerCase().contains(searchQuery))
+          .toList();
+    }
+
+    // 즐겨찾기 항목을 위로 정렬
+    filtered.sort((a, b) {
+      final aIsFavorite = _favoriteCourses.contains(a.id);
+      final bIsFavorite = _favoriteCourses.contains(b.id);
+
+      if (aIsFavorite && !bIsFavorite) return -1;
+      if (!aIsFavorite && bIsFavorite) return 1;
+      // 둘 다 즐겨찾기이거나 둘 다 아닌 경우 원래 순서 유지
+      return 0;
+    });
+
+    return filtered;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final courseProvider = Provider.of<CourseProvider>(context);
+    final filtered = filteredCourses(courseProvider.courses);
+
+    return Scaffold(
+      backgroundColor: AppColors.backgroundLight,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // 코스 리스트
+            Expanded(child: _buildCourseList(filtered)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // 코스 리스트 목록
+  Widget _buildCourseList(List<Course> courses) {
+    // 코스가 없는 경우 빈 상태 UI 표시
+    if (courses.isEmpty) {
+      return _buildEmptyState();
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+      itemCount: courses.length,
+      itemBuilder: (context, index) {
+        final course = courses[index];
+        return _buildCourseCard(course);
+      },
+    );
+  }
+
+  // 빈 상태 UI
+  Widget _buildEmptyState() {
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      itemCount: 2,
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          // 첫 번째 카드: 없습니다 메시지
+          return Container(
+            margin: const EdgeInsets.only(bottom: 16),
+            decoration: BoxDecoration(
+              color: AppColors.backgroundWhite,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 10,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 헤더
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: AppColors.backgroundLight,
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(16),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Text(
+                        '#',
+                        style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.primaryGreen,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          '개설된 코스가 없습니다',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // 빈 캘린더 영역
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: SizedBox(
+                    height: 200,
+                    child: Center(
+                      child: Text(
+                        '코스를 등록해주세요',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        } else {
+          // 두 번째 카드: 새로운 코스를 기다리고 있어요
+          return Container(
+            margin: const EdgeInsets.only(bottom: 16),
+            decoration: BoxDecoration(
+              color: AppColors.backgroundWhite,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 10,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 헤더
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryGreen,
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(16),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.event_note_outlined,
+                        size: 28,
+                        color: Colors.white,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          '새로운 코스를\n기다리고 있어요',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // 빈 캘린더 영역
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: SizedBox(
+                    height: 200,
+                    child: Center(
+                      child: Icon(
+                        Icons.calendar_today_outlined,
+                        size: 48,
+                        color: AppColors.primaryGreen.withOpacity(0.3),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+      },
+    );
+  }
+
+  // 코스 카드
+  Widget _buildCourseCard(Course course) {
+    final courseColor = course.colorValue;
+    final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+    final currentPlace = placeProvider.currentPlace;
+    final isFavorite = _favoriteCourses.contains(course.id);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      decoration: BoxDecoration(
+        color: AppColors.backgroundWhite,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Stack(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 상단: 플레이스 정보
+                Row(
+                  children: [
+                    // 플레이스 로고 + 이름
+                    Expanded(
+                      child: Row(
+                        children: [
+                          // 원형 로고 (과목 이미지 우선, 없으면 플레이스 이미지) - 이중 테두리
+                          Container(
+                            width: 80,
+                            height: 80,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: AppColors.textSecondary.withOpacity(
+                                  0.25,
+                                ),
+                                width: 2,
+                              ),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.all(4),
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: courseColor,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: ClipOval(
+                                  child: () {
+                                    // 과목 이미지 우선
+                                    if (course.imageUrl != null &&
+                                        course.imageUrl!.isNotEmpty) {
+                                      return CourseImageWidget(
+                                        imageUrl: course.imageUrl!,
+                                        width: 80,
+                                        height: 80,
+                                      );
+                                    }
+                                    // 플레이스 이미지
+                                    final placeImageUrl =
+                                        currentPlace?.imageUrl;
+                                    if (placeImageUrl != null &&
+                                        placeImageUrl.isNotEmpty) {
+                                      return PlaceImageWidget(
+                                        imageUrl: placeImageUrl,
+                                        width: 80,
+                                        height: 80,
+                                      );
+                                    }
+                                    // 기본 텍스트
+                                    return Container(
+                                      width: 80,
+                                      height: 80,
+                                      decoration: BoxDecoration(
+                                        color: courseColor,
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Center(
+                                        child: Text(
+                                          course.name.substring(0, 1),
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  }(),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 26),
+                // 코스명 (큰 제목)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        course.name,
+                        style: TextStyle(
+                          fontSize: 26,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.textPrimary,
+                          letterSpacing: -0.5,
+                          height: 1.2,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 6),
+                      // 설명
+                      if (course.description.isNotEmpty)
+                        Text(
+                          course.description,
+                          style: TextStyle(
+                            fontSize: 17,
+                            color: AppColors.textPrimary.withOpacity(0.8),
+                            fontWeight: FontWeight.w500,
+                            letterSpacing: -0.2,
+                          ),
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      const SizedBox(height: 10),
+                      // 하단: 요일 태그 + 예약하기 버튼
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          // 왼쪽: 요일 태그
+                          Expanded(
+                            child: _buildDayChips(
+                              course.availableDayNames,
+                              courseColor,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          // 오른쪽: 예약하기 버튼
+                          GestureDetector(
+                            onTap: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (context) =>
+                                      CalendarScreen(course: course),
+                                ),
+                              );
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 26,
+                                vertical: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.black,
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: Text(
+                                '예약하기',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.white,
+                                  letterSpacing: -0.2,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // 오른쪽 위 하트 아이콘
+          Positioned(
+            top: 8,
+            right: 8,
+            child: GestureDetector(
+              onTap: () => _toggleFavorite(course.id),
+              child: Container(
+                padding: const EdgeInsets.all(6),
+
+                child: Icon(
+                  isFavorite ? Icons.favorite : Icons.favorite_border,
+                  size: 20,
+                  color: isFavorite
+                      ? const Color.fromARGB(255, 255, 79, 67)
+                      : AppColors.textSecondary.withOpacity(0.6),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 요일 칩 위젯 (태그 스타일)
+  Widget _buildDayChips(List<String> dayNames, Color courseColor) {
+    // 모든 요일(월~일)이 있으면 "매일" 표시
+    const allDays = ['월', '화', '수', '목', '금', '토', '일'];
+    final hasAllDays = allDays.every((day) => dayNames.contains(day));
+
+    if (hasAllDays) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: AppColors.backgroundLight,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(
+          '매일',
+          style: TextStyle(
+            color: AppColors.textPrimary,
+            fontSize: 15,
+            fontWeight: FontWeight.w500,
+            letterSpacing: -0.2,
+          ),
+        ),
+      );
+    }
+
+    // 일부 요일만 있으면 태그로 표시
+    return Wrap(
+      spacing: 4,
+      runSpacing: 8,
+      children: dayNames.map((dayName) {
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: AppColors.backgroundLight,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            dayName,
+            style: TextStyle(
+              color: AppColors.textPrimary,
+              fontSize: 15,
+              fontWeight: FontWeight.w500,
+              letterSpacing: -0.2,
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
