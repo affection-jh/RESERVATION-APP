@@ -1828,10 +1828,8 @@ export const cancelEnrollment = functions.https.onCall(async (data, context) => 
         );
     }
 
-    // 트랜잭션: 예약 삭제 + sessionReservations decrement + enrollment 만료 + (선택) remainingReservations 복구
+    // 트랜잭션: 예약 삭제 + sessionReservations decrement + enrollment 삭제
     await db.runTransaction(async (tx) => {
-        let cancelledCount = 0;
-
         // 예약 취소 처리
         for (const doc of toCancel) {
             const r = doc.data() as any;
@@ -1851,22 +1849,12 @@ export const cancelEnrollment = functions.https.onCall(async (data, context) => 
             }
 
             tx.delete(doc.ref);
-            cancelledCount++;
         }
 
-        // enrollment remainingReservations 복구(최대 totalReservations)
-        const eData = enrollmentDoc.data() as any;
-        const remaining = Number((eData?.remainingReservations ?? 0) as any);
-        const total = Number((eData?.totalReservations ?? 0) as any);
-        const newRemaining = Math.min(total, remaining + cancelledCount);
-
-        // 등록 만료 처리: validUntil을 어제로
-        const yesterday = new Date(now.getTime() - 24 * 60 * 60_000);
-        tx.update(enrollmentDoc.ref, {
-            remainingReservations: newRemaining,
-            validUntil: admin.firestore.Timestamp.fromDate(yesterday),
-            lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
-        } as any);
+        // ✅ 수강 취소는 "만료 처리"가 아니라 enrollment 문서 자체를 삭제한다.
+        // - UI에서 코스가 완전히 제거되어야 함
+        // - onEnrollmentDeleted 트리거가 courseMembers를 자동 정리함
+        tx.delete(enrollmentDoc.ref);
     });
 
     // 사용자 알림(1회, 집계)
@@ -1889,6 +1877,126 @@ export const cancelEnrollment = functions.https.onCall(async (data, context) => 
 
     logFunctionSuccess(functionName, { callerId, placeId, targetUserId, courseId, cancelledReservations: toCancel.length, cascade });
     return { success: true, cancelledReservations: toCancel.length, courseName };
+});
+
+/**
+ * 멤버 삭제(플레이스에서 추방) (관리자)
+ *
+ * 목표:
+ * - 해당 플레이스의 접근을 완전히 제거한다.
+ *
+ * 처리:
+ * - placeMemberships 삭제 (userId_placeId)
+ * - enrollments 삭제 (userId + placeId)
+ * - courseMembers 삭제 (userId + placeId)  // enrollments 삭제 트리거로도 정리되지만, 레거시/정합성 위해 한번 더 정리
+ * - places/{placeId}/reservations 중 해당 userId 예약 삭제 (onReservationDeleted가 sessionReservations reservedCount 정리)
+ * - pendingMembers(placeId_phoneNumber) 문서 삭제 (있으면)
+ */
+export const removeMemberFromPlace = functions.https.onCall(async (data, context) => {
+    const functionName = 'removeMemberFromPlace';
+    logFunctionStart(functionName, { userId: context.auth?.uid, ...data });
+
+    if (!context.auth?.uid) {
+        logFunctionError(functionName, new Error('Unauthenticated'), { data });
+        throw new functions.https.HttpsError('unauthenticated', '로그인이 필요합니다.');
+    }
+
+    const callerId = context.auth.uid;
+    const placeId = String(data?.placeId ?? '');
+    const targetUserId = String(data?.userId ?? '');
+    const phoneNumberRaw = String(data?.phoneNumber ?? '');
+
+    if (!placeId || !targetUserId) {
+        throw new functions.https.HttpsError(
+            'invalid-argument',
+            'placeId, userId가 필요합니다.',
+        );
+    }
+
+    // place 단위 관리자만 가능
+    await assertAdminForPlaceUid(callerId, placeId);
+
+    const db = admin.firestore();
+
+    // 1) placeMemberships 삭제 (고정 docId 우선)
+    const membershipId = `${targetUserId}_${placeId}`;
+    const membershipRef = db.collection('placeMemberships').doc(membershipId);
+    const membershipDoc = await membershipRef.get();
+    if (membershipDoc.exists) {
+        await membershipRef.delete();
+    } else {
+        // 혹시 레거시 docId가 있을 수 있어 query로 한번 더 정리
+        await deleteByQuery(
+            db,
+            db.collection('placeMemberships')
+                .where('userId', '==', targetUserId)
+                .where('placeId', '==', placeId),
+        );
+    }
+
+    // 2) enrollments 삭제 (userId + placeId)
+    const deletedEnrollments = await deleteByQuery(
+        db,
+        db.collection('enrollments')
+            .where('userId', '==', targetUserId)
+            .where('placeId', '==', placeId),
+    );
+
+    // 3) courseMembers 삭제 (userId + placeId)
+    const deletedCourseMembers = await deleteByQuery(
+        db,
+        db.collection('courseMembers')
+            .where('userId', '==', targetUserId)
+            .where('placeId', '==', placeId),
+    );
+
+    // 4) reservations 삭제 (places/{placeId}/reservations)
+    const deletedReservations = await deleteByQuery(
+        db,
+        db.collection('places')
+            .doc(placeId)
+            .collection('reservations')
+            .where('userId', '==', targetUserId),
+    );
+
+    // 5) pendingMembers 삭제 (있으면)
+    const phoneDigits = phoneNumberRaw.replace(/[^\d]/g, '');
+    let deletedPending = 0;
+    if (phoneDigits) {
+        const pendingId = `${placeId}_${phoneDigits}`;
+        const pendingRef = db.collection('pendingMembers').doc(pendingId);
+        const pendingDoc = await pendingRef.get();
+        if (pendingDoc.exists) {
+            await pendingRef.delete();
+            deletedPending = 1;
+        } else {
+            // 레거시/오염 데이터 정리: placeId + phoneNumber로도 한번 더
+            deletedPending = await deleteByQuery(
+                db,
+                db.collection('pendingMembers')
+                    .where('placeId', '==', placeId)
+                    .where('phoneNumber', '==', phoneDigits),
+            );
+        }
+    }
+
+    logFunctionSuccess(functionName, {
+        callerId,
+        placeId,
+        targetUserId,
+        deletedEnrollments,
+        deletedCourseMembers,
+        deletedReservations,
+        deletedPending,
+    });
+
+    return {
+        success: true,
+        deletedEnrollments,
+        deletedCourseMembers,
+        deletedReservations,
+        deletedPending,
+    };
 });
 
 /**

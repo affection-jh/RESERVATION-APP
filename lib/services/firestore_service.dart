@@ -501,7 +501,7 @@ class FirestoreService {
   /// 코스 등록(수강) 취소 (관리자)
   ///
   /// - 미래 예약이 존재하면 서버가 requiresCascade=true로 막습니다.
-  /// - cascade=true로 재호출하면 미래 예약을 연쇄 취소 후 등록을 만료 처리합니다.
+  /// - cascade=true로 재호출하면 미래 예약을 연쇄 취소 후 등록을 **삭제**합니다.
   Future<Map<String, dynamic>> cancelEnrollment({
     required String placeId,
     required String userId,

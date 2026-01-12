@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../models/reservation.dart';
 import '../services/firestore_service.dart';
+import '../utils/timezone_utils.dart';
 
 enum ReservationOperationType { create, cancel, move }
 
@@ -43,6 +44,45 @@ class ReservationProvider with ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get error => _error;
   Stream<ReservationOperationEvent> get operationEvents => _opController.stream;
+
+  static int _parseTimeToMinutes(String? time) {
+    if (time == null || time.isEmpty) return 0;
+    final parts = time.split(':');
+    if (parts.isEmpty) return 0;
+    final h = int.tryParse(parts[0]) ?? 0;
+    final m = (parts.length > 1) ? (int.tryParse(parts[1]) ?? 0) : 0;
+    return (h.clamp(0, 23) * 60) + (m.clamp(0, 59));
+  }
+
+  static DateTime _reservationStartDateTime(Reservation r) {
+    final minutes = _parseTimeToMinutes(r.startTime);
+    return DateTime(
+      r.reservedDate.year,
+      r.reservedDate.month,
+      r.reservedDate.day,
+      minutes ~/ 60,
+      minutes % 60,
+    );
+  }
+
+  /// "임박한 예약"이 먼저 오도록 정렬:
+  /// - 미래/현재 예약: 시간 오름차순 (가장 임박한 순)
+  /// - 과거 예약: 시간 내림차순 (가장 최근 과거가 위)
+  static List<Reservation> _sortUpcomingFirst(List<Reservation> input) {
+    final now = TimezoneUtils.getSeoulDateTime();
+    final next = [...input];
+    next.sort((a, b) {
+      final aDt = _reservationStartDateTime(a);
+      final bDt = _reservationStartDateTime(b);
+      final aUpcoming = !aDt.isBefore(now);
+      final bUpcoming = !bDt.isBefore(now);
+      if (aUpcoming != bUpcoming) return aUpcoming ? -1 : 1;
+      final cmp = aUpcoming ? aDt.compareTo(bDt) : bDt.compareTo(aDt);
+      if (cmp != 0) return cmp;
+      return a.id.compareTo(b.id);
+    });
+    return next;
+  }
 
   String _reservationKey(Reservation r) {
     final d = r.reservedDate;
@@ -162,7 +202,7 @@ class ReservationProvider with ChangeNotifier {
       if (idx >= 0) {
         final next = [..._reservations];
         next[idx] = updated;
-        _reservations = next;
+        _reservations = _sortUpcomingFirst(next);
         notifyListeners();
       }
 
@@ -226,7 +266,7 @@ class ReservationProvider with ChangeNotifier {
           .watchUserReservations(userId, placeId: placeId)
           .listen(
             (reservations) {
-              _reservations = reservations;
+              _reservations = _sortUpcomingFirst(reservations);
               _error = null;
               _isLoading = false;
               notifyListeners();
@@ -254,9 +294,9 @@ class ReservationProvider with ChangeNotifier {
     return _firestoreService
         .watchUserReservations(userId, placeId: placeId)
         .map((reservations) {
-          _reservations = reservations;
+          _reservations = _sortUpcomingFirst(reservations);
           notifyListeners();
-          return reservations;
+          return _reservations;
         });
   }
 
@@ -316,7 +356,7 @@ class ReservationProvider with ChangeNotifier {
       final alreadyExists = _reservations.any((r) => _reservationKey(r) == key);
       debugPrint('[ReservationProvider] 이미 존재하는 예약인지: $alreadyExists');
       if (!alreadyExists) {
-        _reservations = [..._reservations, created];
+        _reservations = _sortUpcomingFirst([..._reservations, created]);
         debugPrint(
           '[ReservationProvider] 로컬 예약 목록에 추가 (총 ${_reservations.length}개)',
         );

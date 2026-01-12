@@ -122,6 +122,10 @@ class FcmService {
           context,
           listen: false,
         );
+        final placeProvider = Provider.of<PlaceProvider>(
+          context,
+          listen: false,
+        );
 
         // 현재 로그인한 사용자 정보 확인
         final currentAdmin = authProvider.currentAdmin;
@@ -134,10 +138,15 @@ class FcmService {
           return;
         }
 
+        // 현재 플레이스 ID 가져오기
+        final currentPlace = placeProvider.currentPlace;
+        final placeId = currentPlace?.id;
+
         notificationProvider.addNotificationFromId(
           notificationId,
           userId,
           isAdmin,
+          placeId: placeId,
         );
       } catch (e) {
         print('[FcmService] _addNotificationToProvider error: $e');

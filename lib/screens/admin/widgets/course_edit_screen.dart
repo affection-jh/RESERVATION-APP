@@ -56,9 +56,17 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
   @override
   void initState() {
     super.initState();
+    // Place의 description 값을 기본값으로 사용
+    final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+    final currentPlace = placeProvider.currentPlace;
+    final placeDescription = currentPlace?.description ?? '';
+
     // 기존 코스 정보 로드
     _nameController.text = widget.course.name;
-    _descriptionController.text = widget.course.description;
+    // description이 비어있으면 Place의 description을 기본값으로 사용
+    _descriptionController.text = widget.course.description.isEmpty
+        ? placeDescription
+        : widget.course.description;
     _uploadedImageUrl = widget.course.imageUrl;
     _existingImageUrl = widget.course.imageUrl; // 원본 URL 저장 (삭제용)
     _selectedColor = widget.course.color;
@@ -539,9 +547,9 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                               errorText: _nameErrorText,
                             ),
                             const SizedBox(height: 20),
-                            // 설명
+                            // 위치/설명
                             Text(
-                              '설명',
+                              '위치',
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w500,
@@ -552,7 +560,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                             _buildModernTextField(
                               controller: _descriptionController,
                               focusNode: _descriptionFocusNode,
-                              hintText: '코스에 대한 설명을 입력해주세요',
+                              hintText: '위치 또는 설명을 입력해주세요',
                               minLines: 2,
                             ),
                             const SizedBox(height: 24),

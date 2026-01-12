@@ -115,9 +115,22 @@ class _HomeScreenState extends State<HomeScreen> {
     List<Reservation> reservations,
     List<Course> courses,
   ) {
-    // reservedAt 기준으로 정렬 (최신순)
+    // 날짜가 빠른 순으로, 같다면 시간이 빠른 순으로 정렬
     final sortedReservations = List<Reservation>.from(reservations)
-      ..sort((a, b) => b.reservedAt.compareTo(a.reservedAt));
+      ..sort((a, b) {
+        // 날짜 비교
+        final dateCompare = a.reservedDate.compareTo(b.reservedDate);
+        if (dateCompare != 0) return dateCompare;
+
+        // 날짜가 같으면 시간 비교
+        final timeCompare = _parseTimeToMinutes(
+          a.startTime,
+        ).compareTo(_parseTimeToMinutes(b.startTime));
+        if (timeCompare != 0) return timeCompare;
+
+        // 날짜와 시간이 같으면 ID로 정렬 (안정적인 정렬)
+        return a.id.compareTo(b.id);
+      });
 
     // 최대 5개만 가져오기
     final recentReservations = sortedReservations.take(5).toList();
@@ -800,6 +813,19 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // 파싱 실패 시 원본 반환
     return cleanedTime;
+  }
+
+  // 시간 문자열을 분 단위로 변환
+  int _parseTimeToMinutes(String time) {
+    final parts = time.split(':');
+    if (parts.length != 2) {
+      // ":"가 없으면 시간만 있는 경우
+      final hour = int.tryParse(time.trim()) ?? 0;
+      return hour * 60;
+    }
+    final hour = int.tryParse(parts[0].trim()) ?? 0;
+    final minute = int.tryParse(parts[1].trim()) ?? 0;
+    return hour * 60 + minute;
   }
 
   // Helper 메서드들

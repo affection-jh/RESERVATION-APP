@@ -32,9 +32,9 @@ class AdminPlaceRegistrationScreen extends StatefulWidget {
 class _AdminPlaceRegistrationScreenState
     extends State<AdminPlaceRegistrationScreen> {
   final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _locationController = TextEditingController();
+  final TextEditingController _descriptionController = TextEditingController();
   final FocusNode _nameFocusNode = FocusNode();
-  final FocusNode _locationFocusNode = FocusNode();
+  final FocusNode _descriptionFocusNode = FocusNode();
   File? _selectedImage;
   String? _uploadedImageUrl; // 업로드된 이미지 URL
   bool _isUploading = false; // 업로드 중 여부
@@ -46,7 +46,7 @@ class _AdminPlaceRegistrationScreenState
     _nameFocusNode.addListener(() {
       setState(() {});
     });
-    _locationFocusNode.addListener(() {
+    _descriptionFocusNode.addListener(() {
       setState(() {});
     });
   }
@@ -54,15 +54,15 @@ class _AdminPlaceRegistrationScreenState
   @override
   void dispose() {
     _nameController.dispose();
-    _locationController.dispose();
+    _descriptionController.dispose();
     _nameFocusNode.dispose();
-    _locationFocusNode.dispose();
+    _descriptionFocusNode.dispose();
     super.dispose();
   }
 
   void _removeFocus() {
     _nameFocusNode.unfocus();
-    _locationFocusNode.unfocus();
+    _descriptionFocusNode.unfocus();
   }
 
   bool _isFormValid() {
@@ -70,14 +70,14 @@ class _AdminPlaceRegistrationScreenState
     final hasImage = _selectedImage != null || _uploadedImageUrl != null;
     // 이름과 설명이 입력되어 있어야 함
     final hasName = _nameController.text.trim().isNotEmpty;
-    final hasLocation = _locationController.text.trim().isNotEmpty;
+    final hasDescription = _descriptionController.text.trim().isNotEmpty;
 
     // 이미지는 선택 사항으로 변경 (이름과 설명만 필수)
-    final isValid = hasName && hasLocation;
+    final isValid = hasName && hasDescription;
 
     // 디버깅용 로그
     debugPrint(
-      '[AdminPlaceRegistration] _isFormValid: hasImage=$hasImage, hasName=$hasName, hasLocation=$hasLocation, isValid=$isValid',
+      '[AdminPlaceRegistration] _isFormValid: hasImage=$hasImage, hasName=$hasName, hasDescription=$hasDescription, isValid=$isValid',
     );
     debugPrint(
       '[AdminPlaceRegistration] _selectedImage: ${_selectedImage != null}, _uploadedImageUrl: ${_uploadedImageUrl != null}',
@@ -432,7 +432,7 @@ class _AdminPlaceRegistrationScreenState
           focusNode: _nameFocusNode,
           textInputAction: TextInputAction.next,
           onSubmitted: (_) {
-            _locationFocusNode.requestFocus();
+            _descriptionFocusNode.requestFocus();
           },
           decoration: TextFieldDecorationUtil.defaultDecoration(
             hintText: '플레이스 이름을 입력하세요',
@@ -450,7 +450,7 @@ class _AdminPlaceRegistrationScreenState
     );
   }
 
-  // 위치 및 설명 입력
+  // 설명 입력
   Widget _buildLocationInput() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -470,15 +470,15 @@ class _AdminPlaceRegistrationScreenState
             color: AppColors.textPrimary,
             fontWeight: FontWeight.w600,
           ),
-          controller: _locationController,
-          focusNode: _locationFocusNode,
+          controller: _descriptionController,
+          focusNode: _descriptionFocusNode,
           textInputAction: TextInputAction.done,
           maxLines: null,
           minLines: 3,
           decoration: TextFieldDecorationUtil.defaultDecoration(
             hintText: '플레이스 설명을 입력하세요',
             floatingLabelBehavior: FloatingLabelBehavior.always,
-            hasFocus: _locationFocusNode.hasFocus,
+            hasFocus: _descriptionFocusNode.hasFocus,
           ),
 
           onChanged: (_) => setState(() {}),
@@ -531,7 +531,7 @@ class _AdminPlaceRegistrationScreenState
                       MaterialPageRoute(
                         builder: (context) => AdminGreetingSettingScreen(
                           placeName: _nameController.text.trim(),
-                          placeLocation: _locationController.text.trim(),
+                          placeDescription: _descriptionController.text.trim(),
                           placeImage: _uploadedImageUrl == null
                               ? _selectedImage
                               : null, // 업로드 완료된 경우 null

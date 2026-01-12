@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 import '../../../theme/app_colors.dart';
 import '../../../models/course.dart';
 import '../../../models/admin_models.dart';
@@ -210,14 +209,9 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
           // pendingMember 전체 정보 저장
           _pendingMember = foundPendingMember;
 
-          // pendingMember가 존재하고 courseIds가 있으면 원본 저장
-          if (foundPendingMember != null &&
-              foundPendingMember.courseIds != null &&
-              foundPendingMember.courseIds!.isNotEmpty) {
-            _allPendingCourseIds = foundPendingMember.courseIds!;
-          } else {
-            _allPendingCourseIds = [];
-          }
+          // pendingMembers는 courseIds(legacy) 또는 courseEnrollments(new) 둘 다 올 수 있음.
+          // 항상 derivedCourseIds로 표준화해서 사용한다.
+          _allPendingCourseIds = foundPendingMember?.derivedCourseIds ?? [];
 
           // enrollments에 없는 pending 코스만 필터링
           _updatePendingCourseIds();
@@ -541,53 +535,26 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     final adminUserId = authProvider.currentAdmin?.userId;
 
     try {
-      // 삭제 진행 중 로딩 다이얼로그
-      showDialog(
-        context: rootContext,
-        barrierDismissible: false,
-        builder: (_) {
-          return WillPopScope(
-            onWillPop: () async => false,
-            child: const Center(
-              child: CircularProgressIndicator(color: AppColors.primaryGreen),
-            ),
-          );
-        },
-      );
-
-      // 회원탈퇴(플레이스에서 제거):
-      // - placeMembership 삭제 + 해당 place의 enrollments 전부 삭제
-      // - 서버에서 원자적으로 처리 (권한/정합성)
-      final callable = FirebaseFunctions.instance.httpsCallable(
-        'removeMemberFromPlace',
-      );
-      await callable.call({
-        'placeId': placeId,
-        'userId': widget.member.userId,
-        'phoneNumber': normalizedPhone, // pendingMembers 정리용(있으면 삭제)
-        if (adminUserId != null)
-          'adminUserId': adminUserId, // 관리자 userId (Firebase Auth 미사용 시)
-      });
-
-      // users.placeIds는 더 이상 사용하지 않음 (courseMembers 기반으로 조회)
-
-      // MemberProvider 새로고침
+      // ✅ 로딩 오버레이는 제거하고, 멤버 카드에서 "삭제중" 오버레이로 표시한다.
       final memberProvider = Provider.of<MemberProvider>(
         rootContext,
         listen: false,
       );
+      await memberProvider.removeMemberFromPlace(
+        placeId: placeId,
+        userId: widget.member.userId,
+        phoneNumber: normalizedPhone,
+        adminUserId: adminUserId,
+      );
+
+      // users.placeIds는 더 이상 사용하지 않음 (courseMembers 기반으로 조회)
+
+      // 스트림으로 자동 반영되지만, 즉시 갱신이 필요하면 재로드
       await memberProvider.loadMembers(placeId);
 
       // 성공 시 바텀시트 다시 열지 않음
-      // 로딩 다이얼로그 닫기
-      rootNavigator.pop();
       SnackbarUtil.showSuccess(rootContext, '멤버가 삭제되었습니다.');
     } catch (e) {
-      // 로딩 다이얼로그가 떠있으면 닫기
-      try {
-        rootNavigator.pop();
-      } catch (_) {}
-
       SnackbarUtil.showError(rootContext, '멤버 삭제 중 오류가 발생했습니다: $e');
       // 에러 발생 시 바텀시트 다시 열기
       MemberDetailBottomSheet.show(context: rootContext, member: widget.member);
@@ -909,14 +876,16 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
       children: [
         // 코스 그리드
         SizedBox(
-          height: totalCourses > 2 ? 350 : 300,
+          width: double.infinity,
           child: GridView.builder(
-            padding: const EdgeInsets.all(0),
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            padding: EdgeInsets.zero,
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 2,
-              crossAxisSpacing: 4,
-              mainAxisSpacing: 4,
-              childAspectRatio: 1.2,
+              crossAxisSpacing: 8,
+              mainAxisSpacing: 8,
+              childAspectRatio: 1.15,
             ),
             itemCount: totalCourses,
             itemBuilder: (context, index) {
@@ -1207,8 +1176,11 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     final needsAction = _needsAction(enrollment);
 
     return Stack(
+      fit: StackFit.expand,
       children: [
         Container(
+          width: double.infinity,
+          height: double.infinity,
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           decoration: BoxDecoration(
             color: AppColors.textPrimary,
@@ -1275,8 +1247,11 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     final needsAction = _needsAction(enrollment);
 
     return Stack(
+      fit: StackFit.expand,
       children: [
         Container(
+          width: double.infinity,
+          height: double.infinity,
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           decoration: BoxDecoration(
             color: AppColors.backgroundLight,

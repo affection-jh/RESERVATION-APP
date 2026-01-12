@@ -23,13 +23,13 @@ class _SplashScreenState extends State<SplashScreen>
 
     // 쉬머 효과용 컨트롤러
     _shimmerController = AnimationController(
-      duration: const Duration(milliseconds: 1500),
+      duration: const Duration(milliseconds: 1000),
       vsync: this,
     );
 
     // 색상 전환용 컨트롤러
     _colorController = AnimationController(
-      duration: const Duration(milliseconds: 800),
+      duration: const Duration(milliseconds: 400),
       vsync: this,
     );
 

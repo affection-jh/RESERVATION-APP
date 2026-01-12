@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:image_picker/image_picker.dart';
@@ -93,7 +94,7 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
   Future<void> _pickImage() async {
     try {
       final List<XFile> images = await _imagePicker.pickMultiImage(
-        imageQuality: 85,
+        imageQuality: 70, // 화질을 낮춰서 파일 크기 감소
       );
 
       if (images.isNotEmpty) {
@@ -126,6 +127,64 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
     }
   }
 
+  /// 이미지 리사이징 (최대 너비 1920px로 제한)
+  Future<File?> _resizeImageIfNeeded(File imageFile) async {
+    try {
+      final bytes = await imageFile.readAsBytes();
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final image = frame.image;
+
+      // 이미지가 이미 작으면 리사이징 불필요
+      if (image.width <= 1920) {
+        image.dispose();
+        return imageFile;
+      }
+
+      // 비율 유지하며 리사이징
+      final ratio = image.width / image.height;
+      final newWidth = 1920;
+      final newHeight = (1920 / ratio).round();
+
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      final paint = Paint()..filterQuality = FilterQuality.medium;
+
+      canvas.drawImageRect(
+        image,
+        Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
+        Rect.fromLTWH(0, 0, newWidth.toDouble(), newHeight.toDouble()),
+        paint,
+      );
+      image.dispose();
+
+      final picture = recorder.endRecording();
+      final resizedImage = await picture.toImage(newWidth, newHeight);
+      final byteData = await resizedImage.toByteData(
+        format: ui.ImageByteFormat.png,
+      );
+      resizedImage.dispose();
+      picture.dispose();
+
+      if (byteData == null) {
+        return imageFile;
+      }
+
+      // 임시 파일에 저장 (원본 확장자 유지)
+      final originalPath = imageFile.path;
+      final extension = originalPath.contains('.')
+          ? originalPath.substring(originalPath.lastIndexOf('.'))
+          : '.jpg';
+      final resizedFile = File('${originalPath}_resized$extension');
+      await resizedFile.writeAsBytes(byteData.buffer.asUint8List());
+
+      return resizedFile;
+    } catch (e) {
+      debugPrint('이미지 리사이징 실패: $e');
+      return imageFile; // 실패 시 원본 파일 반환
+    }
+  }
+
   Future<void> _uploadImageByFile(File file) async {
     final filePath = file.path;
 
@@ -134,11 +193,24 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
     if (index == -1) return; // 파일이 이미 제거되었거나 없음
 
     try {
+      // 이미지 리사이징 (필요한 경우)
+      final resizedFile = await _resizeImageIfNeeded(file);
+      final fileToUpload = resizedFile ?? file;
+
       final storageService = firebase_storage.StorageService();
       final imageUrl = await storageService.uploadImage(
-        imageFile: file,
+        imageFile: fileToUpload,
         folder: 'stories',
       );
+
+      // 리사이징된 임시 파일 삭제
+      if (resizedFile != null && resizedFile.path != file.path) {
+        try {
+          await resizedFile.delete();
+        } catch (e) {
+          debugPrint('임시 파일 삭제 실패: $e');
+        }
+      }
 
       if (mounted) {
         setState(() {
@@ -336,11 +408,24 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
         final file = entry.value;
 
         try {
+          // 이미지 리사이징 (필요한 경우)
+          final resizedFile = await _resizeImageIfNeeded(file);
+          final fileToUpload = resizedFile ?? file;
+
           final storageService = firebase_storage.StorageService();
           final imageUrl = await storageService.uploadImage(
-            imageFile: file,
+            imageFile: fileToUpload,
             folder: 'stories',
           );
+
+          // 리사이징된 임시 파일 삭제
+          if (resizedFile != null && resizedFile.path != file.path) {
+            try {
+              await resizedFile.delete();
+            } catch (e) {
+              debugPrint('임시 파일 삭제 실패: $e');
+            }
+          }
           return {
             'success': true,
             'url': imageUrl,

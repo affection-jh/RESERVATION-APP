@@ -22,14 +22,14 @@ import '../../../utils/snackbar_util.dart';
 
 class AdminGreetingSettingScreen extends StatefulWidget {
   final String placeName;
-  final String placeLocation;
+  final String placeDescription;
   final File? placeImage;
   final String? placeImageUrl; // 이미 업로드된 이미지 URL
 
   const AdminGreetingSettingScreen({
     super.key,
     required this.placeName,
-    required this.placeLocation,
+    required this.placeDescription,
     this.placeImage,
     this.placeImageUrl,
   });
@@ -513,7 +513,7 @@ class _AdminGreetingSettingScreenState
                       // 플레이스 생성
                       final place = await placeProvider.createPlace(
                         name: widget.placeName,
-                        location: widget.placeLocation,
+                        description: widget.placeDescription,
                         appBarText: widget.placeName,
                         greetingText: _greetingTextController.text.trim(),
                         imageUrl: imageUrl,

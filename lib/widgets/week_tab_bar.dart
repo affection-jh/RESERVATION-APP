@@ -21,29 +21,37 @@ class WeekTabBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          // 동적으로 생성된 주차 탭들
-          ...availableWeekOffsets.asMap().entries.map((entry) {
-            final index = entry.key;
-            final weekOffset = entry.value;
-            return Padding(
-              padding: EdgeInsets.only(
-                left: index == 0 ? 20 : 0,
-                right: index < availableWeekOffsets.length - 1 ? 24 : 0,
-              ),
-              child: _buildWeekTab(
-                WeekRangeCalculator.getWeekLabel(weekOffset),
-                index,
-                showDot: showDot,
-              ),
-            );
-          }),
-          if (trailing != null) ...[const SizedBox(width: 24), trailing!],
-        ],
-      ),
+    return Row(
+      children: [
+        // 주차 탭들을 Expanded로 감싸서 남은 공간 차지
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                // 동적으로 생성된 주차 탭들
+                ...availableWeekOffsets.asMap().entries.map((entry) {
+                  final index = entry.key;
+                  final weekOffset = entry.value;
+                  return Padding(
+                    padding: EdgeInsets.only(
+                      left: index == 0 ? 20 : 0,
+                      right: index < availableWeekOffsets.length - 1 ? 24 : 0,
+                    ),
+                    child: _buildWeekTab(
+                      WeekRangeCalculator.getWeekLabel(weekOffset),
+                      index,
+                      showDot: showDot,
+                    ),
+                  );
+                }),
+              ],
+            ),
+          ),
+        ),
+        // trailing을 오른쪽에 배치
+        if (trailing != null) ...[trailing!, SizedBox(width: 20)],
+      ],
     );
   }
 

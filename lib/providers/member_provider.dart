@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import '../models/user.dart';
 import '../models/pending_member.dart';
 import '../services/user_service.dart';
@@ -48,6 +49,34 @@ class MemberProvider with ChangeNotifier {
   /// 멤버가 삭제 중인지 확인
   bool isDeletingMember(String memberId) {
     return _deletingMemberIds.contains(memberId);
+  }
+
+  /// 멤버 삭제 (플레이스에서 제거)
+  ///
+  /// - 서버(Cloud Function)에서 placeMembership 삭제 + 해당 place의 enrollments 전부 삭제 + (있으면) pendingMembers 정리
+  /// - UI는 deletingMemberIds로 카드에 "삭제중" 오버레이를 표시할 수 있음
+  Future<void> removeMemberFromPlace({
+    required String placeId,
+    required String userId,
+    required String phoneNumber, // pendingMembers 정리용
+    String? adminUserId, // (옵션) 관리자 userId
+  }) async {
+    startDeletingMember(userId);
+    try {
+      final normalizedPhone = phoneNumber.replaceAll(RegExp(r'[^\d]'), '');
+
+      final callable = FirebaseFunctions.instance.httpsCallable(
+        'removeMemberFromPlace',
+      );
+      await callable.call({
+        'placeId': placeId,
+        'userId': userId,
+        'phoneNumber': normalizedPhone,
+        if (adminUserId != null) 'adminUserId': adminUserId,
+      });
+    } finally {
+      finishDeletingMember(userId);
+    }
   }
 
   /// 플레이스 멤버 목록 로드 (courseMembers 기반 + pendingMembers)

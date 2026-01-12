@@ -502,6 +502,7 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
           courseColor: Color(widget.colorSelectionData.selectedColor),
           canBulkCancel: false,
           existingSessions: existingSessionsForDay,
+          allDaySessions: _daySessions, // 모든 요일의 세션 정보 전달 (일괄 적용 가능 여부 확인용)
           isEditMode: isEditMode,
           onBulkRegistrationChanged: (isBulkRegistration) {
             setState(() {

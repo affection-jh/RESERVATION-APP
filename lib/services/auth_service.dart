@@ -61,6 +61,13 @@ class AuthService {
   /// 현재 선택된 플레이스
   Place? get currentPlace => _currentPlace;
 
+  /// 익명 로그인
+  Future<firebase_auth.User> signInAnonymously() async {
+    await AuthService.ensureFirebaseInitialized();
+    final userCredential = await _auth.signInAnonymously();
+    return userCredential.user!;
+  }
+
   // ==================== 전화번호 인증 (Firebase Auth 사용) ====================
 
   /// 전화번호로 SMS 인증 코드 발송

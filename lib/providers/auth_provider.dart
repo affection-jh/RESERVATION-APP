@@ -4,7 +4,6 @@ import '../services/auth_service.dart';
 import '../services/fcm_service.dart';
 import '../models/user.dart';
 import '../models/admin_user.dart';
-import '../main.dart';
 
 /// 인증 상태 Provider
 ///
@@ -283,92 +282,6 @@ class AuthProvider with ChangeNotifier {
     if (_currentAdmin == null) return;
     _currentAdmin = null;
     notifyListeners();
-  }
-
-  /// 테스터용 관리자 로그인 (인증 없이)
-  Future<void> loginAsTestAdmin() async {
-    if (!AppConfig.isTesterMode) {
-      throw Exception('테스터 모드가 활성화되지 않았습니다.');
-    }
-
-    _isLoading = true;
-    _error = null;
-    notifyListeners();
-
-    try {
-      // APPLE 플레이스 정보
-      const String testPlaceId = 'place_1768212613747';
-      const String testAdminId = 'wBEUT13LkfhQa9mrLAVaCqpLot93';
-
-      // 테스터용 관리자 생성
-      final testAdmin = AdminUser(
-        userId: testAdminId,
-        name: '애플테스터',
-        phoneNumber: '01000000000',
-        placeIds: [testPlaceId],
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
-      );
-
-      _currentAdmin = testAdmin;
-      _currentUser = null;
-      _isAuthenticated = true;
-      _error = null;
-      notifyListeners();
-
-      // FCM 초기화
-      await _initializeFcm(testAdminId);
-    } catch (e) {
-      _error = e.toString();
-      _currentAdmin = null;
-      _isAuthenticated = false;
-      notifyListeners();
-      rethrow;
-    } finally {
-      _isLoading = false;
-    }
-  }
-
-  /// 테스터용 일반 유저 로그인 (인증 없이)
-  Future<void> loginAsTestUser() async {
-    if (!AppConfig.isTesterMode) {
-      throw Exception('테스터 모드가 활성화되지 않았습니다.');
-    }
-
-    _isLoading = true;
-    _error = null;
-    notifyListeners();
-
-    try {
-      const String testUserId = 'test_user_apple_tester';
-
-      // 테스터용 일반 유저 생성
-      final testUser = User(
-        userId: testUserId,
-        name: '애플테스터',
-        phoneNumber: '01000000001',
-        placeIds: [],
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
-      );
-
-      _currentUser = testUser;
-      _currentAdmin = null;
-      _isAuthenticated = true;
-      _error = null;
-      notifyListeners();
-
-      // FCM 초기화
-      await _initializeFcm(testUserId);
-    } catch (e) {
-      _error = e.toString();
-      _currentUser = null;
-      _isAuthenticated = false;
-      notifyListeners();
-      rethrow;
-    } finally {
-      _isLoading = false;
-    }
   }
 
   /// FCM 초기화 (공통 메서드)

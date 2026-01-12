@@ -20,6 +20,8 @@ import '../providers/place_provider.dart';
 import '../providers/enrollment_provider.dart';
 import '../utils/snackbar_util.dart';
 import '../widgets/cached_image_widget.dart';
+import '../widgets/week_tab_bar.dart';
+import '../utils/timezone_utils.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'dart:async';
 
@@ -40,6 +42,42 @@ class _MyPageScreenState extends State<MyPageScreen> {
   DateTime? _highlightedDate;
   // _isPlaceListExpanded: 현재 화면에서는 사용되지 않음 (필요 시 다시 추가)
   StreamSubscription<ReservationOperationEvent>? _reservationOpSub;
+  int _selectedWeekTab = 0;
+
+  List<int> _computeAvailableWeekOffsets(List<Reservation> reservations) {
+    if (reservations.isEmpty) {
+      return [0]; // 예약이 없으면 현재 주차만 표시
+    }
+
+    final now = TimezoneUtils.getSeoulDateTime();
+    final thisWeekMonday = DateTime(
+      now.year,
+      now.month,
+      now.day,
+    ).subtract(Duration(days: now.weekday - DateTime.monday));
+
+    // 예약이 있는 주차만 추출
+    final Set<int> weekOffsets = {};
+    for (final r in reservations) {
+      final d = DateTime(
+        r.reservedDate.year,
+        r.reservedDate.month,
+        r.reservedDate.day,
+      );
+      final diffDays = d.difference(thisWeekMonday).inDays;
+      final w = (diffDays / 7).floor();
+      if (w >= 0) {
+        // 현재 주차 이후의 예약만 포함
+        weekOffsets.add(w);
+      }
+    }
+
+    // 현재 주차는 항상 포함 (예약이 없어도)
+    weekOffsets.add(0);
+
+    final sortedOffsets = weekOffsets.toList()..sort();
+    return sortedOffsets;
+  }
 
   @override
   void initState() {
@@ -169,6 +207,25 @@ class _MyPageScreenState extends State<MyPageScreen> {
     }
   }
 
+  /// 예약 날짜로부터 주차 오프셋 계산
+  int _calculateWeekOffset(DateTime reservationDate) {
+    final now = TimezoneUtils.getSeoulDateTime();
+    final thisWeekMonday = DateTime(
+      now.year,
+      now.month,
+      now.day,
+    ).subtract(Duration(days: now.weekday - DateTime.monday));
+
+    final targetDate = DateTime(
+      reservationDate.year,
+      reservationDate.month,
+      reservationDate.day,
+    );
+
+    final diffDays = targetDate.difference(thisWeekMonday).inDays;
+    return (diffDays / 7).floor();
+  }
+
   void _processHighlightReservationWithRetry({
     int attempt = 0,
     bool shouldShowBottomSheet = false,
@@ -184,7 +241,21 @@ class _MyPageScreenState extends State<MyPageScreen> {
     final reservationInfo = widget.highlightReservation!;
     final userReservations = reservationProvider.reservations;
 
+    // 먼저 해당 예약의 주차로 탭 이동
     final DateTime targetDate = reservationInfo['reservedDate'] as DateTime;
+    final weekOffset = _calculateWeekOffset(targetDate);
+
+    // availableWeekOffsets 계산
+    final availableWeekOffsets = _computeAvailableWeekOffsets(userReservations);
+
+    // 해당 주차의 탭 인덱스 찾기
+    final tabIndex = availableWeekOffsets.indexOf(weekOffset);
+    if (tabIndex >= 0 && tabIndex != _selectedWeekTab) {
+      setState(() {
+        _selectedWeekTab = tabIndex;
+      });
+    }
+
     final Reservation? match = userReservations.cast<Reservation?>().firstWhere(
       (r) =>
           r != null &&
@@ -207,7 +278,14 @@ class _MyPageScreenState extends State<MyPageScreen> {
       return;
     }
 
-    _processHighlightReservation(shouldShowBottomSheet: shouldShowBottomSheet);
+    // 탭 이동 후 약간의 지연을 두고 애니메이션 실행
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted) {
+        _processHighlightReservation(
+          shouldShowBottomSheet: shouldShowBottomSheet,
+        );
+      }
+    });
   }
 
   // 사용자가 예약한 코스만 필터링
@@ -392,6 +470,10 @@ class _MyPageScreenState extends State<MyPageScreen> {
     final courseProvider = Provider.of<CourseProvider>(context);
 
     final userReservations = reservationProvider.reservations;
+    final availableWeekOffsets = _computeAvailableWeekOffsets(userReservations);
+    if (_selectedWeekTab >= availableWeekOffsets.length) {
+      _selectedWeekTab = availableWeekOffsets.length - 1;
+    }
     final userCourses = _getUserCourses(
       userReservations,
       courseProvider.courses,
@@ -413,25 +495,20 @@ class _MyPageScreenState extends State<MyPageScreen> {
 
                     const SizedBox(height: 34),
 
-                    // 제목
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
-                      child: Row(
-                        children: [
-                          Text(
-                            '내 예약 현황',
-                            style: TextStyle(
-                              fontSize: 19,
-                              fontWeight: FontWeight.bold,
-                              color: AppColors.primaryGreen,
-                            ),
-                          ),
-                          const Spacer(),
-                        ],
+                    // 주차 이동 탭 (최소 4주 이후까지)
+                    if (userReservations.isNotEmpty) ...[
+                      WeekTabBar(
+                        selectedIndex: _selectedWeekTab,
+                        onTabChanged: (index) {
+                          setState(() {
+                            _selectedWeekTab = index;
+                          });
+                        },
+                        availableWeekOffsets: availableWeekOffsets,
+                        showDot: true,
                       ),
-                    ),
-
-                    const SizedBox(height: 12),
+                      const SizedBox(height: 12),
+                    ],
 
                     // 예약이 없을 때
                     if (userReservations.isEmpty)
@@ -477,7 +554,7 @@ class _MyPageScreenState extends State<MyPageScreen> {
                             courses: userCourses,
                             usage:
                                 CompactCalendarUsage.userWeeklyReservationsView,
-                            weekOffset: 0,
+                            weekOffset: availableWeekOffsets[_selectedWeekTab],
                             height: 500, // 마이페이지에서는 더 큰 높이
                             onSessionTap: _onSessionTap,
                             hideCourseSelector: true, // 일정보기 모드에서는 드롭다운 숨김

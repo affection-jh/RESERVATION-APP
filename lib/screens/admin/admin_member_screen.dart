@@ -475,11 +475,8 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
       return StreamBuilder<List<User>>(
         stream: memberProvider.watchCourseMembers(selectedCourseId),
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(
-              child: CircularProgressIndicator(color: AppColors.primaryGreen),
-            );
-          }
+          // 기존 데이터가 있으면 먼저 표시 (탭 전환 시 로딩 제거)
+          final courseMembers = snapshot.hasData ? snapshot.data! : <User>[];
 
           if (snapshot.hasError) {
             return Center(
@@ -494,7 +491,6 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
             );
           }
 
-          final courseMembers = snapshot.data ?? [];
           // pendingMembers도 포함 (선택된 코스에 등록된 것만)
           final placeProvider = Provider.of<PlaceProvider>(
             context,
@@ -576,11 +572,8 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
       return StreamBuilder<List<User>>(
         stream: memberProvider.watchCourseMembers(firstCourseId),
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(
-              child: CircularProgressIndicator(color: AppColors.primaryGreen),
-            );
-          }
+          // 기존 데이터가 있으면 먼저 표시 (탭 전환 시 로딩 제거)
+          final courseMembers = snapshot.hasData ? snapshot.data! : <User>[];
 
           if (snapshot.hasError) {
             return Center(
@@ -594,9 +587,6 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
               ),
             );
           }
-
-          // snapshot.data는 이미 합쳐진 User 리스트
-          final courseMembers = snapshot.data ?? [];
 
           // pendingMembers도 포함 (선택된 코스 중 하나라도 등록된 것만)
           final placeProvider = Provider.of<PlaceProvider>(
@@ -715,11 +705,10 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
     return StreamBuilder<List<CourseEnrollment>>(
       stream: _cachedExtensionRequestsStream,
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(
-            child: CircularProgressIndicator(color: AppColors.primaryGreen),
-          );
-        }
+        // 기존 데이터가 있으면 먼저 표시 (탭 전환 시 로딩 제거)
+        final enrollmentsWithRequests = snapshot.hasData
+            ? snapshot.data!
+            : <CourseEnrollment>[];
 
         if (snapshot.hasError) {
           return Center(
@@ -733,8 +722,6 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
             ),
           );
         }
-
-        final enrollmentsWithRequests = snapshot.data ?? [];
 
         // userId 중복 제거 (여러 코스에 연장 요청이 있어도 한 번만 표시)
         final requestUserIds = enrollmentsWithRequests
@@ -840,14 +827,15 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
         return FutureBuilder<List<User>>(
           future: userService.getUsersByIds(missingIds),
           builder: (context, userSnap) {
-            if (userSnap.connectionState == ConnectionState.waiting &&
-                byId.isEmpty) {
-              return const Center(
-                child: CircularProgressIndicator(color: AppColors.primaryGreen),
-              );
-            }
+            // 기존 데이터가 있으면 먼저 표시 (탭 전환 시 로딩 제거)
+            final fetched = userSnap.hasData ? userSnap.data! : const <User>[];
 
-            final fetched = userSnap.data ?? const <User>[];
+            // 기존 데이터가 없고 로딩 중일 때만 빈 화면 표시
+            if (userSnap.connectionState == ConnectionState.waiting &&
+                byId.isEmpty &&
+                fetched.isEmpty) {
+              return const SizedBox.shrink();
+            }
             final mergedById = <String, User>{
               ...byId,
               for (final u in fetched) u.userId: u,
@@ -903,11 +891,10 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
         isActive: true, // 활성 멤버만 조회
       ),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(
-            child: CircularProgressIndicator(color: AppColors.primaryGreen),
-          );
-        }
+        // 기존 데이터가 있으면 먼저 표시 (탭 전환 시 로딩 제거)
+        final activeCourseMembers = snapshot.hasData
+            ? snapshot.data!
+            : <CourseMember>[];
 
         if (snapshot.hasError) {
           return Center(
@@ -921,8 +908,6 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
             ),
           );
         }
-
-        final activeCourseMembers = snapshot.data ?? [];
 
         // userId 중복 제거
         final activeUserIds = activeCourseMembers
@@ -1255,11 +1240,12 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
       }
 
       // 트랜잭션 완료 후 프로바이더 상태 동기화
-      // MemberProvider는 watchUsersByPlace Stream을 사용하므로
-      // Firestore 변경사항이 자동으로 반영됨 (트랜잭션 완료 후)
-      // 명시적 새로고침은 불필요하지만, 필요시 아래 주석 해제
-      // final memberProvider = Provider.of<MemberProvider>(context, listen: false);
-      // await memberProvider.loadMembers(placeId);
+      // MemberProvider는 스트림을 사용하지만, 즉시 동기화를 보장하기 위해 명시적 새로고침
+      final memberProvider = Provider.of<MemberProvider>(
+        context,
+        listen: false,
+      );
+      await memberProvider.loadMembers(placeId);
     } catch (e) {
       SnackbarUtil.showError(context, '멤버 등록 중 오류가 발생했습니다: $e');
     }

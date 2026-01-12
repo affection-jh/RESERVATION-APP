@@ -30,11 +30,6 @@ import 'services/fcm_service.dart';
 import 'utils/navigator_key.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
-// 테스터 모드 플래그 (static 변수)
-class AppConfig {
-  static bool isTesterMode = false;
-}
-
 // 백그라운드 메시지 핸들러 (최상위 함수로 선언)
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {

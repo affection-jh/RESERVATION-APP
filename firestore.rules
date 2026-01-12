@@ -225,8 +225,20 @@ service cloud.firestore {
         resource.data.userId == request.auth.uid ||
         isAdmin()
       );
-      // 유저가 가입 요청 생성
-      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      // 생성:
+      // - 유저 본인이 가입 요청 생성
+      // - 또는 관리자가 "자신이 관리하는 플레이스"에 대해 멤버십을 생성(초대/승인 플로우)
+      //   (MemberService가 고정 docId: `${userId}_${placeId}` 로 생성하므로, 이를 강제해서 권한 상승을 막는다)
+      allow create: if signedIn() && (
+        request.resource.data.userId == request.auth.uid ||
+        (
+          request.resource.data.placeId != null &&
+          isAdminForPlace(request.resource.data.placeId) &&
+          membershipId == request.resource.data.userId + '_' + request.resource.data.placeId &&
+          // invitedBy가 있다면 "현재 관리자"여야 함 (없으면 통과)
+          (!('invitedBy' in request.resource.data) || request.resource.data.invitedBy == request.auth.uid)
+        )
+      );
       // 업데이트/삭제: 본인 또는 관리자 (정책적으로 더 엄격히 하고 싶으면 추후 분리)
       allow update, delete: if signedIn() && (
         resource.data.userId == request.auth.uid ||

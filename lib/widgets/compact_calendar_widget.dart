@@ -37,6 +37,7 @@ class CompactCalendarWidget extends StatefulWidget {
   final Function(Course course, CourseSession session, DateTime date)?
   onSessionTap;
   final VoidCallback? onAddCourseTap; // 코스 등록하기 버튼 콜백
+  final Function(Course? course)? onCourseSelected; // 코스 선택 콜백
   final bool hideCourseSelector; // 코스 드롭다운 숨기기
   final int? currentReservationDayOfWeek; // 현재 예약된 세션의 요일
   final String? currentReservationStartTime; // 현재 예약된 세션의 시작 시간
@@ -58,6 +59,7 @@ class CompactCalendarWidget extends StatefulWidget {
     this.height = 300,
     this.onSessionTap,
     this.onAddCourseTap,
+    this.onCourseSelected,
     this.hideCourseSelector = false,
     this.currentReservationDayOfWeek,
     this.currentReservationStartTime,
@@ -146,6 +148,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
           setState(() {
             _selectedCourse = widget.courses.first;
           });
+          // 콜백 호출
+          widget.onCourseSelected?.call(widget.courses.first);
         }
         return;
       }
@@ -167,6 +171,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
           setState(() {
             _selectedCourse = savedCourse;
           });
+          // 콜백 호출
+          widget.onCourseSelected?.call(savedCourse);
         }
       } else {
         // 저장된 코스가 없으면 첫 번째 코스 선택
@@ -174,6 +180,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
           setState(() {
             _selectedCourse = widget.courses.first;
           });
+          // 콜백 호출
+          widget.onCourseSelected?.call(widget.courses.first);
         }
       }
     } catch (e) {
@@ -182,6 +190,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
         setState(() {
           _selectedCourse = widget.courses.first;
         });
+        // 콜백 호출
+        widget.onCourseSelected?.call(widget.courses.first);
       }
     }
 
@@ -315,6 +325,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
             _selectedCourse = widget.courses.last;
             _didInitialJump = false; // 초기 점프 리셋
           });
+          // 콜백 호출
+          widget.onCourseSelected?.call(widget.courses.last);
         }
       } else {
         // 선택된 코스가 여전히 목록에 있는지 확인
@@ -329,10 +341,14 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                 _selectedCourse = widget.courses.first;
                 _didInitialJump = false; // 초기 점프 리셋
               });
+              // 콜백 호출
+              widget.onCourseSelected?.call(widget.courses.first);
             } else {
               setState(() {
                 _selectedCourse = null;
               });
+              // 콜백 호출
+              widget.onCourseSelected?.call(null);
             }
           } else {
             // 선택된 코스가 여전히 있으면, 최신 정보로 업데이트 (이름, 색상, 이미지, 세션 등 모든 변경사항 반영)
@@ -361,6 +377,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                 _selectedCourse = updatedCourse;
                 _didInitialJump = false; // 초기 점프 리셋
               });
+              // 콜백 호출 (업데이트된 코스 정보)
+              widget.onCourseSelected?.call(updatedCourse);
             }
           }
         } else if (widget.courses.isNotEmpty) {
@@ -369,6 +387,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
             _selectedCourse = widget.courses.first;
             _didInitialJump = false; // 초기 점프 리셋
           });
+          // 콜백 호출
+          widget.onCourseSelected?.call(widget.courses.first);
         }
       }
     }
@@ -416,7 +436,9 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       final today = TimezoneUtils.getSeoulDateTime();
       final daysFromMonday = today.weekday - 1;
       final thisWeekMonday = today.subtract(Duration(days: daysFromMonday));
-      final weekStart = thisWeekMonday; // weekOffset 무시하고 항상 이번주
+      final weekStart = thisWeekMonday.add(
+        Duration(days: 7 * widget.weekOffset),
+      ); // weekOffset 반영 (0:이번주, 1:다음주...)
 
       // 월~일 모든 요일 생성
       final allWeekDates = List.generate(7, (index) {
@@ -613,6 +635,9 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                   _didInitialJump = false; // 코스 변경 시 초기 점프 리셋
                 });
 
+                // 콜백 호출
+                widget.onCourseSelected?.call(newCourse);
+
                 _subscribeWeekSessionReservations();
 
                 // 마지막 선택 코스 저장
@@ -666,6 +691,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
 
   // 빈 상태 UI
   Widget _buildEmptyState() {
+    final message = widget.weeklyViewMode ? '예약이 없어요' : '아직 코스가 없어요';
     return Container(
       height: widget.height,
       color: widget.backgroundColor ?? AppColors.backgroundWhite,
@@ -682,7 +708,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
             ),
             const SizedBox(height: 12),*/
             Text(
-              '아직 코스가 없어요',
+              message,
               style: TextStyle(
                 fontSize: 16,
                 color: AppColors.textSecondary,
@@ -769,9 +795,11 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       color: widget.backgroundColor ?? AppColors.backgroundWhite,
       child: SingleChildScrollView(
         controller: _scrollController,
-        physics: _usage == CompactCalendarUsage.courseDetailView
+        physics:
+            (_usage == CompactCalendarUsage.courseDetailView ||
+                _usage == CompactCalendarUsage.adminNavigate)
             ? const NeverScrollableScrollPhysics()
-            : null, // courseDetailView 모드에서는 스크롤 비활성화
+            : null, // courseDetailView 및 adminNavigate 모드에서는 스크롤 비활성화
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -868,7 +896,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
           return resDate == targetDate;
         });
 
-        if (isInWeek) {
+        if (isInWeek && widget.courses.isNotEmpty) {
           // 예약된 세션 찾기
           final course = widget.courses.firstWhere(
             (c) => c.id == reservation.courseId,
@@ -913,7 +941,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
           return resDate == targetDate;
         });
 
-        if (isInWeek) {
+        if (isInWeek && widget.courses.isNotEmpty) {
           final course = widget.courses.firstWhere(
             (c) => c.id == reservation.courseId,
             orElse: () => widget.courses.first,
@@ -1141,7 +1169,9 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
           return resDate == targetDate;
         });
 
-        if (isInWeek && weekdays.contains(reservation.dayOfWeek)) {
+        if (isInWeek &&
+            weekdays.contains(reservation.dayOfWeek) &&
+            widget.courses.isNotEmpty) {
           final course = widget.courses.firstWhere(
             (c) => c.id == reservation.courseId,
             orElse: () => widget.courses.first,
@@ -1634,6 +1664,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       final sessionStartSlots = <int, _ReservationSessionInfo>{};
 
       for (final reservation in dateReservations) {
+        if (widget.courses.isEmpty) continue;
         final course = widget.courses.firstWhere(
           (c) => c.id == reservation.courseId,
           orElse: () => widget.courses.first,

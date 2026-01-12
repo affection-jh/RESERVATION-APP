@@ -581,20 +581,22 @@ class _CalendarScreenState extends State<CalendarScreen> {
               onTap: () => Navigator.of(context).pop(),
               child: Icon(Icons.arrow_back_ios, color: AppColors.textPrimary),
             ),
-            WeekTabBar(
-              selectedIndex: _availableWeekOffsets
-                  .indexOf(_weekOffset)
-                  .clamp(0, _availableWeekOffsets.length - 1),
-              onTabChanged: (index) {
-                if (index < _availableWeekOffsets.length) {
-                  setState(() {
-                    _weekOffset = _availableWeekOffsets[index];
-                    _didInitialJump = false;
-                  });
-                  _subscribeWeekSessionReservations();
-                }
-              },
-              availableWeekOffsets: _availableWeekOffsets,
+            Expanded(
+              child: WeekTabBar(
+                selectedIndex: _availableWeekOffsets
+                    .indexOf(_weekOffset)
+                    .clamp(0, _availableWeekOffsets.length - 1),
+                onTabChanged: (index) {
+                  if (index < _availableWeekOffsets.length) {
+                    setState(() {
+                      _weekOffset = _availableWeekOffsets[index];
+                      _didInitialJump = false;
+                    });
+                    _subscribeWeekSessionReservations();
+                  }
+                },
+                availableWeekOffsets: _availableWeekOffsets,
+              ),
             ),
           ],
         ),

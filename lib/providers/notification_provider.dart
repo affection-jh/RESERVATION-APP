@@ -9,25 +9,51 @@ class NotificationProvider with ChangeNotifier {
   List<AppNotification> _notifications = [];
   bool _isLoading = false;
   String? _error;
+  String? _currentPlaceId; // 현재 플레이스 ID 저장
 
   List<AppNotification> get notifications => List.unmodifiable(_notifications);
   bool get isLoading => _isLoading;
   String? get error => _error;
 
-  // 읽지 않은 알림 개수
-  int get unreadCount => _notifications.where((n) => !n.isRead).length;
+  // 읽지 않은 알림 개수 (현재 플레이스에 맞는 것만)
+  int get unreadCount {
+    return _notifications.where((n) {
+      // 플레이스 필터링: placeId가 null이거나 현재 플레이스와 일치
+      if (_currentPlaceId != null && n.placeId != null) {
+        if (n.placeId != _currentPlaceId) {
+          return false;
+        }
+      }
+      return !n.isRead;
+    }).length;
+  }
 
-  /// 사용자 알림 목록 로드 (역할별)
-  Future<void> loadNotifications(String userId, {bool isAdmin = false}) async {
+  /// 사용자 알림 목록 로드 (역할별, 플레이스별)
+  Future<void> loadNotifications(
+    String userId, {
+    bool isAdmin = false,
+    String? placeId,
+  }) async {
     _isLoading = true;
     _error = null;
+    _currentPlaceId = placeId; // 현재 플레이스 ID 저장
     notifyListeners();
 
     try {
-      _notifications = await _firestoreService.getUserNotifications(
+      final allNotifications = await _firestoreService.getUserNotifications(
         userId,
         isAdmin: isAdmin,
       );
+
+      // 현재 플레이스에 맞는 알림만 필터링
+      if (placeId != null) {
+        _notifications = allNotifications
+            .where((n) => n.placeId == null || n.placeId == placeId)
+            .toList();
+      } else {
+        _notifications = allNotifications;
+      }
+
       _error = null;
     } catch (e) {
       // 자세한 오류 메시지는 로그에만 기록하고, UI에는 간단한 메시지만 표시
@@ -96,11 +122,13 @@ class NotificationProvider with ChangeNotifier {
   /// [notificationId] 알림 ID
   /// [currentUserId] 현재 로그인한 사용자 ID (보안 검증용)
   /// [isAdmin] 관리자 알림인지 여부 (보안 검증용)
+  /// [placeId] 현재 플레이스 ID (필터링용)
   Future<void> addNotificationFromId(
     String notificationId,
     String currentUserId,
-    bool isAdmin,
-  ) async {
+    bool isAdmin, {
+    String? placeId,
+  }) async {
     try {
       // 이미 존재하는 알림인지 확인
       if (_notifications.any((n) => n.id == notificationId)) {
@@ -128,6 +156,16 @@ class NotificationProvider with ChangeNotifier {
           return;
         }
 
+        // 플레이스 필터링: 현재 플레이스와 일치하는 알림만 추가
+        if (placeId != null && notification.placeId != null) {
+          if (notification.placeId != placeId) {
+            debugPrint(
+              '[NotificationProvider] addNotificationFromId: 알림 플레이스 불일치 (알림: ${notification.placeId}, 현재: $placeId)',
+            );
+            return;
+          }
+        }
+
         // 최신 알림을 맨 앞에 추가
         _notifications.insert(0, notification);
         // createdAt 기준으로 정렬 (최신순)
@@ -149,6 +187,7 @@ class NotificationProvider with ChangeNotifier {
     _notifications = [];
     _isLoading = false;
     _error = null;
+    _currentPlaceId = null;
     notifyListeners();
   }
 }

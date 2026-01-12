@@ -753,7 +753,6 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         // 새로 등록
         final newPlace = await placeProvider.createPlace(
           name: _nameController.text.trim(),
-          location: _locationController.text.trim(),
           description: _descriptionController.text.trim().isEmpty
               ? null
               : _descriptionController.text.trim(),

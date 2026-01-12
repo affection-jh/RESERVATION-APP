@@ -29,8 +29,11 @@ class _ReservationScreenState extends State<ReservationScreen> {
   @override
   void initState() {
     super.initState();
-    _loadDataIfNeeded();
-    _loadFavorites();
+    // 빌드 완료 후 데이터 로드 (setState during build 에러 방지)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadDataIfNeeded();
+      _loadFavorites();
+    });
   }
 
   /// 즐겨찾기 목록 로드

@@ -509,6 +509,13 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
             : '${successCount}명 성공, ${failCount}명 실패';
         SnackbarUtil.showError(context, failMessage);
       }
+
+      // 멤버 등록 후 리스트 동기화
+      final memberProvider = Provider.of<MemberProvider>(
+        context,
+        listen: false,
+      );
+      await memberProvider.loadMembers(placeId);
     } catch (e) {
       // 에러 메시지를 클라이언트 친화적으로 변환
       String errorMessage = '멤버 등록 중 오류가 발생했습니다.';

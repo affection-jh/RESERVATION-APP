@@ -16,6 +16,7 @@ import '../../providers/story_provider.dart' show Story, StoryProvider;
 import '../../models/course.dart';
 import '../../services/firestore_service.dart';
 import '../../utils/week_range_calculator.dart';
+import '../../utils/storage_service.dart';
 
 class AdminHomeScreen extends StatefulWidget {
   const AdminHomeScreen({super.key});
@@ -71,8 +72,36 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
         storyProvider.loadStories(currentPlace.id),
       ]);
 
-      // 정책 기반 주차 범위 계산
-      await _calculateWeekOffsets(courseProvider.courses, currentPlace.id);
+      // 저장된 마지막 선택 코스 또는 첫 번째 코스의 정책 기반 주차 범위 계산
+      if (courseProvider.courses.isNotEmpty) {
+        Course? initialCourse;
+        try {
+          // 저장된 마지막 선택 코스 ID 가져오기
+          final storageService = StorageService();
+          final lastCourseId = await storageService.getLastSelectedCourseId(
+            currentPlace.id,
+          );
+
+          if (lastCourseId != null) {
+            // 저장된 코스가 현재 코스 목록에 있는지 확인
+            initialCourse = courseProvider.courses.firstWhere(
+              (course) => course.id == lastCourseId,
+              orElse: () => courseProvider.courses.first,
+            );
+          } else {
+            // 저장된 코스가 없으면 첫 번째 코스 선택
+            initialCourse = courseProvider.courses.first;
+          }
+        } catch (_) {
+          // 에러 발생 시 첫 번째 코스 선택
+          initialCourse = courseProvider.courses.first;
+        }
+
+        // 초기 코스의 정책에 따라 주차 범위 설정
+        await _calculateWeekOffsetsForCourse(initialCourse, currentPlace.id);
+      } else {
+        setState(() => _availableWeekOffsets = [0, 1, 2]);
+      }
 
       // 데이터 로드 완료 표시
       if (mounted) {
@@ -86,43 +115,45 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
     }
   }
 
-  /// 모든 코스의 정책을 확인하여 최대 주차 범위 계산
-  Future<void> _calculateWeekOffsets(
-    List<Course> courses,
+  /// 선택된 코스의 정책을 확인하여 주차 범위 계산
+  Future<void> _calculateWeekOffsetsForCourse(
+    Course? course,
     String placeId,
   ) async {
-    if (courses.isEmpty) {
+    if (course == null) {
       setState(() => _availableWeekOffsets = [0, 1, 2]);
       return;
     }
 
-    int maxWeekOffset = 0;
-    for (final course in courses) {
-      try {
-        final policy = await _firestoreService.getCoursePolicy(
-          courseId: course.id,
-          placeId: placeId,
-        );
-        final offsets = WeekRangeCalculator.getAvailableWeekOffsets(policy);
-        if (offsets.isNotEmpty) {
-          final max = offsets.reduce((a, b) => a > b ? a : b);
-          if (max > maxWeekOffset) maxWeekOffset = max;
-        }
-      } catch (_) {
-        // 정책 로드 실패 시 기본값 사용
-      }
-    }
+    try {
+      final policy = await _firestoreService.getCoursePolicy(
+        courseId: course.id,
+        placeId: placeId,
+      );
+      final offsets = WeekRangeCalculator.getAvailableWeekOffsets(policy);
 
-    // 최대 주차 범위로 리스트 생성 (최소 3개, 최대 8개)
-    final maxWeeks = (maxWeekOffset + 1).clamp(3, 8);
-    if (mounted) {
-      setState(() {
-        _availableWeekOffsets = List.generate(maxWeeks, (i) => i);
-        // 선택된 탭이 범위를 벗어나면 조정
-        if (_selectedWeekTab >= _availableWeekOffsets.length) {
-          _selectedWeekTab = _availableWeekOffsets.length - 1;
+      if (offsets.isEmpty) {
+        // 정책에서 주차 범위를 찾을 수 없으면 기본값
+        setState(() => _availableWeekOffsets = [0, 1, 2]);
+      } else {
+        // 정책에서 계산된 주차 범위 사용 (최소 1개, 최대 8개)
+        final maxWeekOffset = offsets.reduce((a, b) => a > b ? a : b);
+        final maxWeeks = (maxWeekOffset + 1).clamp(1, 8);
+        if (mounted) {
+          setState(() {
+            _availableWeekOffsets = List.generate(maxWeeks, (i) => i);
+            // 선택된 탭이 범위를 벗어나면 조정
+            if (_selectedWeekTab >= _availableWeekOffsets.length) {
+              _selectedWeekTab = _availableWeekOffsets.length - 1;
+            }
+          });
         }
-      });
+      }
+    } catch (_) {
+      // 정책 로드 실패 시 기본값 사용
+      if (mounted) {
+        setState(() => _availableWeekOffsets = [0, 1, 2]);
+      }
     }
   }
 
@@ -134,6 +165,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
     final placeProvider = Provider.of<PlaceProvider>(context);
     final currentPlaceId = placeProvider.currentPlace?.id;
     if (currentPlaceId != null && _loadedPlaceId != currentPlaceId) {
+      // 플레이스가 변경되었으면 로드 플래그 리셋
+      _loadedPlaceId = null;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _loadDataIfNeeded();
       });
@@ -259,6 +292,16 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
                 );
               },
               onAddCourseTap: () => _showCourseAddFlow(context),
+              onCourseSelected: (Course? course) async {
+                // 선택된 코스의 정책에 따라 주차 범위 업데이트
+                final placeId = Provider.of<PlaceProvider>(
+                  context,
+                  listen: false,
+                ).currentPlace?.id;
+                if (placeId != null) {
+                  await _calculateWeekOffsetsForCourse(course, placeId);
+                }
+              },
             ),
           ),
         );
@@ -430,8 +473,20 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Row(
         children: [
-          // 스토리 개수만큼 점 표시
-          if (stories.isNotEmpty)
+          // 스토리가 없으면 "스토리" 텍스트, 있으면 점 인디케이터 표시
+          if (stories.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8.0, left: 4),
+              child: Text(
+                '스토리',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            )
+          else
             Row(
               children: List.generate(
                 stories.length,

@@ -96,7 +96,6 @@ class PlaceProvider with ChangeNotifier {
   /// 플레이스 생성
   Future<Place> createPlace({
     required String name,
-    required String location,
     String? description,
     String? appBarText,
     String? greetingText,
@@ -112,7 +111,7 @@ class PlaceProvider with ChangeNotifier {
         name: name,
         adminId: adminId,
         description: description,
-        location: location,
+        location: null, // location 필드는 더 이상 사용하지 않음
         appBarText: appBarText,
         greetingText: greetingText,
         imageUrl: imageUrl,

@@ -2,12 +2,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:provider/provider.dart';
 import '../theme/app_colors.dart';
 import '../utils/snackbar_util.dart';
 import '../utils/text_field_decoration_util.dart';
 import '../services/auth_service.dart';
 import '../providers/auth_provider.dart';
-import 'package:provider/provider.dart';
 
 /// 인증번호 입력 화면
 class VerificationCodeScreen extends StatefulWidget {
@@ -327,7 +327,7 @@ class _VerificationCodeScreenState extends State<VerificationCodeScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const SizedBox(height: 40),
+                    const SizedBox(height: 30),
                     // 제목
                     Text(
                       '인증번호를 입력해주세요.',

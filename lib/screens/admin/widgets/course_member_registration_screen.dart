@@ -456,6 +456,14 @@ class _CourseMemberRegistrationScreenState
 
         await widget.onSave(payload);
 
+        // 멤버 등록 후 리스트 동기화
+        final placeProvider = Provider.of<PlaceProvider>(
+          context,
+          listen: false,
+        );
+        final currentPlaceId = placeProvider.currentPlace?.id ?? widget.placeId;
+        await memberProvider.loadMembers(currentPlaceId);
+
         // 저장 성공 후 화면 닫기
         if (mounted) {
           Navigator.of(context).pop();

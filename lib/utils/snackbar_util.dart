@@ -5,6 +5,22 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../theme/app_colors.dart';
 
 class SnackbarUtil {
+  static void _fallbackSnackBar(
+    BuildContext context,
+    String message, {
+    bool isError = false,
+  }) {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? Colors.red : AppColors.primaryGreen,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
   /// 상단에 성공 스낵바 표시
   /// [imageUrl]이 제공되면 코스 이미지를 표시합니다.
   static void showSuccess(
@@ -12,8 +28,13 @@ class SnackbarUtil {
     String message, {
     String? imageUrl,
   }) {
+    final overlay = Overlay.maybeOf(context);
+    if (overlay == null) {
+      _fallbackSnackBar(context, message, isError: false);
+      return;
+    }
     showTopSnackBar(
-      Overlay.of(context),
+      overlay,
       _SimpleSnackBar(message: message, isError: false, imageUrl: imageUrl),
       animationDuration: const Duration(milliseconds: 300),
       reverseAnimationDuration: const Duration(milliseconds: 250),
@@ -23,8 +44,13 @@ class SnackbarUtil {
 
   /// 상단에 에러 스낵바 표시
   static void showError(BuildContext context, String message) {
+    final overlay = Overlay.maybeOf(context);
+    if (overlay == null) {
+      _fallbackSnackBar(context, message, isError: true);
+      return;
+    }
     showTopSnackBar(
-      Overlay.of(context),
+      overlay,
       _ErrorSnackBar(message: message),
       animationDuration: const Duration(milliseconds: 300),
       reverseAnimationDuration: const Duration(milliseconds: 250),
@@ -39,8 +65,13 @@ class SnackbarUtil {
     String message, {
     String? imageUrl,
   }) {
+    final overlay = Overlay.maybeOf(context);
+    if (overlay == null) {
+      _fallbackSnackBar(context, message, isError: false);
+      return;
+    }
     showTopSnackBar(
-      Overlay.of(context),
+      overlay,
       _SimpleSnackBar(message: message, isError: false, imageUrl: imageUrl),
       animationDuration: const Duration(milliseconds: 300),
       reverseAnimationDuration: const Duration(milliseconds: 250),

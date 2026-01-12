@@ -41,6 +41,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
     if (_hasLoaded) return;
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
     final notificationProvider = Provider.of<NotificationProvider>(
       context,
       listen: false,
@@ -50,9 +51,22 @@ class _NotificationScreenState extends State<NotificationScreen> {
     if (notificationProvider.notifications.isEmpty &&
         !notificationProvider.isLoading) {
       final user = authProvider.currentUser;
-      if (user != null) {
+      final admin = authProvider.currentAdmin;
+      final currentPlace = placeProvider.currentPlace;
+
+      if (user != null || admin != null) {
         _hasLoaded = true;
-        notificationProvider.loadNotifications(user.userId, isAdmin: false);
+
+        // 관리자인지 일반 사용자인지 확인
+        final isAdmin = admin != null;
+        final userId = isAdmin ? admin.userId : user!.userId;
+        final placeId = currentPlace?.id;
+
+        notificationProvider.loadNotifications(
+          userId,
+          isAdmin: isAdmin,
+          placeId: placeId,
+        );
       }
     }
   }
@@ -361,12 +375,15 @@ class _NotificationScreenState extends State<NotificationScreen> {
     String? error,
     NotificationProvider provider,
   ) {
-    if (isLoading && notifications.isEmpty) {
+    // Provider에서 이미 플레이스와 역할로 필터링되었으므로 중복 필터링 제거
+    final filteredNotifications = notifications;
+
+    if (isLoading && filteredNotifications.isEmpty) {
       return _buildShimmerLoading();
     }
 
     // 오류가 발생해도 자세한 오류 메시지는 표시하지 않고 빈 화면으로 처리
-    if (notifications.isEmpty) {
+    if (filteredNotifications.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -389,12 +406,12 @@ class _NotificationScreenState extends State<NotificationScreen> {
     final monthStart = todayStart.subtract(const Duration(days: 30));
 
     // 오늘 알림
-    final todayNotifications = notifications
+    final todayNotifications = filteredNotifications
         .where((n) => n.createdAt.isAfter(todayStart))
         .toList();
 
     // 이번 주 알림 (오늘 제외)
-    final weekNotifications = notifications
+    final weekNotifications = filteredNotifications
         .where(
           (n) =>
               n.createdAt.isAfter(weekStart) &&
@@ -403,7 +420,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
         .toList();
 
     // 이번 달 알림 (이번 주 제외)
-    final monthNotifications = notifications
+    final monthNotifications = filteredNotifications
         .where(
           (n) =>
               n.createdAt.isAfter(monthStart) &&
@@ -412,7 +429,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
         .toList();
 
     // 그 이전 알림
-    final earlierNotifications = notifications
+    final earlierNotifications = filteredNotifications
         .where((n) => !n.createdAt.isAfter(monthStart))
         .toList();
 
