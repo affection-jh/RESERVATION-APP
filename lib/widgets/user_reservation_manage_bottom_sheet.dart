@@ -163,7 +163,9 @@ class _UserReservationManageBottomSheetState
                   ),
                   decoration: BoxDecoration(
                     color: AppColors.backgroundWhite,
-                    borderRadius: BorderRadius.circular(30),
+                    borderRadius: BorderRadius.vertical(
+                      top: Radius.circular(30),
+                    ),
                   ),
                   padding: const EdgeInsets.symmetric(
                     horizontal: 20,
