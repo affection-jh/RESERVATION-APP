@@ -232,6 +232,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
             weekOffset: 0,
             height: 450,
             hideCourseSelector: true,
+            usage: CompactCalendarUsage.courseDetailView,
             onSessionTap: (course, session, date) {
               // 세션 탭 시 편집 화면으로 이동
               Navigator.of(context).push(
@@ -259,13 +260,15 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
             final enrolledPendingMembers = memberProvider.pendingMembers.where((
               pending,
             ) {
-              final courseIds = pending.courseIds ?? [];
+              // ⚠️ courseIds 제거: courseEnrollments에서 유도
+              final courseIds = pending.derivedCourseIds;
               return courseIds.contains(course.id);
             }).toList();
 
             // PendingMembers를 User로 변환
             final pendingAsUsers = enrolledPendingMembers.map((pm) {
-              final courseIds = pm.courseIds ?? [];
+              // ⚠️ courseIds 제거: courseEnrollments에서 유도
+              final courseIds = pm.derivedCourseIds;
               final enrollments = courseIds.map((courseId) {
                 return CourseEnrollment(
                   id: 'pending_${pm.id}_$courseId',
@@ -476,7 +479,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
           final courseEnrollments =
               memberData['courseEnrollments'] as List<Map<String, dynamic>>?;
 
-          final success = await memberService.registerMember(
+          await memberService.registerMember(
             placeId: placeId,
             adminId: adminId,
             name: name,
@@ -485,26 +488,35 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
             courses: courseProvider.courses,
           );
 
-          if (success) {
-            successCount++;
-          } else {
-            failCount++;
-          }
+          successCount++;
         } catch (e) {
           failCount++;
+          // 에러 메시지를 클라이언트 친화적으로 변환
+          final errorStr = e.toString();
+          if (errorStr.contains('이미 등록되어 있습니다') ||
+              errorStr.contains('이미 등록된')) {
+            // 이미 등록된 멤버는 실패로 카운트하되, 메시지는 나중에 통합 표시
+          }
         }
       }
 
       if (failCount == 0) {
         SnackbarUtil.showSuccess(context, '${successCount}명의 멤버가 등록되었습니다.');
       } else {
-        SnackbarUtil.showError(
-          context,
-          '${successCount}명 성공, ${failCount}명 실패',
-        );
+        // 실패 메시지를 친화적으로 표시
+        final failMessage = failCount == memberList.length
+            ? '이미 등록되어 있습니다.'
+            : '${successCount}명 성공, ${failCount}명 실패';
+        SnackbarUtil.showError(context, failMessage);
       }
     } catch (e) {
-      SnackbarUtil.showError(context, '멤버 등록 중 오류가 발생했습니다: $e');
+      // 에러 메시지를 클라이언트 친화적으로 변환
+      String errorMessage = '멤버 등록 중 오류가 발생했습니다.';
+      final errorStr = e.toString();
+      if (errorStr.contains('이미 등록되어 있습니다') || errorStr.contains('이미 등록된')) {
+        errorMessage = '이미 등록되어 있습니다.';
+      }
+      SnackbarUtil.showError(context, errorMessage);
     }
   }
 }

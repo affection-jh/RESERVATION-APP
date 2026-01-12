@@ -226,6 +226,8 @@ class UserService {
     final docRef = _firestore.collection('users').doc(user.userId);
     await docRef.update({
       ...user.toJson(),
+      // users.placeIds는 더 이상 사용하지 않으므로 기존 필드가 남아있다면 제거
+      'placeIds': FieldValue.delete(),
       'updatedAt': _dateTimeToTimestamp(DateTime.now()),
     });
 
@@ -244,6 +246,8 @@ class UserService {
     final docRef = _firestore.collection('users').doc(user.userId);
     await docRef.update({
       ...user.toJson(),
+      // users.placeIds는 더 이상 사용하지 않으므로 기존 필드가 남아있다면 제거
+      'placeIds': FieldValue.delete(),
       'updatedAt': _dateTimeToTimestamp(DateTime.now()),
     });
 

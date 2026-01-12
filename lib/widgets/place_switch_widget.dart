@@ -8,7 +8,6 @@ import '../providers/course_provider.dart';
 import '../providers/reservation_provider.dart';
 import '../providers/enrollment_provider.dart';
 import '../providers/story_provider.dart';
-import '../providers/promotion_provider.dart';
 import '../providers/member_provider.dart';
 import '../providers/notification_provider.dart';
 import '../providers/admin_provider.dart';
@@ -72,10 +71,7 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
     );
     final memberProvider = Provider.of<MemberProvider>(context, listen: false);
     final storyProvider = Provider.of<StoryProvider>(context, listen: false);
-    final promotionProvider = Provider.of<PromotionProvider>(
-      context,
-      listen: false,
-    );
+
     final notificationProvider = Provider.of<NotificationProvider>(
       context,
       listen: false,
@@ -88,7 +84,6 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
     // 모든 데이터/구독 초기화
     courseProvider.clear();
     storyProvider.clear();
-    promotionProvider.clear();
     notificationProvider.clear();
     adminProvider.clearAdmin();
     await memberProvider.clear();

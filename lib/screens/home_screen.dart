@@ -8,7 +8,6 @@ import '../models/course.dart';
 import '../providers/place_provider.dart';
 import '../providers/reservation_provider.dart';
 import '../providers/story_provider.dart' show StoryProvider;
-import '../providers/promotion_provider.dart' show PromotionProvider;
 import '../providers/auth_provider.dart';
 import '../providers/course_provider.dart';
 import '../providers/enrollment_provider.dart';
@@ -33,6 +32,19 @@ class _HomeScreenState extends State<HomeScreen> {
   int _currentStoryIndex = 0; // 현재 스토리 페이지 인덱스
   bool _isDataLoaded = false;
 
+  // 디자인 상수
+  static const double _cardHeight = 200.0;
+  static const double _cardBorderRadius = 20.0;
+  static const double _chipBorderRadius = 12.0;
+  static const double _chipHorizontalPadding = 10.0;
+  static const double _chipVerticalPadding = 6.0;
+  static const double _dateFontSize = 20.0; // 날짜 크게
+  static const double _spacingSmall = 8.0;
+  static const double _spacingMedium = 16.0;
+  static const double _cardElevation = 2.0;
+  static const double _cardShadowBlur = 8.0;
+  static const double _cardShadowOpacity = 0.08;
+
   @override
   void initState() {
     super.initState();
@@ -51,10 +63,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
     final storyProvider = Provider.of<StoryProvider>(context, listen: false);
-    final promotionProvider = Provider.of<PromotionProvider>(
-      context,
-      listen: false,
-    );
     final courseProvider = Provider.of<CourseProvider>(context, listen: false);
     final reservationProvider = Provider.of<ReservationProvider>(
       context,
@@ -73,9 +81,6 @@ class _HomeScreenState extends State<HomeScreen> {
       // MainScreen에서 로드하지 않은 경우에만 로드
       if (storyProvider.stories.isEmpty) {
         await storyProvider.loadStories(currentPlace.id);
-      }
-      if (promotionProvider.promotions.isEmpty) {
-        await promotionProvider.loadPromotions(currentPlace.id);
       }
       if (courseProvider.courses.isEmpty) {
         await courseProvider.loadCourses(currentPlace.id);
@@ -204,7 +209,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
 
-              const SizedBox(height: 42),
+              const SizedBox(height: 52),
 
               // 최근 이용 섹션
               if (authProvider.currentUser != null) _buildRecentUsageSection(),
@@ -291,19 +296,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Text(
-                      '#',
-                      style: TextStyle(
-                        fontSize: 35,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.primaryGreen,
-                      ),
-                    ),
-                    Text(
                       '아직 스토리가 없어요',
                       style: TextStyle(
                         fontSize: 16,
-                        fontWeight: FontWeight.w400,
-                        color: AppColors.textPrimary,
+                        fontWeight: FontWeight.w500,
+                        color: AppColors.textSecondary.withOpacity(0.8),
                       ),
                       textAlign: TextAlign.center,
                     ),
@@ -530,7 +527,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildRecentUsageCard() {
     final reservationProvider = Provider.of<ReservationProvider>(context);
     final courseProvider = Provider.of<CourseProvider>(context);
-    final enrollmentProvider = Provider.of<EnrollmentProvider>(context);
     final authProvider = Provider.of<AuthProvider>(context);
 
     if (authProvider.currentUser == null) {
@@ -539,15 +535,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final reservations = reservationProvider.reservations;
     final courses = courseProvider.courses;
-    final enrollmentsByCourseId = enrollmentProvider.enrollmentsByCourseId;
+
     final recentReservations = _getRecentReservations(reservations, courses);
 
     if (recentReservations.isEmpty) {
       return SizedBox(
-        height: 250,
+        height: _cardHeight,
         child: ListView.builder(
           scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 0),
           itemCount: 1,
           itemBuilder: (context, index) {
             // 첫 번째 카드: 없습니다 메시지
@@ -612,7 +608,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     return SizedBox(
-      height: 280,
+      height: _cardHeight,
       child: PageView(
         controller: _reservationPageController,
         onPageChanged: (index) {
@@ -620,7 +616,6 @@ class _HomeScreenState extends State<HomeScreen> {
             _currentReservationPage = index;
           });
         },
-
         children: recentReservations.map((data) {
           final reservation = data['reservation'] as Reservation;
           final course = data['course'] as Course;
@@ -634,170 +629,55 @@ class _HomeScreenState extends State<HomeScreen> {
           // 지난 예약인지 확인
           final isPast = reservationDate.isBefore(todayDate);
 
-          final titleColor = isPast
-              ? AppColors.textSecondary
-              : AppColors.textPrimary;
-
-          // 해당 코스의 enrollment 정보 조회 (최적화: Map 조회)
-          final enrollment = enrollmentsByCourseId[reservation.courseId];
-          final hasEnrollment = enrollment != null && enrollment.isValid;
-          final remainingCount = enrollment?.remainingReservations ?? 0;
-          final totalCount = enrollment?.totalReservations ?? 0;
-          final progressValue = totalCount > 0
-              ? (remainingCount / totalCount).clamp(0.0, 1.0)
-              : 0.0;
-
           return GestureDetector(
             onTap: () {
-              // 마이페이지로 이동하면서 예약 정보 전달
+              // 마이페이지로 이동하면서 예약 정보 전달 (명시적 클릭)
               Navigator.of(context).pushNamedAndRemoveUntil(
                 '/main',
                 (route) => false,
                 arguments: {
-                  'initialIndex': 2, // 마이페이지 탭 인덱스 (0: 홈, 1: 예약, 2: 마이페이지)
+                  'initialIndex': 2, // 마이페이지 탭 인덱스
                   'highlightReservation': {
                     'reservationId': reservation.id,
                     'courseId': reservation.courseId,
                     'dayOfWeek': reservation.dayOfWeek,
                     'startTime': reservation.startTime,
                     'reservedDate': reservation.reservedDate,
+                    'shouldShowBottomSheet': true, // 명시적 클릭이므로 바텀시트 표시
                   },
                 },
               );
             },
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
+              padding: const EdgeInsets.symmetric(horizontal: _spacingMedium),
               child: Container(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(_spacingMedium),
                 decoration: BoxDecoration(
                   color: AppColors.backgroundWhite,
-                  borderRadius: BorderRadius.circular(24),
+                  borderRadius: BorderRadius.circular(_cardBorderRadius),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.1),
-                      blurRadius: 10,
-                      offset: const Offset(0, 2),
+                      color: Colors.black.withOpacity(_cardShadowOpacity),
+                      blurRadius: _cardShadowBlur,
+                      offset: Offset(0, _cardElevation),
                     ),
                   ],
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const SizedBox(height: 12),
+                    SizedBox(height: 10),
+                    // 상단: 시간 및 날짜 정보 (크게)
+                    _buildReservationInfo(reservation),
+                    const Spacer(),
+                    // 하단: 코스명 칩 + 상태 칩
                     Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        Text(
-                          course.name,
-                          style: TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                            color: titleColor,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        Spacer(),
-                        Icon(
-                          Icons.arrow_forward_ios,
-                          size: 16,
-                          color: AppColors.textSecondary,
-                        ),
-                        SizedBox(width: 4),
-                      ],
-                    ), // 칩 (방문 전 / 완료됨)
-                    const SizedBox(height: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isPast
-                            ? Colors.transparent
-                            : AppColors.primaryGreen,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: isPast
-                              ? AppColors.textSecondary
-                              : AppColors.primaryGreen,
-                          width: 1,
-                        ),
-                      ),
-                      child: Text(
-                        isPast ? '완료됨' : '방문 전',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: isPast
-                              ? AppColors.textSecondary
-                              : Colors.white,
-                        ),
-                      ),
-                    ),
-
-                    Spacer(),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '${reservation.startTime} AM ',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w500,
-                            color: AppColors.textSecondary,
-                          ),
-                        ),
-
-                        // 남은 횟수 정보
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '${_formatDate(reservation.reservedDate)} ${_getDayName(reservation.dayOfWeek)}요일',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.w500,
-                                color: AppColors.textSecondary,
-                              ),
-                            ),
-                            SizedBox(height: 12),
-
-                            // 게이지 바와 횟수 (enrollment 정보가 있을 때만 표시)
-                            if (hasEnrollment)
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: ClipRRect(
-                                      borderRadius: BorderRadius.circular(12),
-                                      child: LinearProgressIndicator(
-                                        value: progressValue,
-                                        minHeight: 20,
-                                        backgroundColor:
-                                            AppColors.backgroundLight,
-                                        valueColor:
-                                            AlwaysStoppedAnimation<Color>(
-                                              isPast
-                                                  ? AppColors.textSecondary
-                                                  : AppColors.primaryGreen,
-                                            ),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Text(
-                                    '$remainingCount / $totalCount',
-                                    style: TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.bold,
-                                      color: isPast
-                                          ? AppColors.textSecondary
-                                          : AppColors.primaryGreen,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                          ],
-                        ),
+                        _buildCourseNameChip(course.name),
+                        const SizedBox(width: _spacingSmall),
+                        _buildStatusChip(isPast),
                       ],
                     ),
                   ],
@@ -808,6 +688,118 @@ class _HomeScreenState extends State<HomeScreen> {
         }).toList(),
       ),
     );
+  }
+
+  // 과목명 칩 위젯 (애플 스타일)
+  Widget _buildCourseNameChip(String courseName) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: _chipHorizontalPadding + 6,
+        vertical: _chipVerticalPadding,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.backgroundLight,
+        borderRadius: BorderRadius.circular(_chipBorderRadius),
+      ),
+      child: Text(
+        courseName,
+        style: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w600,
+          color: AppColors.primaryGreen,
+          letterSpacing: -0.2,
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+    );
+  }
+
+  // 상태 칩 위젯 (애플 스타일)
+  Widget _buildStatusChip(bool isPast) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: _chipHorizontalPadding,
+        vertical: _chipVerticalPadding,
+      ),
+      decoration: BoxDecoration(
+        color: isPast ? AppColors.backgroundLight : AppColors.primaryGreen,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            isPast ? '완료됨' : '예정',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: isPast ? AppColors.textSecondary : Colors.white,
+              letterSpacing: -0.2,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 예약 정보 위젯
+  Widget _buildReservationInfo(Reservation reservation) {
+    final timeText = _formatTime(reservation.startTime);
+    final dateText =
+        '${_formatDate(reservation.reservedDate)} ${_getDayName(reservation.dayOfWeek)}요일';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // 시간 (크게)
+        Text(
+          timeText,
+          style: TextStyle(
+            fontSize: 30,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textPrimary,
+            letterSpacing: -0.5,
+            height: 1.1,
+          ),
+        ),
+        const SizedBox(height: _spacingSmall),
+        // 날짜 (크게)
+        Text(
+          dateText,
+          style: TextStyle(
+            fontSize: _dateFontSize,
+            fontWeight: FontWeight.w500,
+            color: AppColors.textSecondary.withOpacity(0.9),
+            letterSpacing: -0.3,
+            height: 1.2,
+          ),
+        ),
+      ],
+    );
+  }
+
+  // 시간 포맷팅 (AM/PM 제거)
+  String _formatTime(String startTime) {
+    // startTime이 "9" 또는 "9 AM" 형식일 수 있으므로 처리
+    final timeStr = startTime.trim();
+
+    // "AM" 또는 "PM" 제거
+    final cleanedTime = timeStr.trim();
+
+    // 숫자만 있는 경우 ":00" 추가
+    final hour = int.tryParse(cleanedTime);
+    if (hour != null) {
+      return '$hour:00';
+    }
+
+    // 이미 ":"가 포함되어 있으면 그대로 반환
+    if (cleanedTime.contains(':')) {
+      return cleanedTime;
+    }
+
+    // 파싱 실패 시 원본 반환
+    return cleanedTime;
   }
 
   // Helper 메서드들

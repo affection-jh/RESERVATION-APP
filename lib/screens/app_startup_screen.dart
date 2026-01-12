@@ -13,7 +13,6 @@ import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/place_provider.dart';
 import '../providers/story_provider.dart';
-import '../providers/promotion_provider.dart';
 import '../providers/notification_provider.dart';
 
 /// 앱 시작 화면
@@ -436,10 +435,7 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
           context,
           listen: false,
         );
-        final promotionProvider = Provider.of<PromotionProvider>(
-          context,
-          listen: false,
-        );
+
         final notificationProvider = Provider.of<NotificationProvider>(
           context,
           listen: false,
@@ -458,7 +454,6 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
         try {
           await Future.wait([
             storyProvider.loadStories(place.id),
-            promotionProvider.loadPromotions(place.id),
           ]).timeout(const Duration(seconds: 6));
         } catch (e) {
           debugPrint(
@@ -709,7 +704,11 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
   }
 
   /// 스플래시 숨기기 (페이드 아웃)
-  void _hideSplash() {
+  /// 로딩 완료 후 UI 안정화 시간 0.5초 대기 후 페이드아웃
+  void _hideSplash() async {
+    if (!mounted) return;
+    // UI 안정화 시간 0.5초 대기
+    await Future.delayed(const Duration(milliseconds: 500));
     if (!mounted) return;
     setState(() {
       _showSplash = false;
@@ -728,7 +727,8 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
         // 스플래시 오버레이 (페이드 아웃만, 네비게이션 없음)
         AnimatedOpacity(
           opacity: _showSplash ? 1.0 : 0.0,
-          duration: const Duration(milliseconds: 300),
+          duration: const Duration(milliseconds: 500),
+          curve: Curves.easeOut,
           child: IgnorePointer(
             ignoring: !_showSplash,
             child: const SplashScreen(),

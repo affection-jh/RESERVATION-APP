@@ -10,7 +10,6 @@ import '../providers/admin_provider.dart';
 import '../providers/place_provider.dart';
 import '../providers/course_provider.dart';
 import '../providers/story_provider.dart';
-import '../providers/promotion_provider.dart';
 import '../providers/member_provider.dart';
 
 class AdminScreen extends StatefulWidget {
@@ -48,10 +47,6 @@ class _AdminScreenState extends State<AdminScreen> {
     final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
     final courseProvider = Provider.of<CourseProvider>(context, listen: false);
     final storyProvider = Provider.of<StoryProvider>(context, listen: false);
-    final promotionProvider = Provider.of<PromotionProvider>(
-      context,
-      listen: false,
-    );
     final memberProvider = Provider.of<MemberProvider>(context, listen: false);
 
     // 관리자인 경우에만 데이터 로드
@@ -77,7 +72,6 @@ class _AdminScreenState extends State<AdminScreen> {
       await Future.wait([
         courseProvider.loadCourses(currentPlace.id),
         storyProvider.loadStories(currentPlace.id),
-        promotionProvider.loadPromotions(currentPlace.id),
         memberProvider.loadMembers(currentPlace.id),
       ]);
 

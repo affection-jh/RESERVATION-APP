@@ -12,8 +12,13 @@ import 'package:provider/provider.dart';
 /// 인증번호 입력 화면
 class VerificationCodeScreen extends StatefulWidget {
   final String phoneNumber;
+  final bool isPlaceRegistrationFlow; // 플레이스 추가 플로우인지 여부
 
-  const VerificationCodeScreen({super.key, required this.phoneNumber});
+  const VerificationCodeScreen({
+    super.key,
+    required this.phoneNumber,
+    this.isPlaceRegistrationFlow = false,
+  });
 
   @override
   State<VerificationCodeScreen> createState() => _VerificationCodeScreenState();
@@ -143,6 +148,37 @@ class _VerificationCodeScreenState extends State<VerificationCodeScreen> {
         authProvider.setCurrentUser(result.user);
 
         if (mounted) {
+          // 플레이스 추가 플로우인 경우 관리자 등록 여부 확인
+          if (widget.isPlaceRegistrationFlow) {
+            final authService = AuthService();
+            final existingAdmin = await authService.findAdminByPhone(
+              widget.phoneNumber,
+            );
+
+            if (existingAdmin != null) {
+              // 이미 관리자로 등록되어 있으면 핀 입력 화면으로
+              Navigator.of(context).pushNamedAndRemoveUntil(
+                '/admin-pin-input',
+                (route) => false,
+                arguments: {
+                  'phoneNumber': widget.phoneNumber,
+                  'verificationCode': code,
+                },
+              );
+            } else {
+              // 관리자로 등록되지 않았으면 핀 등록 화면으로
+              Navigator.of(context).pushNamedAndRemoveUntil(
+                '/admin-pin-register',
+                (route) => false,
+                arguments: {
+                  'phoneNumber': widget.phoneNumber,
+                  'verificationCode': code,
+                },
+              );
+            }
+            return;
+          }
+
           // ✅ 모든 이전 화면을 제거하고 PlaceWaitingScreen으로 이동
           Navigator.of(context).pushNamedAndRemoveUntil(
             '/place-waiting',

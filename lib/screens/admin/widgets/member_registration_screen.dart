@@ -103,7 +103,6 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
   String? _courseErrorText;
   bool _isCheckingPhone = false;
   bool _isSaving = false; // 저장 중 상태
-  bool _isExistingMember = false; // 기존 멤버 여부 (신규 추가 막기용)
 
   @override
   void initState() {
@@ -231,8 +230,6 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
       }
       _courseConfigs.clear();
       _courseErrorText = null;
-      _phoneErrorText = null;
-      _isExistingMember = false; // 기존 멤버 플래그 초기화
 
       // restrictedCourseId가 있으면 코스를 다시 선택하고 설정 초기화
       if (widget.restrictedCourseId != null) {
@@ -330,40 +327,14 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
       if (_isPhoneDuplicateInLocalList(phoneNumber)) {
         setState(() {
           _phoneErrorText = '이미 추가된 전화번호입니다';
-          _isExistingMember = false; // 로컬 중복은 기존 멤버 아님
         });
         return;
       }
 
-      // Firebase 중복 체크 (기존 멤버 확인) - 동기적으로 먼저 체크
-      final memberProvider = Provider.of<MemberProvider>(
-        context,
-        listen: false,
-      );
-
-      // 동기 체크: memberProvider.members에서 즉시 확인
-      final normalizedPhone = _normalizePhone(phoneNumber);
-      bool isExistingMemberSync = false;
-      for (final member in memberProvider.members) {
-        if (_normalizePhone(member.phoneNumber) == normalizedPhone) {
-          isExistingMemberSync = true;
-          break;
-        }
-      }
-
-      if (isExistingMemberSync) {
-        setState(() {
-          _phoneErrorText = '이미 등록된 멤버입니다. 기존 멤버에서 추가해주세요.';
-          _isExistingMember = true; // 기존 멤버 플래그 설정 (신규 추가 완전 차단)
-        });
-        return;
-      }
-
-      // 비동기 체크: pendingMembers도 확인
+      // Firebase 중복 체크
       setState(() {
         _isCheckingPhone = true;
         _phoneErrorText = null;
-        _isExistingMember = false;
       });
 
       final isDuplicate = await _isPhoneDuplicateInFirebase(phoneNumber);
@@ -372,18 +343,11 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
 
       if (isDuplicate) {
         setState(() {
-          _phoneErrorText = '이미 등록된 멤버입니다. 기존 멤버에서 추가해주세요.';
+          _phoneErrorText = '이미 등록된 멤버입니다';
           _isCheckingPhone = false;
-          _isExistingMember = true; // 기존 멤버 플래그 설정 (신규 추가 완전 차단)
         });
         return;
       }
-
-      // 중복이 아니면 플래그 초기화
-      setState(() {
-        _isExistingMember = false;
-        _isCheckingPhone = false;
-      });
     }
 
     // 코스별 등록 설정 데이터 생성
@@ -410,7 +374,6 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
       _phoneErrorText = null;
       _courseErrorText = null;
       _isCheckingPhone = false;
-      _isExistingMember = false; // 추가 후 플래그 초기화
       _mode = MemberRegistrationMode.list; // 추가 후 리스트 모드로 전환
     });
   }
@@ -427,7 +390,6 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
     setState(() {
       _isCheckingPhone = true;
       _phoneErrorText = null;
-      _isExistingMember = false;
     });
 
     final isDuplicate = await _isPhoneDuplicateInFirebase(phoneNumber);
@@ -436,67 +398,19 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
 
     if (isDuplicate) {
       setState(() {
-        _phoneErrorText = '이미 등록된 멤버입니다. 기존 멤버에서 추가해주세요.';
+        _phoneErrorText = '이미 등록된 멤버입니다';
         _isCheckingPhone = false;
-        _isExistingMember = true; // 기존 멤버 플래그 설정
       });
     } else {
       setState(() {
         _phoneErrorText = null;
         _isCheckingPhone = false;
-        _isExistingMember = false;
       });
     }
   }
 
   Future<void> _handleSave() async {
     if (_memberList.isEmpty || _isSaving) return;
-
-    // 최종 중복 체크: 저장 전에 한 번 더 확인
-    final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
-    final memberProvider = Provider.of<MemberProvider>(context, listen: false);
-    final placeId = placeProvider.currentPlace?.id;
-
-    if (placeId != null) {
-      for (final member in _memberList) {
-        final phoneNumber = member['phoneNumber'] as String;
-        final normalizedPhone = _normalizePhone(phoneNumber);
-
-        // 1. 로컬 리스트 내 중복 체크
-        int count = 0;
-        for (final m in _memberList) {
-          if (_normalizePhone(m['phoneNumber'] as String) == normalizedPhone) {
-            count++;
-          }
-        }
-        if (count > 1) {
-          if (mounted) {
-            await CommonDialog.show(
-              context: context,
-              title: '중복된 전화번호',
-              message: '${phoneNumber}는 이미 추가된 전화번호입니다.',
-              confirmText: '확인',
-            );
-          }
-          return;
-        }
-
-        // 2. 기존 멤버와 중복 체크
-        for (final existingMember in memberProvider.members) {
-          if (_normalizePhone(existingMember.phoneNumber) == normalizedPhone) {
-            if (mounted) {
-              await CommonDialog.show(
-                context: context,
-                title: '기존 멤버',
-                message: '${phoneNumber}는 이미 등록된 멤버입니다. 기존 멤버에서 추가해주세요.',
-                confirmText: '확인',
-              );
-            }
-            return;
-          }
-        }
-      }
-    }
 
     setState(() {
       _isSaving = true;
@@ -833,7 +747,7 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
                               valueColor: AlwaysStoppedAnimation<Color>(
-                                AppColors.primaryGreen,
+                                Colors.white,
                               ),
                             ),
                           )
@@ -1226,7 +1140,6 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
                       !isLocalDuplicate &&
                       _phoneErrorText == null &&
                       !_isCheckingPhone &&
-                      !_isExistingMember && // 기존 멤버는 신규 추가 불가 (기존 멤버에서 추가만 가능)
                       _selectedCourseIds.isNotEmpty && // 코스 선택 필수
                       allReservationsValid && // 모든 코스의 예약 가능 횟수가 0보다 커야 함
                       allPeriodsValid; // 모든 코스의 유효기간이 0보다 커야 함

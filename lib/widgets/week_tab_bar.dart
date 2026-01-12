@@ -21,8 +21,8 @@ class WeekTabBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
       child: Row(
         children: [
           // 동적으로 생성된 주차 탭들
@@ -31,6 +31,7 @@ class WeekTabBar extends StatelessWidget {
             final weekOffset = entry.value;
             return Padding(
               padding: EdgeInsets.only(
+                left: index == 0 ? 20 : 0,
                 right: index < availableWeekOffsets.length - 1 ? 24 : 0,
               ),
               child: _buildWeekTab(
@@ -40,7 +41,7 @@ class WeekTabBar extends StatelessWidget {
               ),
             );
           }),
-          if (trailing != null) ...[const Spacer(), trailing!],
+          if (trailing != null) ...[const SizedBox(width: 24), trailing!],
         ],
       ),
     );

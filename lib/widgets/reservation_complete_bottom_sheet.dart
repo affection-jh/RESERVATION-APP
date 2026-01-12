@@ -33,7 +33,7 @@ class ReservationCompleteBottomSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 0),
       decoration: const BoxDecoration(color: Colors.transparent),
       child: Stack(
         children: [
@@ -65,20 +65,6 @@ class ReservationCompleteBottomSheet extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    // 완료 아이콘
-                    Container(
-                      width: 64,
-                      height: 64,
-                      decoration: BoxDecoration(
-                        color: AppColors.primaryGreen.withOpacity(0.1),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        Icons.check_circle_rounded,
-                        size: 40,
-                        color: AppColors.primaryGreen,
-                      ),
-                    ),
                     const SizedBox(height: 24),
                     // 완료 메시지
                     Text(

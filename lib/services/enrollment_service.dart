@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../models/course_enrollment.dart';
@@ -20,6 +21,86 @@ class EnrollmentService {
     if (timestamp is Timestamp) return timestamp.toDate();
     if (timestamp is String) return DateTime.parse(timestamp);
     throw Exception('Invalid timestamp format');
+  }
+
+  CourseEnrollment _courseEnrollmentFromDoc(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    final data = Map<String, dynamic>.from(doc.data());
+
+    // 일부 데이터는 id 필드가 없을 수 있어 문서 ID로 보강
+    data['id'] ??= doc.id;
+
+    // 기본 DateTime 필드 변환
+    data['enrolledAt'] = _timestampToDateTime(
+      data['enrolledAt'],
+    ).toIso8601String();
+    data['validFrom'] = _timestampToDateTime(
+      data['validFrom'],
+    ).toIso8601String();
+    data['validUntil'] = _timestampToDateTime(
+      data['validUntil'],
+    ).toIso8601String();
+
+    // extensionRequests의 timestamp 변환
+    if (data['extensionRequests'] != null) {
+      final requests = data['extensionRequests'] as List;
+      for (var i = 0; i < requests.length; i++) {
+        final request = requests[i] as Map<String, dynamic>;
+        request['requestedAt'] = _timestampToDateTime(
+          request['requestedAt'],
+        ).toIso8601String();
+        if (request['approvedAt'] != null) {
+          request['approvedAt'] = _timestampToDateTime(
+            request['approvedAt'],
+          ).toIso8601String();
+        }
+        if (request['rejectedAt'] != null) {
+          request['rejectedAt'] = _timestampToDateTime(
+            request['rejectedAt'],
+          ).toIso8601String();
+        }
+      }
+    }
+
+    // 하위 호환성: extensionRequest도 변환
+    // 서브컬렉션 사용 시 denormalized 필드 extensionRequest를 extensionRequests 배열로 변환
+    if (data['extensionRequest'] != null) {
+      final request = data['extensionRequest'] as Map<String, dynamic>;
+      // id 필드가 없으면 추가 (denormalized 필드에는 id가 있을 수 있음)
+      if (request['id'] == null) {
+        request['id'] = 'req_${DateTime.now().millisecondsSinceEpoch}';
+      }
+      request['requestedAt'] = _timestampToDateTime(
+        request['requestedAt'],
+      ).toIso8601String();
+      if (request['approvedAt'] != null) {
+        request['approvedAt'] = _timestampToDateTime(
+          request['approvedAt'],
+        ).toIso8601String();
+      }
+      if (request['rejectedAt'] != null) {
+        request['rejectedAt'] = _timestampToDateTime(
+          request['rejectedAt'],
+        ).toIso8601String();
+      }
+
+      // extensionRequest가 있으면 extensionRequests 배열에 추가 (서브컬렉션 대신 denormalized 필드 사용)
+      // fromJson에서 extensionRequest를 extensionRequests로 변환하지만, 둘 다 있을 때를 대비해 여기서도 처리
+      if (data['extensionRequests'] == null) {
+        data['extensionRequests'] = [request];
+      } else {
+        // 이미 배열이 있으면 합치기 (중복 제거)
+        final existing = data['extensionRequests'] as List;
+        final requestId = request['id'] as String?;
+        if (requestId != null &&
+            !existing.any((r) => (r as Map)['id'] == requestId)) {
+          existing.add(request);
+        }
+      }
+    }
+
+    return CourseEnrollment.fromJson(data);
   }
 
   /// Enrollment 생성
@@ -306,6 +387,8 @@ class EnrollmentService {
     json.remove('adminActions');
     json.remove('extensionRequests');
     json.remove('extensionRequest'); // 하위 호환성 필드도 제거
+    json.remove('reenrollmentRequests'); // 배열은 서브컬렉션에 저장
+    json.remove('reenrollmentRequest'); // marker도 제거
 
     // enrollment 문서 업데이트 (기본 정보만)
     await docRef.update(json);
@@ -315,17 +398,53 @@ class EnrollmentService {
   /// 재등록 처리 (트랜잭션으로 원자적 저장)
   ///
   /// enrollment 업데이트 + 재등록 이력 2개 추가 + 관리자 액션 추가를 하나의 트랜잭션으로 처리
+  /// 재등록은 관리자만 처리할 수 있음
+  ///
+  /// [extensionRequestUpdate]가 제공되면 연장 요청 상태도 함께 업데이트 (원자적 처리)
   Future<void> reenrollWithHistory({
     required CourseEnrollment updatedEnrollment,
     required ReenrollmentRecord oldRecord, // 기존 등록 정보
     required ReenrollmentRecord newRecord, // 새 재등록 정보
     required AdminAction adminAction,
+    ExtensionRequestUpdate? extensionRequestUpdate,
   }) async {
     await _firestore.runTransaction((transaction) async {
       final docRef = _firestore
           .collection('enrollments')
           .doc(updatedEnrollment.id);
 
+      // ⚠️ 중요: Firestore 트랜잭션 규칙 - 모든 읽기를 먼저 수행해야 함
+      // 1. 모든 읽기 작업 먼저 수행
+      DocumentSnapshot? requestSnap;
+      DocumentSnapshot? enrollmentSnap;
+
+      if (extensionRequestUpdate != null) {
+        final requestRef = docRef
+            .collection('extensionRequests')
+            .doc(extensionRequestUpdate.requestId);
+
+        // 연장 요청 문서 읽기
+        requestSnap = await transaction.get(requestRef);
+        if (!requestSnap.exists) {
+          throw Exception(
+            'Extension request not found: ${extensionRequestUpdate.requestId}',
+          );
+        }
+
+        // 동시성 문제 해결: 현재 상태가 pending인지 확인
+        final requestData = requestSnap.data() as Map<String, dynamic>;
+        final currentStatus = requestData['status'] as String?;
+        if (currentStatus != ExtensionRequestStatus.pending.name) {
+          throw Exception(
+            'Extension request is not pending. Current status: $currentStatus',
+          );
+        }
+
+        // enrollment 문서 읽기 (denormalized marker 확인용)
+        enrollmentSnap = await transaction.get(docRef);
+      }
+
+      // 2. 모든 쓰기 작업 수행
       // enrollment 문서 업데이트
       final json = updatedEnrollment.toJson();
       json['enrolledAt'] = _dateTimeToTimestamp(updatedEnrollment.enrolledAt);
@@ -335,6 +454,8 @@ class EnrollmentService {
       json.remove('adminActions');
       json.remove('extensionRequests');
       json.remove('extensionRequest');
+      json.remove('reenrollmentRequests');
+      json.remove('reenrollmentRequest');
 
       transaction.update(docRef, json);
 
@@ -374,19 +495,101 @@ class EnrollmentService {
         'oldValue': adminAction.oldValue,
         'newValue': adminAction.newValue,
       });
+
+      // 연장 요청 상태 업데이트 (제공된 경우)
+      if (extensionRequestUpdate != null && requestSnap != null) {
+        final requestRef = docRef
+            .collection('extensionRequests')
+            .doc(extensionRequestUpdate.requestId);
+
+        final now = TimezoneUtils.getSeoulDateTime();
+        final updateMap = <String, dynamic>{
+          'status': extensionRequestUpdate.status.name,
+          'approvedAt':
+              extensionRequestUpdate.status == ExtensionRequestStatus.approved
+              ? _dateTimeToTimestamp(now)
+              : null,
+          'rejectedAt':
+              extensionRequestUpdate.status == ExtensionRequestStatus.rejected
+              ? _dateTimeToTimestamp(now)
+              : null,
+          'rejectionReason':
+              extensionRequestUpdate.status == ExtensionRequestStatus.rejected
+              ? extensionRequestUpdate.rejectionReason
+              : null,
+        };
+        transaction.update(requestRef, updateMap);
+
+        // denormalized marker도 업데이트 (이미 읽은 enrollmentSnap 사용)
+        if (enrollmentSnap != null && enrollmentSnap.exists) {
+          final data = enrollmentSnap.data() as Map<String, dynamic>?;
+          if (data != null) {
+            final marker = data['extensionRequest'];
+            final markerId = marker is Map ? marker['id']?.toString() : null;
+            if (markerId == extensionRequestUpdate.requestId) {
+              transaction.update(docRef, {
+                'extensionRequest': {
+                  ...(marker as Map<String, dynamic>).map(
+                    (k, v) => MapEntry(k.toString(), v),
+                  ),
+                  'status': extensionRequestUpdate.status.name,
+                  'approvedAt': updateMap['approvedAt'],
+                  'rejectedAt': updateMap['rejectedAt'],
+                  'rejectionReason': updateMap['rejectionReason'],
+                },
+              });
+            }
+          }
+        }
+      }
     });
   }
 
   /// enrollment 업데이트 + 관리자 액션 추가 (트랜잭션)
+  ///
+  /// [extensionRequestUpdate]가 제공되면 연장 요청 상태도 함께 업데이트 (원자적 처리)
   Future<void> updateEnrollmentWithAdminAction({
     required CourseEnrollment updatedEnrollment,
     required AdminAction adminAction,
+    ExtensionRequestUpdate? extensionRequestUpdate,
   }) async {
     await _firestore.runTransaction((transaction) async {
       final docRef = _firestore
           .collection('enrollments')
           .doc(updatedEnrollment.id);
 
+      // ⚠️ 중요: Firestore 트랜잭션 규칙 - 모든 읽기를 먼저 수행해야 함
+      // 1. 모든 읽기 작업 먼저 수행
+      DocumentSnapshot? requestSnap;
+      DocumentSnapshot? enrollmentSnap;
+
+      if (extensionRequestUpdate != null) {
+        final requestRef = docRef
+            .collection('extensionRequests')
+            .doc(extensionRequestUpdate.requestId);
+
+        // 연장 요청 문서 읽기
+        requestSnap = await transaction.get(requestRef);
+        if (!requestSnap.exists) {
+          throw Exception(
+            'Extension request not found: ${extensionRequestUpdate.requestId}',
+          );
+        }
+
+        // 동시성 문제 해결: 현재 상태가 pending인지 확인
+        final requestData = requestSnap.data() as Map<String, dynamic>;
+        final currentStatus = requestData['status'] as String?;
+        if (currentStatus != ExtensionRequestStatus.pending.name) {
+          throw Exception(
+            'Extension request is not pending. Current status: $currentStatus',
+          );
+        }
+
+        // enrollment 문서 읽기 (denormalized marker 확인용)
+        enrollmentSnap = await transaction.get(docRef);
+      }
+
+      // 2. 모든 쓰기 작업 수행
       // enrollment 문서 업데이트
       final json = updatedEnrollment.toJson();
       json['enrolledAt'] = _dateTimeToTimestamp(updatedEnrollment.enrolledAt);
@@ -396,6 +599,8 @@ class EnrollmentService {
       json.remove('adminActions');
       json.remove('extensionRequests');
       json.remove('extensionRequest');
+      json.remove('reenrollmentRequests'); // 배열은 서브컬렉션에 저장
+      json.remove('reenrollmentRequest'); // marker도 제거
 
       transaction.update(docRef, json);
 
@@ -409,6 +614,53 @@ class EnrollmentService {
         'oldValue': adminAction.oldValue,
         'newValue': adminAction.newValue,
       });
+
+      // 연장 요청 상태 업데이트 (제공된 경우)
+      if (extensionRequestUpdate != null && requestSnap != null) {
+        final requestRef = docRef
+            .collection('extensionRequests')
+            .doc(extensionRequestUpdate.requestId);
+
+        final now = TimezoneUtils.getSeoulDateTime();
+        final updateMap = <String, dynamic>{
+          'status': extensionRequestUpdate.status.name,
+          'approvedAt':
+              extensionRequestUpdate.status == ExtensionRequestStatus.approved
+              ? _dateTimeToTimestamp(now)
+              : null,
+          'rejectedAt':
+              extensionRequestUpdate.status == ExtensionRequestStatus.rejected
+              ? _dateTimeToTimestamp(now)
+              : null,
+          'rejectionReason':
+              extensionRequestUpdate.status == ExtensionRequestStatus.rejected
+              ? extensionRequestUpdate.rejectionReason
+              : null,
+        };
+        transaction.update(requestRef, updateMap);
+
+        // denormalized marker도 업데이트 (이미 읽은 enrollmentSnap 사용)
+        if (enrollmentSnap != null && enrollmentSnap.exists) {
+          final data = enrollmentSnap.data() as Map<String, dynamic>?;
+          if (data != null) {
+            final marker = data['extensionRequest'];
+            final markerId = marker is Map ? marker['id']?.toString() : null;
+            if (markerId == extensionRequestUpdate.requestId) {
+              transaction.update(docRef, {
+                'extensionRequest': {
+                  ...(marker as Map<String, dynamic>).map(
+                    (k, v) => MapEntry(k.toString(), v),
+                  ),
+                  'status': extensionRequestUpdate.status.name,
+                  'approvedAt': updateMap['approvedAt'],
+                  'rejectedAt': updateMap['rejectedAt'],
+                  'rejectionReason': updateMap['rejectionReason'],
+                },
+              });
+            }
+          }
+        }
+      }
     });
   }
 
@@ -432,6 +684,8 @@ class EnrollmentService {
       json.remove('adminActions');
       json.remove('extensionRequests');
       json.remove('extensionRequest');
+      json.remove('reenrollmentRequests'); // 배열은 서브컬렉션에 저장
+      json.remove('reenrollmentRequest'); // marker도 제거
 
       transaction.update(docRef, json);
 
@@ -477,105 +731,15 @@ class EnrollmentService {
     }
 
     return query.snapshots().map((snapshot) {
-      return snapshot.docs.map((doc) {
-        final data = doc.data();
-        // 기본 DateTime 필드 변환
-        data['enrolledAt'] = _timestampToDateTime(
-          data['enrolledAt'],
-        ).toIso8601String();
-        data['validFrom'] = _timestampToDateTime(
-          data['validFrom'],
-        ).toIso8601String();
-        data['validUntil'] = _timestampToDateTime(
-          data['validUntil'],
-        ).toIso8601String();
-
-        // 히스토리 데이터는 서브컬렉션에서 별도로 로드하므로 빈 배열로 설정
-        // 하위 호환성: 기존 배열 필드가 있으면 변환 (마이그레이션 중)
-        if (data['extensionRequests'] != null) {
-          final requests = data['extensionRequests'] as List;
-          for (var i = 0; i < requests.length; i++) {
-            final request = requests[i] as Map<String, dynamic>;
-            request['requestedAt'] = _timestampToDateTime(
-              request['requestedAt'],
-            ).toIso8601String();
-            if (request['approvedAt'] != null) {
-              request['approvedAt'] = _timestampToDateTime(
-                request['approvedAt'],
-              ).toIso8601String();
-            }
-            if (request['rejectedAt'] != null) {
-              request['rejectedAt'] = _timestampToDateTime(
-                request['rejectedAt'],
-              ).toIso8601String();
-            }
-          }
-        } else {
-          // 서브컬렉션 사용 시 빈 배열
-          data['extensionRequests'] = [];
-        }
-
-        if (data['reenrollmentHistory'] != null) {
-          final history = data['reenrollmentHistory'] as List;
-          for (var i = 0; i < history.length; i++) {
-            final record = history[i] as Map<String, dynamic>;
-            record['enrolledAt'] = _timestampToDateTime(
-              record['enrolledAt'],
-            ).toIso8601String();
-            record['validFrom'] = _timestampToDateTime(
-              record['validFrom'],
-            ).toIso8601String();
-            record['validUntil'] = _timestampToDateTime(
-              record['validUntil'],
-            ).toIso8601String();
-            if (record['cancelledAt'] != null) {
-              record['cancelledAt'] = _timestampToDateTime(
-                record['cancelledAt'],
-              ).toIso8601String();
-            }
-          }
-        } else {
-          // 서브컬렉션 사용 시 빈 배열
-          data['reenrollmentHistory'] = [];
-        }
-
-        if (data['adminActions'] != null) {
-          final actions = data['adminActions'] as List;
-          for (var i = 0; i < actions.length; i++) {
-            final action = actions[i] as Map<String, dynamic>;
-            action['performedAt'] = _timestampToDateTime(
-              action['performedAt'],
-            ).toIso8601String();
-          }
-        } else {
-          // 서브컬렉션 사용 시 빈 배열
-          data['adminActions'] = [];
-        }
-
-        // 하위 호환성: extensionRequest도 변환
-        if (data['extensionRequest'] != null) {
-          final request = data['extensionRequest'] as Map<String, dynamic>;
-          request['requestedAt'] = _timestampToDateTime(
-            request['requestedAt'],
-          ).toIso8601String();
-          if (request['approvedAt'] != null) {
-            request['approvedAt'] = _timestampToDateTime(
-              request['approvedAt'],
-            ).toIso8601String();
-          }
-          if (request['rejectedAt'] != null) {
-            request['rejectedAt'] = _timestampToDateTime(
-              request['rejectedAt'],
-            ).toIso8601String();
-          }
-        }
-
-        return CourseEnrollment.fromJson(data);
-      }).toList();
+      return snapshot.docs.map(_courseEnrollmentFromDoc).toList();
     });
   }
 
   /// 연장 요청 목록 조회 (플레이스별)
+  ///
+  /// 연장 요청(ExtensionRequest)이 pending 상태인 enrollments를 반환합니다.
+  ///
+  /// 주의: 클라이언트 사이드 필터링 사용 (인덱스 불필요)
   Stream<List<CourseEnrollment>> watchExtensionRequests(String placeId) {
     return _firestore
         .collection('enrollments')
@@ -583,64 +747,83 @@ class EnrollmentService {
         .snapshots()
         .map((snapshot) {
           return snapshot.docs
-              .map((doc) {
-                final data = doc.data();
-                // 기본 DateTime 필드 변환
-                data['enrolledAt'] = _timestampToDateTime(
-                  data['enrolledAt'],
-                ).toIso8601String();
-                data['validFrom'] = _timestampToDateTime(
-                  data['validFrom'],
-                ).toIso8601String();
-                data['validUntil'] = _timestampToDateTime(
-                  data['validUntil'],
-                ).toIso8601String();
-
-                // extensionRequests의 timestamp 변환
-                if (data['extensionRequests'] != null) {
-                  final requests = data['extensionRequests'] as List;
-                  for (var i = 0; i < requests.length; i++) {
-                    final request = requests[i] as Map<String, dynamic>;
-                    request['requestedAt'] = _timestampToDateTime(
-                      request['requestedAt'],
-                    ).toIso8601String();
-                    if (request['approvedAt'] != null) {
-                      request['approvedAt'] = _timestampToDateTime(
-                        request['approvedAt'],
-                      ).toIso8601String();
-                    }
-                    if (request['rejectedAt'] != null) {
-                      request['rejectedAt'] = _timestampToDateTime(
-                        request['rejectedAt'],
-                      ).toIso8601String();
-                    }
-                  }
-                }
-
-                // 하위 호환성: extensionRequest도 변환
-                if (data['extensionRequest'] != null) {
-                  final request =
-                      data['extensionRequest'] as Map<String, dynamic>;
-                  request['requestedAt'] = _timestampToDateTime(
-                    request['requestedAt'],
-                  ).toIso8601String();
-                  if (request['approvedAt'] != null) {
-                    request['approvedAt'] = _timestampToDateTime(
-                      request['approvedAt'],
-                    ).toIso8601String();
-                  }
-                  if (request['rejectedAt'] != null) {
-                    request['rejectedAt'] = _timestampToDateTime(
-                      request['rejectedAt'],
-                    ).toIso8601String();
-                  }
-                }
-
-                return CourseEnrollment.fromJson(data);
-              })
+              .map(_courseEnrollmentFromDoc)
               .where((enrollment) => enrollment.hasPendingExtensionRequest)
               .toList();
         });
+  }
+
+  /// 연장 요청 목록 조회 (코스ID 목록 기반)
+  ///
+  /// enrollment 문서에 placeId 필드가 없거나 불완전한 경우에도,
+  /// "해당 플레이스의 코스ID 목록"으로 요청을 안정적으로 조회할 수 있습니다.
+  Stream<List<CourseEnrollment>> watchExtensionRequestsByCourseIds({
+    required List<String> courseIds,
+    String? placeId,
+  }) {
+    final normalized = courseIds.where((e) => e.isNotEmpty).toSet().toList();
+
+    if (normalized.isEmpty) {
+      return Stream.value(const <CourseEnrollment>[]);
+    }
+
+    // Firestore whereIn 최대 10개 제한
+    const chunkSize = 10;
+    final chunks = <List<String>>[];
+    for (var i = 0; i < normalized.length; i += chunkSize) {
+      chunks.add(
+        normalized.sublist(
+          i,
+          i + chunkSize > normalized.length ? normalized.length : i + chunkSize,
+        ),
+      );
+    }
+
+    return Stream.multi((controller) {
+      final latestByChunk = <int, List<CourseEnrollment>>{};
+      final subs = <StreamSubscription>[];
+
+      void emit() {
+        final byId = <String, CourseEnrollment>{};
+        for (final list in latestByChunk.values) {
+          for (final e in list) {
+            byId[e.id] = e;
+          }
+        }
+        final result = byId.values.toList();
+        controller.add(result);
+      }
+
+      for (var idx = 0; idx < chunks.length; idx++) {
+        final chunk = chunks[idx];
+        var query = _firestore
+            .collection('enrollments')
+            .where('courseId', whereIn: chunk);
+
+        // placeId가 제공되면 필터링 추가
+        if (placeId != null) {
+          query = query.where('placeId', isEqualTo: placeId);
+        }
+
+        final sub = query.snapshots().listen((snapshot) {
+          final allEnrollments = snapshot.docs
+              .map(_courseEnrollmentFromDoc)
+              .toList();
+          final withRequests = allEnrollments
+              .where((e) => e.hasPendingExtensionRequest)
+              .toList();
+          latestByChunk[idx] = withRequests;
+          emit();
+        }, onError: controller.addError);
+        subs.add(sub);
+      }
+
+      controller.onCancel = () async {
+        for (final s in subs) {
+          await s.cancel();
+        }
+      };
+    }, isBroadcast: true);
   }
 
   /// 코스별 enrollments 삭제 (페이지네이션 사용)
@@ -1061,6 +1244,163 @@ class EnrollmentService {
     }
   }
 
+  /// 연장 요청 추가 + enrollment 문서에 최신 요청(denormalized)도 함께 기록
+  ///
+  /// 목적:
+  /// - 사용자 앱/관리자 화면에서 "요청 상태"를 빠르게 표시
+  /// - 서버 재조회 시에도 요청 상태가 유지되도록 함
+  ///
+  /// 저장 위치:
+  /// - enrollments/{enrollmentId}/extensionRequests/{requestId}
+  /// - enrollments/{enrollmentId}.extensionRequest (legacy/denormalized)
+  Future<void> addExtensionRequestWithEnrollmentMarker({
+    required String enrollmentId,
+    required ExtensionRequest request,
+  }) async {
+    try {
+      final enrollmentRef = _firestore
+          .collection('enrollments')
+          .doc(enrollmentId);
+      final requestRef = enrollmentRef
+          .collection('extensionRequests')
+          .doc(request.id);
+
+      // 중복 요청 방지: 트랜잭션 전에 서브컬렉션에서 pending 요청 확인
+      final existingRequestsSnapshot = await enrollmentRef
+          .collection('extensionRequests')
+          .where('status', isEqualTo: ExtensionRequestStatus.pending.name)
+          .limit(1)
+          .get();
+      if (existingRequestsSnapshot.docs.isNotEmpty) {
+        throw Exception('이미 진행 중인 연장 요청이 있습니다. 승인 또는 거절 후 다시 요청해주세요.');
+      }
+
+      await _firestore.runTransaction((tx) async {
+        final enrollmentSnap = await tx.get(enrollmentRef);
+        if (!enrollmentSnap.exists) {
+          throw Exception('Enrollment not found: $enrollmentId');
+        }
+
+        // 중복 요청 방지: marker에서도 pending 요청 확인 (이중 체크)
+        final data = enrollmentSnap.data();
+        final marker = data?['extensionRequest'];
+        if (marker is Map) {
+          final markerStatus = marker['status'] as String?;
+          if (markerStatus == ExtensionRequestStatus.pending.name) {
+            throw Exception('이미 진행 중인 연장 요청이 있습니다. 승인 또는 거절 후 다시 요청해주세요.');
+          }
+        }
+
+        tx.set(requestRef, {
+          'requestedAt': _dateTimeToTimestamp(request.requestedAt),
+          'reason': request.reason,
+          'status': request.status.name,
+          'approvedAt': request.approvedAt != null
+              ? _dateTimeToTimestamp(request.approvedAt!)
+              : null,
+          'rejectedAt': request.rejectedAt != null
+              ? _dateTimeToTimestamp(request.rejectedAt!)
+              : null,
+          'rejectionReason': request.rejectionReason,
+        });
+
+        // denormalized: 가장 최근 요청 1개만 유지
+        tx.update(enrollmentRef, {
+          'extensionRequest': {
+            'id': request.id,
+            'requestedAt': _dateTimeToTimestamp(request.requestedAt),
+            'reason': request.reason,
+            'status': request.status.name,
+            'approvedAt': request.approvedAt != null
+                ? _dateTimeToTimestamp(request.approvedAt!)
+                : null,
+            'rejectedAt': request.rejectedAt != null
+                ? _dateTimeToTimestamp(request.rejectedAt!)
+                : null,
+            'rejectionReason': request.rejectionReason,
+          },
+        });
+      });
+    } catch (e) {
+      debugPrint('❌ [EnrollmentService] 연장 요청 추가(마커 포함) 실패: $e');
+      rethrow;
+    }
+  }
+
+  /// 연장 요청 상태 업데이트 (서브컬렉션) + enrollment의 denormalized marker 동기화
+  ///
+  /// 관리자 승인/거절 처리에 사용.
+  Future<void> updateExtensionRequestStatusWithEnrollmentMarker({
+    required String enrollmentId,
+    required String requestId,
+    required ExtensionRequestStatus status,
+    String? rejectionReason,
+  }) async {
+    try {
+      final enrollmentRef = _firestore
+          .collection('enrollments')
+          .doc(enrollmentId);
+      final requestRef = enrollmentRef
+          .collection('extensionRequests')
+          .doc(requestId);
+
+      await _firestore.runTransaction((tx) async {
+        final enrollmentSnap = await tx.get(enrollmentRef);
+        if (!enrollmentSnap.exists) {
+          throw Exception('Enrollment not found: $enrollmentId');
+        }
+
+        final requestSnap = await tx.get(requestRef);
+        if (!requestSnap.exists) {
+          throw Exception('Extension request not found: $requestId');
+        }
+
+        // 동시성 문제 해결: 현재 상태가 pending인지 확인
+        final requestData = requestSnap.data() as Map<String, dynamic>;
+        final currentStatus = requestData['status'] as String?;
+        if (currentStatus != ExtensionRequestStatus.pending.name) {
+          throw Exception(
+            'Extension request is not pending. Current status: $currentStatus',
+          );
+        }
+
+        final now = TimezoneUtils.getSeoulDateTime();
+        final updateMap = <String, dynamic>{
+          'status': status.name,
+          'approvedAt': status == ExtensionRequestStatus.approved
+              ? _dateTimeToTimestamp(now)
+              : null,
+          'rejectedAt': status == ExtensionRequestStatus.rejected
+              ? _dateTimeToTimestamp(now)
+              : null,
+          'rejectionReason': status == ExtensionRequestStatus.rejected
+              ? rejectionReason
+              : null,
+        };
+        tx.update(requestRef, updateMap);
+
+        // denormalized marker도 동일 requestId일 때만 업데이트
+        final data = enrollmentSnap.data();
+        final marker = data?['extensionRequest'];
+        final markerId = marker is Map ? marker['id']?.toString() : null;
+        if (markerId == requestId) {
+          tx.update(enrollmentRef, {
+            'extensionRequest': {
+              ...(marker as Map).map((k, v) => MapEntry(k.toString(), v)),
+              'status': status.name,
+              'approvedAt': updateMap['approvedAt'],
+              'rejectedAt': updateMap['rejectedAt'],
+              'rejectionReason': updateMap['rejectionReason'],
+            },
+          });
+        }
+      });
+    } catch (e) {
+      debugPrint('❌ [EnrollmentService] 연장 요청 상태 업데이트 실패: $e');
+      rethrow;
+    }
+  }
+
   /// 연장 요청 조회 (페이지네이션 지원)
   Future<List<ExtensionRequest>> getExtensionRequests({
     required String enrollmentId,
@@ -1139,4 +1479,17 @@ class EnrollmentService {
           }).toList();
         });
   }
+}
+
+/// 연장 요청 상태 업데이트 정보
+class ExtensionRequestUpdate {
+  final String requestId;
+  final ExtensionRequestStatus status;
+  final String? rejectionReason;
+
+  ExtensionRequestUpdate({
+    required this.requestId,
+    required this.status,
+    this.rejectionReason,
+  });
 }

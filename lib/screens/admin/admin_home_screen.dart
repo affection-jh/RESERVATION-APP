@@ -13,7 +13,6 @@ import 'widgets/course_add_flow.dart';
 import '../../providers/place_provider.dart';
 import '../../providers/course_provider.dart';
 import '../../providers/story_provider.dart' show Story, StoryProvider;
-import '../../providers/promotion_provider.dart' show PromotionProvider;
 import '../../models/course.dart';
 import '../../services/firestore_service.dart';
 import '../../utils/week_range_calculator.dart';
@@ -58,10 +57,6 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
     final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
     final courseProvider = Provider.of<CourseProvider>(context, listen: false);
     final storyProvider = Provider.of<StoryProvider>(context, listen: false);
-    final promotionProvider = Provider.of<PromotionProvider>(
-      context,
-      listen: false,
-    );
 
     final currentPlace = placeProvider.currentPlace;
     if (currentPlace == null) return;
@@ -74,7 +69,6 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
       await Future.wait([
         courseProvider.loadCourses(currentPlace.id),
         storyProvider.loadStories(currentPlace.id),
-        promotionProvider.loadPromotions(currentPlace.id),
       ]);
 
       // 정책 기반 주차 범위 계산
@@ -159,6 +153,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
                   const SizedBox(height: 36),
 
                   WeekTabBar(
+                    showDot: true,
                     selectedIndex: _selectedWeekTab,
                     onTabChanged: (index) {
                       setState(() {

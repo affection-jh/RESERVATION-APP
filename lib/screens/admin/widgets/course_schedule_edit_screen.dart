@@ -16,7 +16,6 @@ import '../../../widgets/common_dialog.dart';
 import 'drag_calendar_editor.dart';
 import 'session_edit_bottom_sheet.dart';
 import 'session_detail_screen.dart';
-import 'bulk_move_reservations_bottom_sheet.dart';
 import 'course_policy_edit_screen.dart';
 
 /// 코스 일정 편집 화면
@@ -230,71 +229,73 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
             },
           ),
           actions: [
-            // 예약 정책 변경 버튼 (OutlinedButton)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: OutlinedButton(
-                onPressed: () async {
-                  await Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => CoursePolicyEditScreen(
-                        courseId: widget.course.id,
-                        requireSave: false,
+            // 예약 정책 변경 버튼 (OutlinedButton) - 저장 중일 때 숨김
+            if (!_isSaving)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: OutlinedButton(
+                  onPressed: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => CoursePolicyEditScreen(
+                          courseId: widget.course.id,
+                          requireSave: false,
+                        ),
                       ),
+                    );
+                  },
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
                     ),
-                  );
-                },
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 8,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    side: BorderSide(
+                      color: AppColors.textPrimary.withOpacity(0.2),
+                      width: 1,
+                    ),
                   ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  side: BorderSide(
-                    color: AppColors.textPrimary.withOpacity(0.3),
-                    width: 1,
-                  ),
-                ),
-                child: Text(
-                  '예약 정책',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
+                  child: Text(
+                    '예약 정책',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
                   ),
                 ),
               ),
-            ),
-            // 요일 편집 버튼 (OutlinedButton)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: OutlinedButton(
-                onPressed: _showAddDayDialog,
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 8,
+            // 요일 편집 버튼 (OutlinedButton) - 저장 중일 때 숨김
+            if (!_isSaving)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: OutlinedButton(
+                  onPressed: _showAddDayDialog,
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    side: BorderSide(
+                      color: AppColors.textPrimary.withOpacity(0.2),
+                      width: 1,
+                    ),
                   ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  side: BorderSide(
-                    color: AppColors.textPrimary.withOpacity(0.3),
-                    width: 1,
-                  ),
-                ),
-                child: Text(
-                  '요일 편집',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
+                  child: Text(
+                    '요일 편집',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
                   ),
                 ),
               ),
-            ),
             // 저장 버튼 (FilledButton, 변경사항 있을 때만 활성화)
             Padding(
               padding: const EdgeInsets.only(right: 20),
@@ -726,6 +727,7 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
           selectedDays: selectedDays,
           courseColor: Color(widget.course.color),
           existingSessions: _daySessions[dayOfWeek] ?? [],
+          allDaySessions: _daySessions, // 모든 요일의 세션 정보 전달
           isEditMode: isEditMode,
           onCancel: () {
             _clearSelectionForDay(dayOfWeek);
@@ -923,10 +925,8 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
     });
   }
 
-  // 일괄 이동 옵션 표시
+  // 일괄 취소 옵션 표시 (요일 편집에서는 취소만 지원)
   Future<void> _showBulkMoveOption(int dayOfWeek, SessionDraft session) async {
-    const dayNames = ['', '월', '화', '수', '목', '금', '토', '일'];
-
     // 예약 목록 조회 (최근 4주간)
     final now = TimezoneUtils.getSeoulDateTime();
     final startDate = DateTime(now.year, now.month, now.day);
@@ -990,55 +990,63 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
       return;
     }
 
-    // 일괄 이동 또는 삭제 옵션 제공
-    final choice = await showDialog<String>(
+    // 일괄 취소 확인 다이얼로그
+    const dayNames = ['', '월', '화', '수', '목', '금', '토', '일'];
+    final confirmed = await CommonDialog.show(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('예약이 있는 세션'),
-        content: Text(
-          '${dayNames[dayOfWeek]}요일 ${session.startTime}~${session.endTime} 세션에 '
+      title: '예약이 있는 세션',
+      message:
+          '${dayNames[dayOfWeek]}요일 ${session.startTime}~${session.endTime} 세션에\n'
           '${allReservations.length}명의 예약이 있습니다.\n\n'
-          '세션을 삭제하려면 먼저 모든 예약자를 이동시켜야 합니다.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop('cancel'),
-            child: const Text('취소'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop('move'),
-            child: Text(
-              '일괄 이동 (${allReservations.length}명)',
-              style: TextStyle(color: AppColors.primaryGreen),
-            ),
-          ),
-        ],
-      ),
+          '세션을 삭제하려면 모든 예약을 취소해야 합니다.',
+      cancelText: '취소',
+      confirmText: '일괄 취소 (${allReservations.length}명)',
+      confirmButtonColor: Colors.red,
     );
 
-    if (choice == 'move') {
-      // 일괄 이동 바텀시트 표시
-      final sourceDate = startDate; // 첫 번째 날짜를 소스로 사용
-      await showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        builder: (context) => BulkMoveReservationsBottomSheet(
-          course: widget.course,
-          sourceSession: CourseSession(
-            dayOfWeek: dayOfWeek,
-            startTime: session.startTime,
-            endTime: session.endTime,
-            capacity: session.capacity,
-          ),
-          sourceDate: sourceDate,
-          reservations: allReservations,
-          onMoved: () async {
-            // 이동 완료 후 세션 삭제
-            await _deleteSession(dayOfWeek, session);
-          },
-        ),
+    if (confirmed != true) {
+      return;
+    }
+
+    // 일괄 취소 실행
+    try {
+      final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+      final placeId = placeProvider.currentPlace?.id ?? '';
+      if (placeId.isEmpty) {
+        SnackbarUtil.showError(context, '플레이스 정보를 찾을 수 없습니다.');
+        return;
+      }
+
+      final result = await _firestoreService.batchCancelReservations(
+        reservationIds: allReservations.map((r) => r.id).toList(),
+        placeId: placeId,
       );
+
+      final cancelledCount = result['cancelledCount'] as int? ?? 0;
+      final results = result['results'] as List<dynamic>? ?? [];
+      final failedCount = results
+          .where((r) => (r as Map)['success'] != true)
+          .length;
+
+      if (!mounted) return;
+
+      if (failedCount == 0) {
+        SnackbarUtil.showSuccess(context, '$cancelledCount명의 예약이 취소되었습니다.');
+        // 취소 완료 후 세션 삭제
+        await _deleteSession(dayOfWeek, session);
+      } else {
+        SnackbarUtil.showError(
+          context,
+          '$cancelledCount명 취소 완료, $failedCount명 취소 실패',
+        );
+        // 일부라도 성공했으면 세션 삭제
+        if (cancelledCount > 0) {
+          await _deleteSession(dayOfWeek, session);
+        }
+      }
+    } catch (e) {
+      if (!mounted) return;
+      SnackbarUtil.showError(context, '일괄 취소 중 오류가 발생했습니다: $e');
     }
   }
 
@@ -1268,31 +1276,12 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
           : null;
       final requiresBulkMove = detailsMap?['requiresBulkMove'] == true;
       if (requiresBulkMove) {
-        final courseName =
-            (detailsMap?['courseName'] as String?) ?? widget.course.name;
         final dayOfWeek = (detailsMap?['dayOfWeek'] as num?)?.toInt();
         final startTime = detailsMap?['startTime'] as String?;
-        final operation = detailsMap?['operation'] as String?; // delete/modify
 
-        const dayNames = ['', '월', '화', '수', '목', '금', '토', '일'];
-        final dayText = (dayOfWeek != null && dayOfWeek >= 1 && dayOfWeek <= 7)
-            ? '${dayNames[dayOfWeek]}요일'
-            : '해당 요일';
-        final timeText = startTime != null ? startTime : '';
-        final opText = operation == 'modify' ? '변경' : '삭제';
-
-        final confirmed = await CommonDialog.show(
-          context: context,
-          title: '저장할 수 없음',
-          message:
-              '$courseName\n\n$dayText $timeText 세션은 예약이 있어 $opText할 수 없습니다.\n먼저 예약을 이동해주세요.',
-          cancelText: '닫기',
-          confirmText: '예약 이동하기',
-          confirmButtonColor: Colors.red,
-        );
-
-        if (confirmed == true && dayOfWeek != null && startTime != null) {
-          // 삭제/변경 대상 세션을 찾아 일괄 이동 플로우로 유도
+        // 예약이 있어서 삭제/변경할 수 없는 경우, 바로 일괄 취소 다이얼로그 표시
+        if (dayOfWeek != null && startTime != null) {
+          // 삭제/변경 대상 세션을 찾아 일괄 취소 플로우로 유도
           SessionDraft? target;
           final initial = _initialDaySessionsSnapshot[dayOfWeek] ?? const [];
           for (final s in initial) {
@@ -1311,6 +1300,8 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
           } else {
             SnackbarUtil.showError(context, '대상 세션을 찾을 수 없습니다.');
           }
+        } else {
+          SnackbarUtil.showError(context, '예약이 있어서 삭제할 수 없습니다. 먼저 예약을 취소해주세요.');
         }
       } else {
         if (mounted) {
@@ -1341,6 +1332,8 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
     for (final entry in _daySessions.entries) {
       originalDaySessionsCopy[entry.key] = List<SessionDraft>.from(entry.value);
     }
+    // 원본 요일 목록 저장 (취소 시 복원용)
+    final originalSelectedDays = Set<int>.from(_daySessions.keys);
     // 임시 선택 상태 (바텀시트에서만 사용)
     final tempSelectedDays = Set<int>.from(_daySessions.keys);
 
@@ -1349,6 +1342,12 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
       backgroundColor: Colors.transparent,
       builder: (context) => StatefulBuilder(
         builder: (context, setModalState) {
+          // 변경사항 확인 함수
+          bool hasDayChanges(Set<int> current, Set<int> original) {
+            if (current.length != original.length) return true;
+            return !current.every((day) => original.contains(day));
+          }
+
           return Container(
             decoration: BoxDecoration(
               color: AppColors.backgroundWhite,
@@ -1385,25 +1384,73 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
                           ),
                         ),
                         const Spacer(),
-                        IconButton(
-                          icon: Icon(
-                            Icons.close,
-                            color: AppColors.textSecondary,
-                          ),
+                        // 취소 버튼
+                        TextButton(
                           onPressed: () {
-                            // 원본 상태로 복원
+                            // 원본 상태로 복원 (요일과 세션 데이터 모두)
                             setState(() {
                               _daySessions.clear();
-                              for (final entry
-                                  in originalDaySessionsCopy.entries) {
-                                _daySessions[entry.key] =
-                                    List<SessionDraft>.from(entry.value);
+                              // 원본 요일 목록으로 복원
+                              for (final day in originalSelectedDays) {
+                                if (originalDaySessionsCopy.containsKey(day)) {
+                                  _daySessions[day] = List<SessionDraft>.from(
+                                    originalDaySessionsCopy[day]!,
+                                  );
+                                } else {
+                                  _daySessions[day] = [];
+                                }
                               }
                             });
                             Navigator.pop(context);
                           },
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
+                          child: Text(
+                            '취소',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        // 확인 버튼 (변경사항이 있을 때만 활성화)
+                        FilledButton(
+                          onPressed:
+                              hasDayChanges(
+                                tempSelectedDays,
+                                originalSelectedDays,
+                              )
+                              ? () {
+                                  // 변경사항 유지하고 닫기
+                                  Navigator.pop(context);
+                                }
+                              : null,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: AppColors.primaryGreen,
+                            disabledBackgroundColor: AppColors.borderLight,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 20,
+                              vertical: 12,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            elevation: 0,
+                          ),
+                          child: Text(
+                            '확인',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color:
+                                  hasDayChanges(
+                                    tempSelectedDays,
+                                    originalSelectedDays,
+                                  )
+                                  ? Colors.white
+                                  : AppColors.textSecondary,
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -1455,6 +1502,8 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
                                       }
                                     }
                                   });
+                                  // 변경사항 확인을 위해 setModalState 호출 (확인 버튼 상태 업데이트)
+                                  setModalState(() {});
                                 },
                           child: Container(
                             width: 60,

@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import '../models/course.dart';
 import '../services/firestore_service.dart';
+import '../policies/course_policy.dart';
 
 /// 코스 관리 Provider
 ///
@@ -13,9 +14,83 @@ class CourseProvider with ChangeNotifier {
   String? _error;
   String? _placeId;
 
+  // 코스 정책 캐시 (코스 ID -> 정책)
+  final Map<String, CoursePolicy> _coursePolicies = {};
+
   List<Course> get courses => List.unmodifiable(_courses);
   bool get isLoading => _isLoading;
   String? get error => _error;
+
+  /// 코스 정책 가져오기 (캐시에서)
+  CoursePolicy? getCoursePolicy(String courseId) {
+    return _coursePolicies[courseId];
+  }
+
+  /// 코스 정책 로드 (캐시에 없을 때만)
+  Future<void> loadCoursePolicy(String courseId, String placeId) async {
+    // 이미 캐시에 있으면 스킵
+    if (_coursePolicies.containsKey(courseId)) {
+      return;
+    }
+
+    try {
+      final policy = await _firestoreService.getCoursePolicy(
+        courseId: courseId,
+        placeId: placeId,
+      );
+      _coursePolicies[courseId] = policy;
+      notifyListeners();
+    } catch (_) {
+      // 정책 로드 실패 시 기본값 사용
+      _coursePolicies[courseId] = CoursePolicy.defaultFor(
+        courseId: courseId,
+        placeId: placeId,
+      );
+      notifyListeners();
+    }
+  }
+
+  /// 코스 정책 강제 재로드 (정책 변경 시)
+  Future<void> reloadCoursePolicy(String courseId, String placeId) async {
+    try {
+      final policy = await _firestoreService.getCoursePolicy(
+        courseId: courseId,
+        placeId: placeId,
+      );
+      _coursePolicies[courseId] = policy;
+      notifyListeners();
+    } catch (_) {
+      // 정책 로드 실패 시 기본값 사용
+      _coursePolicies[courseId] = CoursePolicy.defaultFor(
+        courseId: courseId,
+        placeId: placeId,
+      );
+      notifyListeners();
+    }
+  }
+
+  /// 모든 코스 정책 로드 (앱 시작 시)
+  Future<void> loadAllCoursePolicies(String placeId) async {
+    if (_courses.isEmpty) return;
+
+    for (final course in _courses) {
+      if (!_coursePolicies.containsKey(course.id)) {
+        try {
+          final policy = await _firestoreService.getCoursePolicy(
+            courseId: course.id,
+            placeId: placeId,
+          );
+          _coursePolicies[course.id] = policy;
+        } catch (_) {
+          _coursePolicies[course.id] = CoursePolicy.defaultFor(
+            courseId: course.id,
+            placeId: placeId,
+          );
+        }
+      }
+    }
+    notifyListeners();
+  }
 
   /// 코스 목록 로드
   Future<void> loadCourses(String placeId) async {
@@ -27,6 +102,9 @@ class CourseProvider with ChangeNotifier {
     try {
       _courses = await _firestoreService.getCoursesByPlace(placeId);
       _error = null;
+
+      // 코스 목록 로드 후 모든 코스 정책도 로드
+      await loadAllCoursePolicies(placeId);
     } catch (e) {
       _error = e.toString();
       _courses = [];
@@ -171,6 +249,7 @@ class CourseProvider with ChangeNotifier {
     _isLoading = false;
     _error = null;
     _placeId = null;
+    _coursePolicies.clear();
     notifyListeners();
   }
 

@@ -7,6 +7,14 @@ import '../theme/app_colors.dart';
 import '../models/notification.dart';
 import '../providers/notification_provider.dart';
 import '../providers/auth_provider.dart';
+import '../providers/member_provider.dart';
+import '../providers/course_provider.dart';
+import '../providers/enrollment_provider.dart';
+import '../providers/place_provider.dart';
+import '../screens/admin/widgets/enrollment_detail_screen.dart';
+import '../models/admin_models.dart';
+import '../screens/story/story_detail_screen.dart';
+import '../providers/story_provider.dart';
 
 /// 알림 스크린
 class NotificationScreen extends StatefulWidget {
@@ -55,15 +63,220 @@ class _NotificationScreenState extends State<NotificationScreen> {
     super.dispose();
   }
 
-  void _handleNotificationTap(
+  Future<void> _handleNotificationTap(
     AppNotification notification,
     NotificationProvider provider,
-  ) {
+  ) async {
     // 읽지 않은 알림이면 읽음 처리
     if (!notification.isRead) {
       provider.markAsRead(notification.id);
     }
-    // TODO: 알림 타입에 따라 상세 화면으로 이동
+
+    // 알림 데이터 확인
+    final data = notification.data;
+    if (data == null) return;
+
+    // 연장 요청 알림인지 확인 (enrollmentId, userId, courseId, placeId가 모두 있는 경우)
+    final enrollmentId = data['enrollmentId'] as String?;
+    final userId = data['userId'] as String?;
+    final courseId = data['courseId'] as String?;
+    final placeId = data['placeId'] as String?;
+
+    // 알림 타입별 처리
+    switch (notification.type) {
+      case NotificationType.system:
+        // 연장 요청 알림인 경우 enrollment 상세 화면으로 이동
+        if (enrollmentId != null &&
+            userId != null &&
+            courseId != null &&
+            placeId != null) {
+          try {
+            // 연장 요청: 탭 1
+            final initialTabIndex = 1;
+
+            await _navigateToEnrollmentDetail(
+              enrollmentId: enrollmentId,
+              userId: userId,
+              courseId: courseId,
+              placeId: placeId,
+              initialTabIndex: initialTabIndex,
+            );
+          } catch (e) {
+            debugPrint('[NotificationScreen] enrollment 상세 화면 이동 오류: $e');
+          }
+        }
+        break;
+
+      case NotificationType.story:
+        // 스토리 알림인 경우 스토리 상세 화면으로 이동
+        final storyId = data['storyId'] as String?;
+        final storyPlaceId = data['placeId'] as String?;
+        if (storyId != null && storyPlaceId != null) {
+          try {
+            await _navigateToStoryDetail(
+              storyId: storyId,
+              placeId: storyPlaceId,
+            );
+          } catch (e) {
+            debugPrint('[NotificationScreen] 스토리 상세 화면 이동 오류: $e');
+          }
+        }
+        break;
+
+      case NotificationType.promotion:
+        // 프로모션 알림인 경우 홈 화면으로 이동
+        final promotionPlaceId = data['placeId'] as String?;
+        if (promotionPlaceId != null) {
+          try {
+            await _navigateToHome();
+          } catch (e) {
+            debugPrint('[NotificationScreen] 홈 화면 이동 오류: $e');
+          }
+        }
+        break;
+
+      case NotificationType.reservation:
+        // 예약 알림은 현재 특별한 처리 없음 (알림 화면에 머무름)
+        break;
+    }
+  }
+
+  /// 스토리 상세 화면으로 이동
+  Future<void> _navigateToStoryDetail({
+    required String storyId,
+    required String placeId,
+  }) async {
+    try {
+      final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+      final storyProvider = Provider.of<StoryProvider>(context, listen: false);
+
+      // 현재 플레이스 확인
+      final currentPlace = placeProvider.currentPlace;
+      if (currentPlace?.id != placeId) {
+        debugPrint(
+          '[NotificationScreen] 플레이스 불일치: current=${currentPlace?.id}, required=$placeId',
+        );
+        return;
+      }
+
+      // 스토리 목록 로드
+      await storyProvider.loadStories(placeId);
+      final story = storyProvider.stories.firstWhere(
+        (s) => s.id == storyId,
+        orElse: () => throw Exception('Story not found'),
+      );
+
+      // StoryDetailScreen으로 이동
+      if (mounted) {
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) =>
+                StoryDetailScreen(story: story, place: currentPlace),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('[NotificationScreen] 스토리 상세 화면 이동 오류: $e');
+      rethrow;
+    }
+  }
+
+  /// 홈 화면으로 이동
+  Future<void> _navigateToHome() async {
+    if (mounted) {
+      Navigator.of(context).pushNamedAndRemoveUntil(
+        '/main',
+        (route) => false,
+        arguments: {'initialIndex': 0}, // 홈 탭
+      );
+    }
+  }
+
+  /// Enrollment 상세 화면으로 이동
+  Future<void> _navigateToEnrollmentDetail({
+    required String enrollmentId,
+    required String userId,
+    required String courseId,
+    required String placeId,
+    int initialTabIndex = 1, // 기본값: 연장 탭 (1)
+  }) async {
+    try {
+      final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+      final memberProvider = Provider.of<MemberProvider>(
+        context,
+        listen: false,
+      );
+      final courseProvider = Provider.of<CourseProvider>(
+        context,
+        listen: false,
+      );
+      final enrollmentProvider = Provider.of<EnrollmentProvider>(
+        context,
+        listen: false,
+      );
+
+      // 현재 플레이스 확인
+      final currentPlace = placeProvider.currentPlace;
+      if (currentPlace?.id != placeId) {
+        debugPrint(
+          '[NotificationScreen] 플레이스 불일치: current=${currentPlace?.id}, required=$placeId',
+        );
+        // 플레이스를 변경하거나 오류 메시지 표시
+        return;
+      }
+
+      // 멤버 조회
+      await memberProvider.loadMembers(placeId);
+      final member = memberProvider.getMember(userId);
+      if (member == null) {
+        debugPrint('[NotificationScreen] 멤버를 찾을 수 없습니다: $userId');
+        return;
+      }
+
+      // 코스 조회
+      await courseProvider.loadCourses(placeId);
+      final course = courseProvider.courses.firstWhere(
+        (c) => c.id == courseId,
+        orElse: () => courseProvider.courses.first,
+      );
+
+      // Enrollment 조회
+      await enrollmentProvider.loadUserEnrollments(
+        userId: userId,
+        placeId: placeId,
+      );
+      final enrollment = enrollmentProvider.enrollments.firstWhere(
+        (e) => e.id == enrollmentId,
+        orElse: () => throw Exception('Enrollment not found'),
+      );
+
+      // MemberData 생성
+      final memberData = MemberData(
+        userId: member.userId,
+        name: member.name,
+        phoneNumber: member.phoneNumber,
+        role: member.isAdmin ? 'admin' : 'user',
+        isActive: true,
+        pendingExtensionRequests: member.pendingExtensionRequests.length,
+        enrolledCourseIds: member.enrollments.map((e) => e.courseId).toList(),
+      );
+
+      // EnrollmentDetailScreen으로 이동 (연장 탭으로)
+      if (mounted) {
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => EnrollmentDetailScreen(
+              member: memberData,
+              enrollment: enrollment,
+              course: course,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('[NotificationScreen] enrollment 상세 화면 이동 오류: $e');
+      rethrow;
+    }
   }
 
   @override

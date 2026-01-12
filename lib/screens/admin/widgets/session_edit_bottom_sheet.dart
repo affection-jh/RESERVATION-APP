@@ -55,6 +55,8 @@ class SessionEditBottomSheet extends StatefulWidget {
   final bool canBulkCancel; // 편집 모드에서 일괄취소 UI 노출 여부(동일 시간대가 모든 선택 요일에 존재)
   final Color courseColor; // 코스 색상
   final List<SessionDraft>? existingSessions; // 현재 요일의 기존 세션들 (충돌 체크용)
+  final Map<int, List<SessionDraft>>?
+  allDaySessions; // 모든 요일의 세션 정보 (일괄 적용 가능 여부 확인용)
   final Function(
     String startTime,
     String endTime,
@@ -79,6 +81,7 @@ class SessionEditBottomSheet extends StatefulWidget {
     required this.courseColor,
     this.canBulkCancel = false,
     this.existingSessions,
+    this.allDaySessions,
     required this.onRegister,
     required this.onCancel,
     this.onDelete,
@@ -260,6 +263,53 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
     return false;
   }
 
+  // 일괄 적용 버튼 표시 여부 확인
+  bool _shouldShowBulkUi() {
+    // 선택된 요일이 2개 이상이어야 함
+    if (widget.selectedDays.length <= 1) {
+      return false;
+    }
+
+    // 편집 모드가 아닌 경우 (드래그로 새로 추가하는 경우)
+    if (!widget.isEditMode && widget.allDaySessions != null) {
+      // 현재 요일을 제외한 다른 선택된 요일들 확인
+      final otherSelectedDays = widget.selectedDays
+          .where((day) => day != widget.dayOfWeek)
+          .toList();
+
+      // 다른 요일들 중 하나라도 해당 시간대에 세션이 있으면 일괄 적용 숨김
+      for (final day in otherSelectedDays) {
+        final daySessions = widget.allDaySessions![day] ?? [];
+        // 해당 시간대와 겹치는 세션이 있는지 확인
+        final hasOverlappingSession = daySessions.any((session) {
+          final sessionStart = _parseTimeToMinutes(
+            int.tryParse(session.startTime.split(':')[0]) ?? 0,
+            int.tryParse(session.startTime.split(':')[1]) ?? 0,
+          );
+          final sessionEnd = _parseTimeToMinutes(
+            int.tryParse(session.endTime.split(':')[0]) ?? 0,
+            int.tryParse(session.endTime.split(':')[1]) ?? 0,
+          );
+          final newStart = _parseTimeToMinutes(_startHour, _startMinute);
+          final newEnd = _parseTimeToMinutes(_endHour, _endMinute);
+
+          // 시간이 겹치는지 확인
+          return newStart < sessionEnd && newEnd > sessionStart;
+        });
+
+        if (hasOverlappingSession) {
+          return false; // 하나라도 있으면 일괄 적용 숨김
+        }
+      }
+
+      // 다른 요일들에 해당 시간대 세션이 없으면 일괄 적용 가능
+      return true;
+    }
+
+    // 편집 모드이거나 allDaySessions가 없는 경우는 기존 로직 유지
+    return widget.selectedDays.length > 1;
+  }
+
   // 변경 사항이 있는지 확인 및 유효성 검사
   bool _hasChanges() {
     final capacityText = _capacityController.text.trim();
@@ -380,14 +430,7 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
                   horizontal: 20,
                   vertical: 16,
                 ),
-                decoration: BoxDecoration(
-                  border: Border(
-                    bottom: BorderSide(
-                      color: AppColors.borderLight,
-                      width: 0.5,
-                    ),
-                  ),
-                ),
+
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -427,10 +470,9 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
                               const SizedBox(height: 12),
                               Builder(
                                 builder: (context) {
-                                  // 수정 모드에서도 일괄 적용 가능하도록 변경
-                                  final showBulkUi =
-                                      widget.selectedDays.length > 1;
-                                  if (!showBulkUi) return const SizedBox();
+                                  // 일괄 적용 버튼 표시 여부 확인
+                                  if (!_shouldShowBulkUi())
+                                    return const SizedBox();
 
                                   return Row(
                                     children: [
@@ -487,6 +529,14 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    Text(
+                      '수용인원',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
                     const SizedBox(height: 4),
                     TextField(
                       style: TextStyle(

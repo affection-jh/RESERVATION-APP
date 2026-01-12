@@ -782,17 +782,6 @@ class AuthService {
   /// 인증 완료 후 공통 처리
   /// 관리자도 일반 사용자로 처리하여 다른 플레이스의 멤버가 될 수 있도록 함
   Future<AuthResult> _completeAuthentication(models.User user) async {
-    // ✅ 과거 버그로 생성된 phone_{010...} userId 데이터를 현재 UID로 자동 이관(가능하면)
-    // - 함수 미배포/권한/네트워크 오류가 있어도 로그인 자체는 계속 진행해야 하므로 try/catch로 감싼다.
-    try {
-      final callable = FirebaseFunctions.instance.httpsCallable(
-        'reconcileLegacyPhoneUser',
-      );
-      await callable.call({'phoneNumber': user.phoneNumber});
-    } catch (e) {
-      debugPrint('[AuthService] reconcileLegacyPhoneUser 실패(무시): $e');
-    }
-
     // 자동 매칭 시도 (관리자도 일반 사용자로 처리)
     final newlyCreated = await _autoMatchMemberships(
       user.userId,

@@ -42,9 +42,12 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
   // 공통
   int _closeBeforeMinutes = 60;
   bool _allowAdminForceMoveWithinCourse = false;
+  final TextEditingController _closeBeforeHoursController =
+      TextEditingController();
 
   // rolling window
   int _windowDays = 21;
+  final TextEditingController _windowDaysController = TextEditingController();
 
   // weekly release
   int _releaseDayOfWeek = 1;
@@ -58,7 +61,18 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
   @override
   void initState() {
     super.initState();
+    _windowDaysController.text = _windowDays.toString();
+    _closeBeforeHoursController.text = (_closeBeforeMinutes / 60)
+        .round()
+        .toString();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _windowDaysController.dispose();
+    _closeBeforeHoursController.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -82,8 +96,12 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
       _type = policy.openStrategy.type;
       _closeBeforeMinutes = policy.closeBeforeMinutes;
       _allowAdminForceMoveWithinCourse = policy.allowAdminForceMoveWithinCourse;
+      _closeBeforeHoursController.text = (_closeBeforeMinutes / 60)
+          .round()
+          .toString();
 
       _windowDays = policy.openStrategy.rollingWindow?.windowDays ?? 21;
+      _windowDaysController.text = _windowDays.toString();
 
       final weekly = policy.openStrategy.weeklyRelease;
       _releaseDayOfWeek = weekly?.releaseDayOfWeek ?? 1;
@@ -100,8 +118,10 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
       _original = null;
       _type = BookingOpenStrategyType.rollingWindow;
       _closeBeforeMinutes = 60;
+      _closeBeforeHoursController.text = '1';
       _allowAdminForceMoveWithinCourse = false;
       _windowDays = 21;
+      _windowDaysController.text = '21';
       _releaseDayOfWeek = 1;
       _releaseTime = const TimeOfDay(hour: 10, minute: 0);
       _weeksAhead = 1;
@@ -178,6 +198,27 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
     return '$h:$m';
   }
 
+  // 입력값 유효성 검증
+  bool _isValidInput() {
+    // 기간 기준 일수 체크
+    if (_type == BookingOpenStrategyType.rollingWindow) {
+      final windowDaysValue = int.tryParse(_windowDaysController.text);
+      if (windowDaysValue == null || windowDaysValue < 1) {
+        return false;
+      }
+    }
+
+    // 세션 시작 전 시간 체크
+    final closeBeforeHoursValue = int.tryParse(
+      _closeBeforeHoursController.text,
+    );
+    if (closeBeforeHoursValue == null || closeBeforeHoursValue < 0) {
+      return false;
+    }
+
+    return true;
+  }
+
   Future<void> _pickReleaseTime() async {
     final picked = await showTimePicker(
       context: context,
@@ -196,6 +237,25 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
       listen: false,
     ).currentPlace?.id;
     if (placeId == null) return false;
+
+    // 유효값 체크 및 값 업데이트
+    final windowDaysValue = int.tryParse(_windowDaysController.text);
+    if (_type == BookingOpenStrategyType.rollingWindow) {
+      if (windowDaysValue == null || windowDaysValue < 1) {
+        SnackbarUtil.showError(context, '기간 기준 일수는 1일 이상 입력해주세요.');
+        return false;
+      }
+      _windowDays = windowDaysValue;
+    }
+
+    final closeBeforeHoursValue = int.tryParse(
+      _closeBeforeHoursController.text,
+    );
+    if (closeBeforeHoursValue == null || closeBeforeHoursValue < 0) {
+      SnackbarUtil.showError(context, '세션 시작 전 시간은 0시간 이상 입력해주세요.');
+      return false;
+    }
+    _closeBeforeMinutes = closeBeforeHoursValue * 60;
 
     setState(() => _isSaving = true);
     try {
@@ -240,6 +300,14 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
 
       await _firestoreService.upsertCoursePolicy(policy);
       if (!mounted) return false;
+
+      // 정책 저장 후 CourseProvider에서 정책 재로드
+      final courseProvider = Provider.of<CourseProvider>(
+        context,
+        listen: false,
+      );
+      await courseProvider.reloadCoursePolicy(policy.courseId, policy.placeId);
+
       // 코스 등록 플로우(requireSave=true)에서는 스낵바를 띄우지 않음 (조용히 진행)
       if (!widget.requireSave) {
         SnackbarUtil.showSuccess(context, '예약 정책이 저장되었습니다.');
@@ -334,8 +402,6 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
       );
     }
 
-    final closeBeforeHours = (_closeBeforeMinutes / 60).round();
-
     // 코스 색상 가져오기
     final courseProvider = Provider.of<CourseProvider>(context, listen: false);
     final course =
@@ -365,9 +431,9 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
           children: [
             Expanded(
               child: ListView(
-                padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
                 children: [
-                  _sectionTitle('예약 정책을 설정해볼까요?'),
+                  _sectionTitle('예약 정책 설정'),
 
                   const SizedBox(height: 20),
                   if (_hasReservations) ...[
@@ -376,7 +442,6 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                       decoration: BoxDecoration(
                         color: AppColors.backgroundWhite,
                         borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: AppColors.borderLight),
                       ),
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -389,12 +454,12 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                           const SizedBox(width: 10),
                           Expanded(
                             child: Text(
-                              '이 코스에는 이미 예약이 있습니다.\n정책을 변경하면 앞으로 새로 예약되는 건에만 적용됩니다.\n기존 예약은 그대로 유지됩니다.',
+                              '정책을 변경하면 새로 예약되는 건에만 적용됩니다.\n기존 예약은 그대로 유지됩니다.',
                               style: TextStyle(
-                                fontSize: 13,
+                                fontSize: 14,
                                 height: 1.35,
-                                color: AppColors.textPrimary.withOpacity(0.9),
-                                fontWeight: FontWeight.w600,
+                                color: AppColors.textSecondary.withOpacity(0.9),
+                                fontWeight: FontWeight.w500,
                               ),
                             ),
                           ),
@@ -430,27 +495,48 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                             children: [
                               const Text(
                                 '오늘부터 ',
-                                style: TextStyle(fontSize: 15),
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                               const SizedBox(width: 8),
-                              _styledDropdown<int>(
-                                value: _windowDays,
-                                items: List.generate(
-                                  61,
-                                  (i) => DropdownMenuItem(
-                                    value: i,
-                                    child: Text('$i일'),
-                                  ),
-                                ).where((e) => e.value != 0).toList(),
-                                onChanged: (v) {
-                                  if (v == null) return;
-                                  setState(() => _windowDays = v);
-                                },
+                              SizedBox(
+                                width: 80,
+                                child: _styledNumberTextField(
+                                  controller: _windowDaysController,
+                                  suffix: '일',
+                                  onChanged: (value) {
+                                    final days = int.tryParse(value) ?? 0;
+                                    if (days >= 1) {
+                                      setState(() => _windowDays = days);
+                                    }
+                                  },
+                                ),
                               ),
                               const SizedBox(width: 8),
-                              const Text('까지', style: TextStyle(fontSize: 15)),
+                              const Text(
+                                '까지',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
                             ],
                           ),
+                          if (_windowDaysController.text.isNotEmpty &&
+                              (int.tryParse(_windowDaysController.text) ?? 0) <
+                                  1)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 8),
+                              child: Text(
+                                '1일 이상 입력해주세요',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.red,
+                                ),
+                              ),
+                            ),
                           const SizedBox(height: 8),
                         ],
                       ),
@@ -474,7 +560,13 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                             spacing: 8,
                             runSpacing: 8,
                             children: [
-                              const Text('매주', style: TextStyle(fontSize: 15)),
+                              const Text(
+                                '매주',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
                               _styledDropdown<int>(
                                 value: _releaseDayOfWeek,
                                 items: const [
@@ -502,14 +594,26 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                                   ),
                                 ),
                               ),
-                              const Text('에', style: TextStyle(fontSize: 15)),
+                              const Text(
+                                '에',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
                               _styledDropdown<int>(
                                 value: _weeksAhead,
                                 items: List.generate(
                                   8,
                                   (i) => DropdownMenuItem(
                                     value: i + 1,
-                                    child: Text('${i + 1}주 뒤'),
+                                    child: Text(
+                                      '${i + 1}주 뒤',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
                                   ),
                                 ),
                                 onChanged: (v) {
@@ -517,7 +621,13 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                                   setState(() => _weeksAhead = v);
                                 },
                               ),
-                              const Text('까지', style: TextStyle(fontSize: 15)),
+                              const Text(
+                                '까지',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
                             ],
                           ),
                           const SizedBox(height: 6),
@@ -543,37 +653,51 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                       children: [
                         Row(
                           children: [
-                            const Expanded(
-                              child: Text(
-                                '세션 시작 전',
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                ),
+                            Text(
+                              '세션 시작 전',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
-                            _styledDropdown<int>(
-                              value: closeBeforeHours,
-                              items: List.generate(
-                                25,
-                                (i) => DropdownMenuItem(
-                                  value: i,
-                                  child: Text('${i}시간'),
-                                ),
+                            SizedBox(width: 12),
+
+                            SizedBox(
+                              width: 80,
+                              child: _styledNumberTextField(
+                                controller: _closeBeforeHoursController,
+                                suffix: '시간',
+                                onChanged: (value) {
+                                  final hours = int.tryParse(value) ?? 0;
+                                  if (hours >= 0) {
+                                    setState(
+                                      () => _closeBeforeMinutes = hours * 60,
+                                    );
+                                  }
+                                },
                               ),
-                              onChanged: (v) {
-                                if (v == null) return;
-                                setState(() => _closeBeforeMinutes = v * 60);
-                              },
                             ),
                             const SizedBox(width: 8),
                             const Text(
                               ' 전까지 예약 가능',
-                              style: TextStyle(fontSize: 15),
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 8),
+                        if (_closeBeforeHoursController.text.isNotEmpty &&
+                            (int.tryParse(_closeBeforeHoursController.text) ??
+                                    -1) <
+                                0)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Text(
+                              '0시간 이상 입력해주세요',
+                              style: TextStyle(fontSize: 12, color: Colors.red),
+                            ),
+                          ),
                       ],
                     ),
                   ),
@@ -604,6 +728,7 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                                     style: TextStyle(
                                       fontSize: 16,
                                       fontWeight: FontWeight.w600,
+                                      color: AppColors.textPrimary,
                                     ),
                                   ),
                                 ],
@@ -743,7 +868,7 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                 child: SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: (_isLoading || _isSaving)
+                    onPressed: (_isLoading || _isSaving || !_isValidInput())
                         ? null
                         : (widget.requireSave || _hasChanges)
                         ? (widget.requireSave
@@ -888,7 +1013,6 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
       decoration: BoxDecoration(
         color: AppColors.backgroundLight,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.borderLight, width: 1),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<T>(
@@ -922,12 +1046,56 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
       decoration: BoxDecoration(
         color: AppColors.backgroundLight,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.borderLight, width: 1),
       ),
       child: InkWell(
         onTap: onPressed,
         borderRadius: BorderRadius.circular(12),
         child: child,
+      ),
+    );
+  }
+
+  Widget _styledNumberTextField({
+    required TextEditingController controller,
+    required String suffix,
+    required ValueChanged<String> onChanged,
+  }) {
+    return Container(
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: AppColors.backgroundLight,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: controller,
+              keyboardType: TextInputType.number,
+              style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textPrimary,
+              ),
+              decoration: const InputDecoration(
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.zero,
+                isDense: true,
+              ),
+              onChanged: onChanged,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            suffix,
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
+            ),
+          ),
+        ],
       ),
     );
   }

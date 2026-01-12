@@ -164,6 +164,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                   'dayOfWeek': created.dayOfWeek,
                   'startTime': created.startTime,
                   'reservedDate': created.reservedDate,
+                  'shouldShowBottomSheet': true, // 명시적 클릭이므로 바텀시트 표시
                 },
               },
             );
@@ -198,6 +199,19 @@ class _CalendarScreenState extends State<CalendarScreen> {
         setState(() {});
       }
 
+      // cancel 실패 시: 바텀시트가 닫혀 있어도 즉시 피드백
+      if (event.type == ReservationOperationType.cancel &&
+          event.success == false) {
+        if (!mounted) return;
+        final msg = event.error?.toString();
+        SnackbarUtil.showError(
+          context,
+          (msg == null || msg.isEmpty) ? '예약 취소에 실패했습니다.' : '예약 취소 실패: $msg',
+        );
+        if (!mounted) return;
+        setState(() {});
+      }
+
       // move 성공 시: 바텀시트가 닫혀 있어도 결과 피드백 + 상태 갱신
       if (event.type == ReservationOperationType.move &&
           event.success == true &&
@@ -212,6 +226,19 @@ class _CalendarScreenState extends State<CalendarScreen> {
           ).loadUserReservations(userId: r.userId, placeId: r.placeId);
         } catch (_) {}
         SnackbarUtil.showSuccess(context, '예약이 변경되었습니다.');
+        if (!mounted) return;
+        setState(() {});
+      }
+
+      // move 실패 시: 바텀시트가 닫혀 있어도 즉시 피드백
+      if (event.type == ReservationOperationType.move &&
+          event.success == false) {
+        if (!mounted) return;
+        final msg = event.error?.toString();
+        SnackbarUtil.showError(
+          context,
+          (msg == null || msg.isEmpty) ? '예약 변경에 실패했습니다.' : '예약 변경 실패: $msg',
+        );
         if (!mounted) return;
         setState(() {});
       }
@@ -1206,11 +1233,18 @@ class _CalendarScreenState extends State<CalendarScreen> {
     final isProcessing =
         processingKey != null &&
         reservationProvider.isOperationInFlightByKey(processingKey);
+    final operationType = processingKey != null
+        ? reservationProvider.getOperationTypeByKey(processingKey)
+        : null;
 
-    // 배경색: 연하게 표시할 때는 opacity 적용, 텍스트는 그대로
-    final baseBlockColor = isLocked
-        ? AppColors.reservedGrey
-        : course.colorValue;
+    // 배경색: 이미 예약된 경우 옅은 코스 컬러 우선, 그 다음 잠김 상태는 회색
+    final baseBlockColor = isMyReserved
+        ? course
+              .colorValue // 이미 예약된 경우 코스 컬러 사용 (회색보다 우선)
+        : (isLocked
+              ? AppColors
+                    .reservedGrey // 잠긴 경우 회색
+              : course.colorValue); // 예약 가능한 경우 코스 컬러
     final blockColor = isProcessing
         ? (isMyReserved
               ? baseBlockColor.withOpacity(0.35)
@@ -1294,7 +1328,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
                       dayOfWeek: session.dayOfWeek,
                       startTime: session.startTime,
                       reservedAt: TimezoneUtils.getSeoulDateTime(),
-                      reservedDate: TimezoneUtils.getSeoulToday(),
+                      // ✅ 선택한 캘린더 날짜로 예약 생성해야 셀(in-flight key)과도 일치함
+                      reservedDate: date,
                     ),
                   );
                 },
@@ -1367,71 +1402,99 @@ class _CalendarScreenState extends State<CalendarScreen> {
           ),
           child: Stack(
             children: [
-              if (isProcessing)
-                const Positioned(
-                  top: 6,
-                  right: 6,
-                  child: SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        AppColors.primaryGreen,
+              // 로딩 중이 아닐 때만 텍스트 표시
+              if (!isProcessing)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // 코스 이름 (항상 표시, 높이에 따라 폰트 크기 조정)
+                    Text(
+                      course.name,
+                      style: TextStyle(
+                        color: textColor,
+                        fontSize: sessionHeightPx >= 60
+                            ? 16
+                            : (sessionHeightPx >= 40 ? 14 : 12),
+                        fontWeight: FontWeight.bold,
                       ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+
+                    // 시간 (높이가 충분할 때만 표시)
+                    if (sessionHeightPx >= 70) ...[
+                      SizedBox(height: sessionHeightPx >= 80 ? 3 : 2),
+                      Text(
+                        '${session.startTime} - ${session.endTime}',
+                        style: TextStyle(
+                          color: iconColor,
+                          fontSize: sessionHeightPx >= 90 ? 13 : 11,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+
+                    // 남은 자리 (높이가 충분할 때만 표시)
+                    if (sessionHeightPx >= 90) ...[
+                      SizedBox(height: sessionHeightPx >= 100 ? 3 : 2),
+                      Text(
+                        '$remainingSeats / $totalSeats',
+                        style: TextStyle(
+                          color: iconColor,
+                          fontSize: sessionHeightPx >= 110 ? 14 : 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ],
+                ),
+              // 로딩 중일 때 중앙에 로딩 인디케이터와 텍스트 표시
+              if (isProcessing)
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 8,
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: sessionHeightPx >= 50 ? 32 : 24,
+                          height: sessionHeightPx >= 50 ? 32 : 24,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 3.0,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              iconColor,
+                            ),
+                          ),
+                        ),
+                        if (operationType != null) ...[
+                          SizedBox(height: sessionHeightPx >= 50 ? 8 : 6),
+                          Text(
+                            operationType == ReservationOperationType.create
+                                ? '예약중'
+                                : operationType ==
+                                      ReservationOperationType.cancel
+                                ? '취소중'
+                                : '변경중',
+                            style: TextStyle(
+                              color: iconColor,
+                              fontSize: sessionHeightPx >= 50 ? 18 : 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
                 ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // 코스 이름 (항상 표시, 높이에 따라 폰트 크기 조정)
-                  Text(
-                    course.name,
-                    style: TextStyle(
-                      color: textColor,
-                      fontSize: sessionHeightPx >= 60
-                          ? 16
-                          : (sessionHeightPx >= 40 ? 14 : 12),
-                      fontWeight: FontWeight.bold,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-
-                  // 시간 (높이가 충분할 때만 표시)
-                  if (sessionHeightPx >= 70) ...[
-                    SizedBox(height: sessionHeightPx >= 80 ? 3 : 2),
-                    Text(
-                      '${session.startTime} - ${session.endTime}',
-                      style: TextStyle(
-                        color: iconColor,
-                        fontSize: sessionHeightPx >= 90 ? 13 : 11,
-                        fontWeight: FontWeight.w500,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-
-                  // 남은 자리 (높이가 충분할 때만 표시)
-                  if (sessionHeightPx >= 90) ...[
-                    SizedBox(height: sessionHeightPx >= 100 ? 3 : 2),
-                    Text(
-                      '$remainingSeats / $totalSeats',
-                      style: TextStyle(
-                        color: iconColor,
-                        fontSize: sessionHeightPx >= 110 ? 14 : 12,
-                        fontWeight: FontWeight.w500,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ],
-              ),
               if (!hasUserReservation && isLocked)
                 Positioned(
                   top: 0,

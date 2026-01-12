@@ -8,7 +8,6 @@ import '../models/date_capacity_override.dart';
 import '../models/course.dart';
 import '../models/notification.dart';
 import '../providers/story_provider.dart';
-import '../providers/promotion_provider.dart';
 import '../policies/course_policy.dart';
 import '../utils/timezone_utils.dart';
 import 'enrollment_service.dart';
@@ -40,11 +39,9 @@ class FirestoreService {
   }
 
   /// Timestamp를 DateTime으로 변환 (private)
-  /// ⚠️ 서버 시간이 없으면 서울 시간대 현재 시간 반환 (서버 없으면 클라이언트 시간 사용)
   DateTime _timestampToDateTime(dynamic timestamp) {
     if (timestamp == null) {
-      // 서버 시간이 없으면 서울 시간대 현재 시간 반환
-      return TimezoneUtils.getSeoulDateTime();
+      return DateTime.now();
     }
     if (timestamp is Timestamp) {
       return timestamp.toDate();
@@ -267,20 +264,42 @@ class FirestoreService {
     final placeRef = _firestore.collection('places').doc(placeId);
 
     // 0. 활성 예약 확인 (미래 날짜 예약이 있는지 확인)
-    final todayString = TimezoneUtils.formatDateToSeoul(
-      TimezoneUtils.getSeoulDateTime(),
-    );
-    final activeReservationsQuery = _firestore
-        .collection('places')
-        .doc(placeId)
-        .collection('reservations')
-        .where('courseId', isEqualTo: courseId)
-        .where('reservedDateString', isGreaterThanOrEqualTo: todayString)
-        .limit(1);
+    final today = DateTime.now();
+    final todayString = _formatDate(today);
+    // NOTE:
+    // 아래처럼 (courseId == ...) + (reservedDateString >= ...) 조합은
+    // Firestore 복합 인덱스가 필요합니다.
+    // 코스 삭제는 관리자 동작이므로, 인덱스 없이도 동작하도록
+    // reservedDateString 단일 조건으로 페이지네이션 조회 후
+    // courseId를 클라이언트에서 검사합니다.
+    const pageSize = 500;
+    DocumentSnapshot? lastDoc;
+    while (true) {
+      var query = _firestore
+          .collection('places')
+          .doc(placeId)
+          .collection('reservations')
+          .where('reservedDateString', isGreaterThanOrEqualTo: todayString)
+          .orderBy('reservedDateString')
+          .limit(pageSize);
 
-    final activeReservationsSnapshot = await activeReservationsQuery.get();
-    if (activeReservationsSnapshot.docs.isNotEmpty) {
-      throw Exception('활성 예약이 있는 코스는 삭제할 수 없습니다. 먼저 예약을 취소해주세요.');
+      if (lastDoc != null) {
+        query = query.startAfterDocument(lastDoc);
+      }
+
+      final snap = await query.get();
+      if (snap.docs.isEmpty) break;
+
+      final hasActiveForCourse = snap.docs.any((d) {
+        final data = d.data();
+        return data['courseId']?.toString() == courseId;
+      });
+      if (hasActiveForCourse) {
+        throw Exception('ACTIVE_RESERVATIONS_EXIST');
+      }
+
+      if (snap.docs.length < pageSize) break;
+      lastDoc = snap.docs.last;
     }
 
     // 1. 코스 삭제
@@ -341,7 +360,7 @@ class FirestoreService {
     if (data['active'] is Map<String, dynamic> ||
         data['scheduled'] is Map<String, dynamic>) {
       // 서버와 일관성을 위해 서울 시간대 사용
-      final seoulNow = TimezoneUtils.getSeoulDateTime();
+      final now = TimezoneUtils.getSeoulDateTime();
       final activeRaw = data['active'];
       final scheduledRaw = data['scheduled'];
 
@@ -354,12 +373,12 @@ class FirestoreService {
         scheduled = CoursePolicy.fromJson(scheduledRaw);
       }
 
-      // effectiveFrom <= seoulNow 인 후보들 중 가장 최신(effectiveFrom) 선택
+      // effectiveFrom <= now 인 후보들 중 가장 최신(effectiveFrom) 선택
       final candidates = <CoursePolicy>[];
-      if (active != null && !active.effectiveFrom.isAfter(seoulNow)) {
+      if (active != null && !active.effectiveFrom.isAfter(now)) {
         candidates.add(active);
       }
-      if (scheduled != null && !scheduled.effectiveFrom.isAfter(seoulNow)) {
+      if (scheduled != null && !scheduled.effectiveFrom.isAfter(now)) {
         candidates.add(scheduled);
       }
 
@@ -441,33 +460,12 @@ class FirestoreService {
     Reservation reservation, {
     bool force = false,
   }) async {
-    debugPrint('[FirestoreService] createReservation 시작');
-    debugPrint('[FirestoreService] reservation.userId: ${reservation.userId}');
-    debugPrint(
-      '[FirestoreService] reservation.courseId: ${reservation.courseId}',
-    );
-    debugPrint(
-      '[FirestoreService] reservation.placeId: ${reservation.placeId}',
-    );
-    debugPrint(
-      '[FirestoreService] reservation.dayOfWeek: ${reservation.dayOfWeek}',
-    );
-    debugPrint(
-      '[FirestoreService] reservation.startTime: ${reservation.startTime}',
-    );
-    debugPrint(
-      '[FirestoreService] reservation.reservedDate: ${reservation.reservedDate}',
-    );
-    debugPrint('[FirestoreService] force: $force');
-
     final dateString = _formatDate(reservation.reservedDate);
-    debugPrint('[FirestoreService] formatted dateString: $dateString');
-
     final callable = FirebaseFunctions.instance.httpsCallable(
       'createReservation',
     );
 
-    final requestData = {
+    final result = await callable.call({
       'placeId': reservation.placeId,
       'courseId': reservation.courseId,
       'dayOfWeek': reservation.dayOfWeek,
@@ -477,71 +475,27 @@ class FirestoreService {
       'userId': reservation.userId,
       // 관리자 강제 추가(정원/오픈 전/마감 전 등) - 명시적 확인을 거친 경우에만 true
       'force': force,
-    };
-    debugPrint('[FirestoreService] Cloud Function 호출 데이터: $requestData');
+    });
 
-    try {
-      debugPrint('[FirestoreService] Cloud Function 호출 시작');
-      final result = await callable.call(requestData);
-      debugPrint('[FirestoreService] Cloud Function 응답 수신');
-      debugPrint('[FirestoreService] 응답 데이터 타입: ${result.data.runtimeType}');
-      debugPrint('[FirestoreService] 응답 데이터: ${result.data}');
-
-      final data = result.data as Map<dynamic, dynamic>;
-      final id = (data['id'] as String?) ?? '';
-      debugPrint('[FirestoreService] 추출된 예약 ID: $id');
-
-      if (id.isEmpty) {
-        debugPrint('[FirestoreService] 예약 ID가 비어있습니다. 서버 응답: $data');
-        throw Exception('예약 생성에 실패했습니다. (서버 응답 오류)');
-      }
-
-      debugPrint('[ReservationProvider] 예약 생성 성공: $id');
-      return reservation.copyWith(id: id);
-    } catch (e, stackTrace) {
-      debugPrint('[FirestoreService] Cloud Function 호출 실패');
-      debugPrint('[FirestoreService] 에러 타입: ${e.runtimeType}');
-      debugPrint('[FirestoreService] 에러 메시지: $e');
-      debugPrint('[FirestoreService] 스택 트레이스: $stackTrace');
-
-      // Firebase Functions 에러의 경우 상세 정보 추출
-      if (e is Exception) {
-        final errorString = e.toString();
-        debugPrint('[FirestoreService] Exception 문자열: $errorString');
-      }
-
-      rethrow;
+    final data = result.data as Map<dynamic, dynamic>;
+    final id = (data['id'] as String?) ?? '';
+    if (id.isEmpty) {
+      throw Exception('예약 생성에 실패했습니다. (서버 응답 오류)');
     }
+
+    return reservation.copyWith(id: id);
   }
 
-  /// 예약 삭제 (트랜잭션 사용)
+  /// 예약 삭제 (배치 함수 사용)
   Future<void> deleteReservation({
     required String reservationId,
     required String placeId,
   }) async {
-    debugPrint('[FirestoreService] deleteReservation 시작');
-    debugPrint('[FirestoreService] reservationId: $reservationId');
-    debugPrint('[FirestoreService] placeId: $placeId');
-    final callable = FirebaseFunctions.instance.httpsCallable(
-      'cancelReservation',
+    // 배치 함수 사용 (개별도 배치로 처리)
+    await batchCancelReservations(
+      reservationIds: [reservationId],
+      placeId: placeId,
     );
-    try {
-      debugPrint('[FirestoreService] Cloud Function(cancelReservation) 호출 시작');
-      final result = await callable.call({
-        'reservationId': reservationId,
-        'placeId': placeId,
-      });
-      debugPrint('[FirestoreService] Cloud Function(cancelReservation) 응답 수신');
-      debugPrint('[FirestoreService] 응답 데이터 타입: ${result.data.runtimeType}');
-      debugPrint('[FirestoreService] 응답 데이터: ${result.data}');
-      debugPrint('[FirestoreService] deleteReservation 완료');
-    } catch (e, stackTrace) {
-      debugPrint('[FirestoreService] deleteReservation 실패');
-      debugPrint('[FirestoreService] 에러 타입: ${e.runtimeType}');
-      debugPrint('[FirestoreService] 에러: $e');
-      debugPrint('[FirestoreService] 스택 트레이스: $stackTrace');
-      rethrow;
-    }
   }
 
   /// 코스 등록(수강) 취소 (관리자)
@@ -570,7 +524,7 @@ class FirestoreService {
     return {'success': true};
   }
 
-  /// 예약 이동 (같은 코스 내에서만) - 트랜잭션 사용
+  /// 예약 이동 (같은 코스 내에서만) - 배치 함수 사용
   ///
   /// - 크레딧(remainingReservations)은 변경하지 않음 (이동이므로 net 0)
   /// - sessionReservations의 reservedCount를 old-- / new++로 반영
@@ -583,17 +537,14 @@ class FirestoreService {
     required String newStartTime,
     required DateTime newReservedDate,
   }) async {
-    final newDateString = _formatDate(newReservedDate);
-    final callable = FirebaseFunctions.instance.httpsCallable(
-      'moveReservationWithinCourse',
+    // 배치 함수 사용 (개별도 배치로 처리)
+    await batchMoveReservations(
+      reservationIds: [reservationId],
+      placeId: placeId,
+      newDayOfWeek: newDayOfWeek,
+      newStartTime: newStartTime,
+      newReservedDate: newReservedDate,
     );
-    await callable.call({
-      'reservationId': reservationId,
-      'placeId': placeId,
-      'newDayOfWeek': newDayOfWeek,
-      'newStartTime': newStartTime,
-      'newReservedDateString': newDateString,
-    });
   }
 
   /// 세션 취소 (관리자)
@@ -850,22 +801,20 @@ class FirestoreService {
   // ==================== Date Capacity Overrides ====================
 
   /// 날짜별 수용인원 오버라이드 조회
-  /// 고정ID 패턴: ${sessionId}_${date}
   Future<DateCapacityOverride?> getCapacityOverride(
     String sessionId,
     String date,
   ) async {
-    // 고정ID 패턴: ${sessionId}_${date}
-    final overrideId = '${sessionId}_$date';
-    final docRef = _firestore
+    final query = _firestore
         .collection('dateCapacityOverrides')
-        .doc(overrideId);
+        .where('sessionId', isEqualTo: sessionId)
+        .where('date', isEqualTo: date)
+        .limit(1);
 
-    final snapshot = await docRef.get();
-    if (!snapshot.exists) return null;
+    final snapshot = await query.get();
+    if (snapshot.docs.isEmpty) return null;
 
-    final data = snapshot.data()!;
-    data['id'] = overrideId;
+    final data = snapshot.docs.first.data();
     data['createdAt'] = _timestampToDateTime(
       data['createdAt'],
     ).toIso8601String();
@@ -879,44 +828,33 @@ class FirestoreService {
   }
 
   /// 날짜별 수용인원 오버라이드 설정
-  /// 고정ID 패턴: ${sessionId}_${date}
   Future<DateCapacityOverride> setCapacityOverride({
     required String sessionId,
     required String date,
     required int capacity,
   }) async {
-    // 고정ID 패턴: ${sessionId}_${date}
-    final overrideId = '${sessionId}_$date';
-    final docRef = _firestore
-        .collection('dateCapacityOverrides')
-        .doc(overrideId);
+    // 기존 오버라이드 확인
+    final existing = await getCapacityOverride(sessionId, date);
 
-    final existingDoc = await docRef.get();
-    final now = TimezoneUtils.getSeoulDateTime();
-
-    if (existingDoc.exists) {
+    if (existing != null) {
       // 업데이트
+      final docRef = _firestore
+          .collection('dateCapacityOverrides')
+          .doc(existing.id);
       await docRef.update({
         'capacity': capacity,
-        'updatedAt': _dateTimeToTimestamp(now),
+        'updatedAt': _dateTimeToTimestamp(DateTime.now()),
       });
-      final data = existingDoc.data()!;
-      return DateCapacityOverride(
-        id: overrideId,
-        sessionId: sessionId,
-        date: date,
-        capacity: capacity,
-        createdAt: _timestampToDateTime(data['createdAt']),
-        updatedAt: now,
-      );
+      return existing.copyWith(capacity: capacity, updatedAt: DateTime.now());
     } else {
       // 생성
+      final docRef = _firestore.collection('dateCapacityOverrides').doc();
       final override = DateCapacityOverride(
-        id: overrideId,
+        id: docRef.id,
         sessionId: sessionId,
         date: date,
         capacity: capacity,
-        createdAt: now,
+        createdAt: DateTime.now(),
       );
       await docRef.set({
         ...override.toJson(),
@@ -927,15 +865,17 @@ class FirestoreService {
   }
 
   /// 날짜별 수용인원 오버라이드 삭제
-  /// 고정ID 패턴: ${sessionId}_${date}
   Future<void> deleteCapacityOverride(String sessionId, String date) async {
-    // 고정ID 패턴: ${sessionId}_${date}
-    final overrideId = '${sessionId}_$date';
-    final docRef = _firestore
+    final query = _firestore
         .collection('dateCapacityOverrides')
-        .doc(overrideId);
+        .where('sessionId', isEqualTo: sessionId)
+        .where('date', isEqualTo: date)
+        .limit(1);
 
-    await docRef.delete();
+    final snapshot = await query.get();
+    if (snapshot.docs.isNotEmpty) {
+      await snapshot.docs.first.reference.delete();
+    }
   }
 
   // ==================== Stories ====================
@@ -1006,68 +946,6 @@ class FirestoreService {
   /// 스토리 삭제
   Future<void> deleteStory(String storyId) async {
     await _firestore.collection('stories').doc(storyId).delete();
-  }
-
-  // ==================== Promotions ====================
-
-  /// 플레이스별 프로모션 조회
-  Future<List<Promotion>> getPromotionsByPlace(String placeId) async {
-    final snapshot = await _firestore
-        .collection('promotions')
-        .where('placeId', isEqualTo: placeId)
-        .orderBy('createdAt', descending: true)
-        .get();
-
-    return snapshot.docs.map((doc) {
-      final data = doc.data();
-      data['createdAt'] = _timestampToDateTime(
-        data['createdAt'],
-      ).toIso8601String();
-      return Promotion.fromJson(data);
-    }).toList();
-  }
-
-  /// 플레이스별 프로모션 실시간 구독
-  Stream<List<Promotion>> watchPromotionsByPlace(String placeId) {
-    return _firestore
-        .collection('promotions')
-        .where('placeId', isEqualTo: placeId)
-        .orderBy('createdAt', descending: true)
-        .snapshots()
-        .map((snapshot) {
-          return snapshot.docs.map((doc) {
-            final data = doc.data();
-            data['createdAt'] = _timestampToDateTime(
-              data['createdAt'],
-            ).toIso8601String();
-            return Promotion.fromJson(data);
-          }).toList();
-        });
-  }
-
-  /// 프로모션 생성
-  Future<Promotion> createPromotion(Promotion promotion) async {
-    final docRef = _firestore.collection('promotions').doc(promotion.id);
-    await docRef.set({
-      ...promotion.toJson(),
-      'createdAt': _dateTimeToTimestamp(promotion.createdAt),
-    });
-    return promotion;
-  }
-
-  /// 프로모션 업데이트
-  Future<Promotion> updatePromotion(Promotion promotion) async {
-    final docRef = _firestore.collection('promotions').doc(promotion.id);
-    await docRef.update({
-      ...promotion.toJson(),
-      'createdAt': _dateTimeToTimestamp(promotion.createdAt),
-    });
-    return promotion;
-  }
-
-  /// 프로모션 삭제
-  Future<void> deletePromotion(String promotionId) async {
-    await _firestore.collection('promotions').doc(promotionId).delete();
   }
 
   // ==================== Notifications ====================
@@ -1174,5 +1052,52 @@ class FirestoreService {
       'createdAt': _dateTimeToTimestamp(notification.createdAt),
     });
     return notification;
+  }
+
+  // ==================== Batch Operations ====================
+
+  /// 일괄 예약 이동 (관리자)
+  ///
+  /// 관리자 권한으로 정원을 초과해서도 이동 가능
+  Future<Map<String, dynamic>> batchMoveReservations({
+    required List<String> reservationIds,
+    required String placeId,
+    required int newDayOfWeek,
+    required String newStartTime,
+    required DateTime newReservedDate,
+  }) async {
+    final dateString = _formatDate(newReservedDate);
+    final callable = FirebaseFunctions.instance.httpsCallable(
+      'batchMoveReservations',
+    );
+
+    final result = await callable.call({
+      'reservationIds': reservationIds,
+      'placeId': placeId,
+      'newDayOfWeek': newDayOfWeek,
+      'newStartTime': newStartTime,
+      'newReservedDateString': dateString,
+    });
+
+    return result.data as Map<String, dynamic>;
+  }
+
+  /// 일괄 예약 취소 (관리자)
+  ///
+  /// 관리자 권한으로 1시간 제한 우회 가능 (단, 이미 시작된 세션은 취소 불가)
+  Future<Map<String, dynamic>> batchCancelReservations({
+    required List<String> reservationIds,
+    required String placeId,
+  }) async {
+    final callable = FirebaseFunctions.instance.httpsCallable(
+      'batchCancelReservations',
+    );
+
+    final result = await callable.call({
+      'reservationIds': reservationIds,
+      'placeId': placeId,
+    });
+
+    return result.data as Map<String, dynamic>;
   }
 }

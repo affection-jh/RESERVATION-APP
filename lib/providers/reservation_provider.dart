@@ -70,6 +70,20 @@ class ReservationProvider with ChangeNotifier {
         _moveInFlightKeys.contains(key);
   }
 
+  /// 작업 타입 확인 (예약중/취소중/변경중)
+  ReservationOperationType? getOperationTypeByKey(String key) {
+    if (_createInFlightKeys.contains(key)) {
+      return ReservationOperationType.create;
+    }
+    if (_cancelInFlightKeys.contains(key)) {
+      return ReservationOperationType.cancel;
+    }
+    if (_moveInFlightKeys.contains(key)) {
+      return ReservationOperationType.move;
+    }
+    return null;
+  }
+
   bool isCreatingReservation(Reservation reservation) {
     return _createInFlightKeys.contains(_reservationKey(reservation));
   }
@@ -114,13 +128,25 @@ class ReservationProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      await _firestoreService.moveReservationWithinCourse(
-        reservationId: reservation.id,
+      // 배치 함수 사용 (개별도 배치로 처리)
+      final result = await _firestoreService.batchMoveReservations(
+        reservationIds: [reservation.id],
         placeId: reservation.placeId,
         newDayOfWeek: newDayOfWeek,
         newStartTime: newStartTime,
         newReservedDate: newReservedDate,
       );
+
+      final results = result['results'] as List<dynamic>? ?? [];
+      final failedResults = results
+          .where((r) => (r as Map)['success'] != true)
+          .toList();
+      if (failedResults.isNotEmpty) {
+        final error =
+            (failedResults.first as Map)['error'] as String? ??
+            '예약 이동에 실패했습니다.';
+        throw Exception(error);
+      }
 
       // ✅ 낙관적 업데이트: 스트림이 늦게 오더라도 UI에 즉시 반영
       final updated = reservation.copyWith(
@@ -356,10 +382,23 @@ class ReservationProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      await _firestoreService.deleteReservation(
-        reservationId: reservation.id,
+      // 배치 함수 사용 (개별도 배치로 처리)
+      final result = await _firestoreService.batchCancelReservations(
+        reservationIds: [reservation.id],
         placeId: reservation.placeId,
       );
+
+      final results = result['results'] as List<dynamic>? ?? [];
+      final failedResults = results
+          .where((r) => (r as Map)['success'] != true)
+          .toList();
+      if (failedResults.isNotEmpty) {
+        final error =
+            (failedResults.first as Map)['error'] as String? ??
+            '예약 취소에 실패했습니다.';
+        throw Exception(error);
+      }
+
       debugPrint('[ReservationProvider] cancelReservation 성공');
       if (!_opController.isClosed) {
         _opController.add(

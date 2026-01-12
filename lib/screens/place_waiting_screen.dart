@@ -11,7 +11,6 @@ import '../providers/auth_provider.dart';
 import '../providers/course_provider.dart';
 import '../providers/enrollment_provider.dart';
 import '../providers/place_provider.dart';
-import '../providers/promotion_provider.dart';
 import '../providers/reservation_provider.dart';
 import '../providers/story_provider.dart';
 import '../services/firestore_service.dart';
@@ -395,10 +394,6 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
         listen: false,
       );
       final storyProvider = Provider.of<StoryProvider>(context, listen: false);
-      final promotionProvider = Provider.of<PromotionProvider>(
-        context,
-        listen: false,
-      );
       final reservationProvider = Provider.of<ReservationProvider>(
         context,
         listen: false,
@@ -410,16 +405,12 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
 
       courseProvider.clear();
       storyProvider.clear();
-      promotionProvider.clear();
       await reservationProvider.clear();
       await enrollmentProvider.clear();
 
       // ✅ 스플래시 동안 "첫 화면 체감"에 중요한 데이터만 먼저 로드하고,
       // 나머지는 백그라운드로 돌린다 (Future.wait에 묶여 스플래시가 끝없이 걸리는 문제 방지)
-      final primaryLoads = <Future<void>>[
-        storyProvider.loadStories(place.id),
-        promotionProvider.loadPromotions(place.id),
-      ];
+      final primaryLoads = <Future<void>>[storyProvider.loadStories(place.id)];
       try {
         await Future.wait(primaryLoads).timeout(const Duration(seconds: 6));
       } catch (e) {

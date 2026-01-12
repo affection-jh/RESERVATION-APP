@@ -6,6 +6,12 @@ import '../widgets/push_notification_overlay.dart';
 import '../utils/navigator_key.dart';
 import '../providers/notification_provider.dart';
 import '../providers/auth_provider.dart';
+import '../providers/member_provider.dart';
+import '../providers/course_provider.dart';
+import '../providers/enrollment_provider.dart';
+import '../providers/place_provider.dart';
+import '../screens/admin/widgets/enrollment_detail_screen.dart';
+import '../models/admin_models.dart';
 import 'dart:async';
 
 /// Firebase Cloud Messaging 서비스
@@ -37,11 +43,14 @@ class FcmService {
 
     if (settings.authorizationStatus == AuthorizationStatus.authorized ||
         settings.authorizationStatus == AuthorizationStatus.provisional) {
+      debugPrint('[FcmService] FCM 권한 승인됨');
+
       // FCM 토큰 가져오기 및 저장
       await _saveTokenToFirestore(userId);
 
       // 토큰 갱신 리스너
       _tokenRefreshSubscription = _messaging.onTokenRefresh.listen((newToken) {
+        debugPrint('[FcmService] FCM 토큰 갱신됨');
         _saveTokenToFirestore(userId, token: newToken);
       });
 
@@ -49,8 +58,11 @@ class FcmService {
       _setupForegroundHandlers();
 
       _isInitialized = true;
+      debugPrint('[FcmService] FCM 초기화 완료');
     } else {
-      print('FCM 권한이 거부되었습니다.');
+      debugPrint(
+        '[FcmService] FCM 권한이 거부되었습니다. 상태: ${settings.authorizationStatus}',
+      );
     }
   }
 
@@ -59,6 +71,7 @@ class FcmService {
     // 이미 설정되어 있으면 중복 등록 방지
     if (_foregroundMessageSubscription != null ||
         _messageOpenedSubscription != null) {
+      debugPrint('[FcmService] 포그라운드 핸들러가 이미 설정되어 있습니다.');
       return;
     }
 
@@ -66,19 +79,34 @@ class FcmService {
     _foregroundMessageSubscription = FirebaseMessaging.onMessage.listen((
       RemoteMessage message,
     ) {
-      print('포그라운드 메시지 수신: ${message.notification?.title}');
-      _showForegroundNotification(message);
-      // NotificationProvider에 새 알림 추가
-      _addNotificationToProvider(message.data);
+      debugPrint('[FcmService] 포그라운드 메시지 수신');
+      debugPrint('  - 제목: ${message.notification?.title}');
+      debugPrint('  - 본문: ${message.notification?.body}');
+      debugPrint('  - 데이터: ${message.data}');
+
+      try {
+        // 포그라운드 알림 UI 표시 (스낵바처럼 상단에)
+        _showForegroundNotification(message);
+        // NotificationProvider에 새 알림 추가
+        _addNotificationToProvider(message.data);
+      } catch (e) {
+        debugPrint('[FcmService] 포그라운드 알림 처리 오류: $e');
+      }
     });
 
     // 알림 클릭 핸들러
     _messageOpenedSubscription = FirebaseMessaging.onMessageOpenedApp.listen((
       RemoteMessage message,
     ) {
-      print('알림 클릭: ${message.data}');
-      _handleNotificationTap(message.data);
+      debugPrint('[FcmService] 알림 클릭: ${message.data}');
+      try {
+        _handleNotificationTap(message.data);
+      } catch (e) {
+        debugPrint('[FcmService] 알림 클릭 처리 오류: $e');
+      }
     });
+
+    debugPrint('[FcmService] 포그라운드 핸들러 설정 완료');
   }
 
   /// NotificationProvider에 새 알림 추가
@@ -155,9 +183,9 @@ class FcmService {
         });
       });
 
-      print('FCM 토큰이 저장되었습니다: $fcmToken');
+      debugPrint('[FcmService] FCM 토큰이 저장되었습니다: $fcmToken');
     } catch (e) {
-      print('FCM 토큰 저장 실패: $e');
+      debugPrint('[FcmService] FCM 토큰 저장 실패: $e');
     }
   }
 
@@ -181,60 +209,272 @@ class FcmService {
 
         // 디바이스에서도 토큰 삭제
         await _messaging.deleteToken();
+        debugPrint('[FcmService] FCM 토큰 삭제 완료');
       }
     } catch (e) {
-      print('FCM 토큰 삭제 실패: $e');
+      debugPrint('[FcmService] FCM 토큰 삭제 실패: $e');
     }
   }
 
-  /// 포그라운드 알림 UI 표시
+  /// 포그라운드 알림 UI 표시 (스낵바처럼 상단에)
   void _showForegroundNotification(RemoteMessage message) {
     final context = navigatorKey.currentContext;
     if (context == null) {
+      debugPrint('[FcmService] context가 없어 포그라운드 알림을 표시할 수 없습니다.');
       return;
     }
 
     final title = message.notification?.title ?? '알림';
     final body = message.notification?.body ?? '';
 
-    // PushNotificationOverlay를 사용하여 알림 표시
-    PushNotificationOverlay.show(
-      context: context,
-      title: title,
-      body: body,
-      onTap: () {
-        _handleNotificationTap(message.data);
-      },
-    );
+    if (title.isEmpty && body.isEmpty) {
+      debugPrint('[FcmService] 알림 제목과 본문이 모두 비어있습니다.');
+      return;
+    }
+
+    debugPrint('[FcmService] 포그라운드 알림 표시: $title');
+
+    // PushNotificationOverlay를 사용하여 알림 표시 (스낵바처럼 상단에)
+    try {
+      PushNotificationOverlay.show(
+        context: context,
+        title: title,
+        body: body,
+        onTap: () {
+          _handleNotificationTap(message.data);
+        },
+      );
+    } catch (e) {
+      debugPrint('[FcmService] 포그라운드 알림 표시 오류: $e');
+    }
   }
 
   /// 알림 탭 처리
-  void _handleNotificationTap(Map<String, dynamic>? data) {
+  Future<void> _handleNotificationTap(Map<String, dynamic>? data) async {
     final context = navigatorKey.currentContext;
     if (context == null) return;
 
-    // notificationId가 있으면 알림 화면으로 이동
-    final notificationId = data?['notificationId'];
+    // 연장 요청 알림인지 확인 (enrollmentId, userId, courseId, placeId가 모두 있는 경우)
+    final enrollmentId = data?['enrollmentId'] as String?;
+    final userId = data?['userId'] as String?;
+    final courseId = data?['courseId'] as String?;
+    final placeId = data?['placeId'] as String?;
+    final notificationId = data?['notificationId'] as String?;
+
+    // 알림 타입 확인
+    final notificationType = data?['type'] as String?;
+
+    // 연장 요청 알림인 경우 enrollment 상세 화면으로 이동
+    if (enrollmentId != null &&
+        userId != null &&
+        courseId != null &&
+        placeId != null) {
+      // 연장 요청: 탭 1
+      final initialTabIndex = 1;
+
+      debugPrint(
+        '[FcmService] 연장 요청 알림 클릭: enrollmentId=$enrollmentId, userId=$userId, courseId=$courseId, tabIndex=$initialTabIndex',
+      );
+
+      try {
+        // 알림 읽은 처리
+        if (notificationId != null) {
+          await _markNotificationAsRead(notificationId, context);
+        }
+
+        // enrollment 상세 화면으로 이동
+        await _navigateToEnrollmentDetail(
+          context: context,
+          enrollmentId: enrollmentId,
+          userId: userId,
+          courseId: courseId,
+          placeId: placeId,
+          initialTabIndex: initialTabIndex,
+        );
+        return;
+      } catch (e) {
+        debugPrint('[FcmService] enrollment 상세 화면 이동 오류: $e');
+        // 오류 발생 시 일반 알림 화면으로 이동
+      }
+    }
+
+    // 스토리 알림인 경우 스토리 상세 화면으로 이동
+    if (notificationType == 'story') {
+      final storyId = data?['storyId'] as String?;
+      final storyPlaceId = data?['placeId'] as String?;
+      if (storyId != null && storyPlaceId != null) {
+        try {
+          // 알림 읽은 처리
+          if (notificationId != null) {
+            await _markNotificationAsRead(notificationId, context);
+          }
+
+          // 홈 화면으로 이동 (스토리는 홈 화면에서 확인 가능)
+          Navigator.of(context).pushNamedAndRemoveUntil(
+            '/main',
+            (route) => false,
+            arguments: {'initialIndex': 0}, // 홈 탭
+          );
+          return;
+        } catch (e) {
+          debugPrint('[FcmService] 스토리 화면 이동 오류: $e');
+        }
+      }
+    }
+
+    // 프로모션 알림인 경우 홈 화면으로 이동
+    if (notificationType == 'promotion') {
+      try {
+        // 알림 읽은 처리
+        if (notificationId != null) {
+          await _markNotificationAsRead(notificationId, context);
+        }
+
+        // 홈 화면으로 이동
+        Navigator.of(context).pushNamedAndRemoveUntil(
+          '/main',
+          (route) => false,
+          arguments: {'initialIndex': 0}, // 홈 탭
+        );
+        return;
+      } catch (e) {
+        debugPrint('[FcmService] 프로모션 화면 이동 오류: $e');
+      }
+    }
+
+    // 일반 알림인 경우 알림 화면으로 이동
     if (notificationId != null) {
+      // 알림 읽은 처리
+      await _markNotificationAsRead(notificationId, context);
       Navigator.of(context).pushNamed('/notifications');
+    }
+  }
+
+  /// 알림 읽은 처리
+  Future<void> _markNotificationAsRead(
+    String notificationId,
+    BuildContext context,
+  ) async {
+    try {
+      final notificationProvider = Provider.of<NotificationProvider>(
+        context,
+        listen: false,
+      );
+
+      await notificationProvider.markAsRead(notificationId);
+      debugPrint('[FcmService] 알림 읽은 처리 완료: $notificationId');
+    } catch (e) {
+      debugPrint('[FcmService] 알림 읽은 처리 오류: $e');
+    }
+  }
+
+  /// Enrollment 상세 화면으로 이동
+  Future<void> _navigateToEnrollmentDetail({
+    required BuildContext context,
+    required String enrollmentId,
+    required String userId,
+    required String courseId,
+    required String placeId,
+    int initialTabIndex = 1, // 기본값: 연장 탭 (1)
+  }) async {
+    try {
+      final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+      final memberProvider = Provider.of<MemberProvider>(
+        context,
+        listen: false,
+      );
+      final courseProvider = Provider.of<CourseProvider>(
+        context,
+        listen: false,
+      );
+      final enrollmentProvider = Provider.of<EnrollmentProvider>(
+        context,
+        listen: false,
+      );
+
+      // 현재 플레이스 확인
+      final currentPlace = placeProvider.currentPlace;
+      if (currentPlace?.id != placeId) {
+        debugPrint(
+          '[FcmService] 플레이스 불일치: current=${currentPlace?.id}, required=$placeId',
+        );
+        // 플레이스를 변경하거나 오류 메시지 표시
+        return;
+      }
+
+      // 멤버 조회
+      await memberProvider.loadMembers(placeId);
+      final member = memberProvider.getMember(userId);
+      if (member == null) {
+        debugPrint('[FcmService] 멤버를 찾을 수 없습니다: $userId');
+        return;
+      }
+
+      // 코스 조회
+      await courseProvider.loadCourses(placeId);
+      final course = courseProvider.courses.firstWhere(
+        (c) => c.id == courseId,
+        orElse: () => courseProvider.courses.first,
+      );
+
+      // Enrollment 조회
+      await enrollmentProvider.loadUserEnrollments(
+        userId: userId,
+        placeId: placeId,
+      );
+      final enrollment = enrollmentProvider.enrollments.firstWhere(
+        (e) => e.id == enrollmentId,
+        orElse: () => throw Exception('Enrollment not found'),
+      );
+
+      // MemberData 생성
+      final memberData = MemberData(
+        userId: member.userId,
+        name: member.name,
+        phoneNumber: member.phoneNumber,
+        role: member.isAdmin ? 'admin' : 'user',
+        isActive: true,
+        pendingExtensionRequests: member.pendingExtensionRequests.length,
+        enrolledCourseIds: member.enrollments.map((e) => e.courseId).toList(),
+      );
+
+      // EnrollmentDetailScreen으로 이동 (지정된 탭으로)
+      if (context.mounted) {
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => EnrollmentDetailScreen(
+              member: memberData,
+              enrollment: enrollment,
+              course: course,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('[FcmService] enrollment 상세 화면 이동 오류: $e');
+      rethrow;
     }
   }
 
   /// 앱이 종료된 상태에서 알림 클릭으로 열렸는지 확인
   Future<void> checkInitialMessage() async {
-    final message = await _messaging.getInitialMessage();
-    if (message != null) {
-      print('앱 종료 상태에서 알림 클릭으로 열림: ${message.data}');
-      _handleNotificationTap(message.data);
+    try {
+      final message = await _messaging.getInitialMessage();
+      if (message != null) {
+        debugPrint('[FcmService] 앱 종료 상태에서 알림 클릭으로 열림: ${message.data}');
+        _handleNotificationTap(message.data);
+      }
+    } catch (e) {
+      debugPrint('[FcmService] 초기 메시지 확인 오류: $e');
     }
   }
 
   /// 백그라운드 메시지 핸들러 설정
   static Future<void> backgroundMessageHandler(RemoteMessage message) async {
-    print('백그라운드 메시지 수신: ${message.messageId}');
-    print('제목: ${message.notification?.title}');
-    print('본문: ${message.notification?.body}');
-    print('데이터: ${message.data}');
+    debugPrint('[FcmService] 백그라운드 메시지 수신: ${message.messageId}');
+    debugPrint('  - 제목: ${message.notification?.title}');
+    debugPrint('  - 본문: ${message.notification?.body}');
+    debugPrint('  - 데이터: ${message.data}');
   }
 
   /// 리소스 정리

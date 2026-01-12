@@ -85,4 +85,9 @@ class MemberData {
   int get totalPendingRequests {
     return pendingExtensionRequests;
   }
+
+  /// pending 멤버인지 확인
+  bool get isPending {
+    return userId.startsWith('pending_');
+  }
 }

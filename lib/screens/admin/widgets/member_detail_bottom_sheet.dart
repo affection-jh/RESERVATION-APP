@@ -381,7 +381,7 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
             // 삭제 버튼
             _buildSvgIconButton(
               svgPath: 'assets/icons/delete.svg',
-              color: Colors.red,
+              color: AppColors.textPrimary,
               onTap: _handleDeleteMember,
             ),
             const SizedBox(width: 8),
@@ -933,12 +933,25 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                     // 바텀시트를 먼저 닫고 새로운 화면으로 이동
                     Navigator.of(context).pop();
 
+                    // 재등록이 필요한 경우 재등록 탭으로 이동
+                    // 단, 연장 요청이 있으면 기간 연장 탭이 표시되므로 탭 인덱스 계산 필요
+                    final hasRemainingReservations =
+                        enrollment.remainingReservations > 0;
+                    final hasPendingExtensionRequest =
+                        enrollment.hasPendingExtensionRequest;
+                    final initialTabIndex = hasPendingExtensionRequest
+                        ? 1 // 연장 요청이 있으면 기간 연장 탭으로 이동
+                        : (hasRemainingReservations
+                              ? 2 // 재등록/취소 탭 (기간 연장 탭 포함)
+                              : 1); // 재등록/취소 탭 (기간 연장 탭 없음)
+
                     final result = await Navigator.of(context).push(
                       MaterialPageRoute(
                         builder: (context) => EnrollmentDetailScreen(
                           member: widget.member,
                           enrollment: enrollment,
                           course: course,
+                          initialTabIndex: initialTabIndex,
                         ),
                       ),
                     );
@@ -978,12 +991,20 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                     // 바텀시트를 먼저 닫고 새로운 화면으로 이동
                     Navigator.of(context).pop();
 
+                    // 연장 요청이 있는 경우 기간 연장 탭으로 이동
+                    // 연장 요청이 있으면 기간 연장 탭이 표시됨 (횟수가 0이어도)
+                    final initialTabIndex =
+                        enrollment.hasPendingExtensionRequest
+                        ? 1 // 기간 연장 탭
+                        : null; // 기본값 (횟수 조정 탭)
+
                     final result = await Navigator.of(context).push(
                       MaterialPageRoute(
                         builder: (context) => EnrollmentDetailScreen(
                           member: widget.member,
                           enrollment: enrollment,
                           course: course,
+                          initialTabIndex: initialTabIndex,
                         ),
                       ),
                     );
@@ -1197,24 +1218,30 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                course.name,
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                  color: AppColors.backgroundLight,
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Text(
+                  course.name,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.backgroundLight,
+                  ),
+                  textAlign: TextAlign.left,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                textAlign: TextAlign.left,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(height: 4),
-              Text(
-                '${enrollment.remainingReservations}회 남음',
-                style: TextStyle(
-                  fontSize: 24,
-                  color: AppColors.backgroundWhite,
-                  fontWeight: FontWeight.w600,
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Text(
+                  '${enrollment.remainingReservations}회 남음',
+                  style: TextStyle(
+                    fontSize: 24,
+                    color: AppColors.backgroundWhite,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ],
@@ -1244,7 +1271,7 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     CourseEnrollment enrollment,
   ) {
     final isExpired = enrollment.isExpired;
-    final statusText = isExpired ? '만료됨' : '횟수 소진';
+    final statusText = isExpired ? '만료됨' : '재등록 필요';
     final needsAction = _needsAction(enrollment);
 
     return Stack(
@@ -1252,38 +1279,40 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           decoration: BoxDecoration(
-            color: AppColors.textSecondary.withOpacity(0.2),
+            color: AppColors.backgroundLight,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppColors.borderLight, width: 1),
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                course.name,
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                  color: AppColors.textPrimary,
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Text(
+                  course.name,
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                  textAlign: TextAlign.left,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                textAlign: TextAlign.left,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(height: 4),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: AppColors.textSecondary.withOpacity(0.2),
+                  color: AppColors.textSecondary.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
                   statusText,
                   style: TextStyle(
                     fontSize: 14,
-                    color: AppColors.textSecondary,
-                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
               ),
@@ -1296,8 +1325,8 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
             top: 8,
             right: 8,
             child: Container(
-              width: 8,
-              height: 8,
+              width: 10,
+              height: 10,
               decoration: BoxDecoration(
                 color: Colors.red,
                 shape: BoxShape.circle,
@@ -1363,11 +1392,19 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
 
     try {
       final enrollmentService = EnrollmentService();
+      final request = enrollment.extensionRequest!;
 
       // 연장 승인 (30일 연장)
       final newValidUntil = enrollment.validUntil.add(const Duration(days: 30));
       final approvedEnrollment = enrollment.approveExtension(newValidUntil);
       await enrollmentService.updateEnrollment(approvedEnrollment);
+
+      // 연장 요청 상태 업데이트 (서브컬렉션 + marker 동기화)
+      await enrollmentService.updateExtensionRequestStatusWithEnrollmentMarker(
+        enrollmentId: enrollment.id,
+        requestId: request.id,
+        status: ExtensionRequestStatus.approved,
+      );
 
       // EnrollmentProvider의 스트림을 통해 자동으로 업데이트됨
       // 바텀시트는 이미 닫혔으므로 setState 불필요
@@ -1406,10 +1443,20 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
       onConfirm: (reason) async {
         try {
           final enrollmentService = EnrollmentService();
+          final request = enrollment.extensionRequest!;
 
           // 연장 거절
           final rejectedEnrollment = enrollment.rejectExtension(reason);
           await enrollmentService.updateEnrollment(rejectedEnrollment);
+
+          // 연장 요청 상태 업데이트 (서브컬렉션 + marker 동기화)
+          await enrollmentService
+              .updateExtensionRequestStatusWithEnrollmentMarker(
+                enrollmentId: enrollment.id,
+                requestId: request.id,
+                status: ExtensionRequestStatus.rejected,
+                rejectionReason: reason,
+              );
 
           // EnrollmentProvider의 스트림을 통해 자동으로 업데이트됨
           // 바텀시트는 이미 닫혔으므로 setState 불필요

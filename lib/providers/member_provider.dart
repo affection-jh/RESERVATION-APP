@@ -24,10 +24,31 @@ class MemberProvider with ChangeNotifier {
   final Map<String, List<User>> _courseMembersCache = {};
   final Map<String, StreamSubscription> _courseMemberSubscriptions = {};
 
+  // 삭제 중인 멤버 ID Set (userId 또는 pending_xxx 형식)
+  final Set<String> _deletingMemberIds = {};
+
   List<User> get members => List.unmodifiable(_members);
   List<PendingMember> get pendingMembers => List.unmodifiable(_pendingMembers);
   bool get isLoading => _isLoading;
   String? get error => _error;
+  Set<String> get deletingMemberIds => Set.unmodifiable(_deletingMemberIds);
+
+  /// 멤버 삭제 시작
+  void startDeletingMember(String memberId) {
+    _deletingMemberIds.add(memberId);
+    notifyListeners();
+  }
+
+  /// 멤버 삭제 완료
+  void finishDeletingMember(String memberId) {
+    _deletingMemberIds.remove(memberId);
+    notifyListeners();
+  }
+
+  /// 멤버가 삭제 중인지 확인
+  bool isDeletingMember(String memberId) {
+    return _deletingMemberIds.contains(memberId);
+  }
 
   /// 플레이스 멤버 목록 로드 (courseMembers 기반 + pendingMembers)
   /// users.placeIds는 더 이상 사용하지 않으므로 courseMembers에서 조회

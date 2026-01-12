@@ -22,7 +22,6 @@ import 'providers/course_provider.dart';
 import 'providers/reservation_provider.dart';
 import 'providers/member_provider.dart';
 import 'providers/story_provider.dart';
-import 'providers/promotion_provider.dart';
 import 'providers/notification_provider.dart';
 import 'providers/admin_provider.dart';
 import 'providers/auth_provider.dart';
@@ -67,7 +66,6 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => EnrollmentProvider()),
         ChangeNotifierProvider(create: (_) => MemberProvider()),
         ChangeNotifierProvider(create: (_) => StoryProvider()),
-        ChangeNotifierProvider(create: (_) => PromotionProvider()),
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
         ChangeNotifierProvider(create: (_) => AdminProvider()),
       ],
@@ -107,11 +105,22 @@ class MyApp extends StatelessWidget {
         initialRoute: '/',
         routes: {
           '/': (context) => const AppStartupScreen(),
-          '/phone-number': (context) => const PhoneNumberInputScreen(),
+          '/phone-number': (context) {
+            return PhoneNumberInputScreen();
+          },
           '/verification-code': (context) {
             final args = ModalRoute.of(context)?.settings.arguments;
-            final phoneNumber = args is String ? args : '';
-            return VerificationCodeScreen(phoneNumber: phoneNumber);
+            if (args is Map<String, dynamic>) {
+              return VerificationCodeScreen(
+                phoneNumber: args['phoneNumber'] ?? '',
+                isPlaceRegistrationFlow:
+                    args['isPlaceRegistrationFlow'] ?? false,
+              );
+            } else if (args is String) {
+              return VerificationCodeScreen(phoneNumber: args);
+            } else {
+              return VerificationCodeScreen(phoneNumber: '');
+            }
           },
           '/name-input': (context) {
             final args =
@@ -199,16 +208,14 @@ class _MainScreenState extends State<MainScreen> {
   late int _currentIndex;
   bool _isInitialDataLoaded = false;
 
-  List<Widget> get _screens => [
-    const HomeScreen(), // 0: 홈
-    const ReservationScreen(), // 1: 예약
-    MyPageScreen(highlightReservation: widget.highlightReservation), // 2: 마이페이지
-  ];
+  // "명시적으로 마이페이지로 이동"했을 때만 1회 소비되는 하이라이트 데이터
+  Map<String, dynamic>? _pendingHighlightReservation;
 
   @override
   void initState() {
     super.initState();
-    _currentIndex = widget.initialIndex.clamp(0, _screens.length - 1);
+    _pendingHighlightReservation = widget.highlightReservation;
+    _currentIndex = widget.initialIndex.clamp(0, 2);
     // Provider load → notifyListeners()가 첫 build 중에 발생하면
     // "setState() or markNeedsBuild() called during build"가 터질 수 있어서
     // 첫 프레임 이후로 미룬다.
@@ -240,10 +247,7 @@ class _MainScreenState extends State<MainScreen> {
     final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
     final courseProvider = Provider.of<CourseProvider>(context, listen: false);
     final storyProvider = Provider.of<StoryProvider>(context, listen: false);
-    final promotionProvider = Provider.of<PromotionProvider>(
-      context,
-      listen: false,
-    );
+
     final reservationProvider = Provider.of<ReservationProvider>(
       context,
       listen: false,
@@ -269,9 +273,7 @@ class _MainScreenState extends State<MainScreen> {
       if (storyProvider.stories.isEmpty) {
         futures.add(storyProvider.loadStories(currentPlace.id));
       }
-      if (promotionProvider.promotions.isEmpty) {
-        futures.add(promotionProvider.loadPromotions(currentPlace.id));
-      }
+
       // 항상 구독 보장 (Provider 내부에서 중복 구독 방지)
       futures.add(
         reservationProvider.loadUserReservations(
@@ -312,7 +314,23 @@ class _MainScreenState extends State<MainScreen> {
         // 필요시 앱 종료 다이얼로그를 표시할 수 있음
       },
       child: Scaffold(
-        body: _screens[_currentIndex],
+        // 탭 전환 시 화면을 재생성하지 않고 상태를 유지 (애니메이션/스크롤 등 부작용 방지)
+        body: IndexedStack(
+          index: _currentIndex,
+          children: [
+            const HomeScreen(), // 0: 홈
+            const ReservationScreen(), // 1: 예약
+            // 2: 마이페이지
+            //
+            // ⚠️ 바텀 네비로 마이페이지에 "그냥 들어왔을 때"는 하이라이트 애니메이션을 촉발하지 않는다.
+            // 하이라이트는 명시적으로 전달된 경우에만 1회 실행되고 소비된다.
+            MyPageScreen(
+              highlightReservation: _currentIndex == 2
+                  ? _pendingHighlightReservation
+                  : null,
+            ),
+          ],
+        ),
         bottomNavigationBar: BottomNavBar(
           currentIndex: _currentIndex,
           onTap: _onTabTapped,

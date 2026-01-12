@@ -13,6 +13,7 @@ import '../utils/timezone_utils.dart';
 import '../theme/app_colors.dart';
 import '../utils/storage_service.dart';
 import '../providers/place_provider.dart';
+import '../providers/reservation_provider.dart';
 import 'package:provider/provider.dart';
 
 /// CompactCalendarWidget 사용 목적(모드)
@@ -20,10 +21,12 @@ import 'package:provider/provider.dart';
 /// - adminNavigate: 관리자 홈 등에서 "조회/이동" 목적. 잠김/만석/과거여도 **탭은 가능**해야 함.
 /// - adminSelectNewSlot: 관리자 예약 변경에서 "새 슬롯 선택" 목적. **과거/만석은 선택 불가**.
 /// - userWeeklyReservationsView: 마이페이지 "내 예약(이번주) 보기" 목적(기본적으로 보기+탭 가능).
+/// - courseDetailView: 코스 상세 화면용. 내부 스크롤 불가, 남은자리 표시 숨김.
 enum CompactCalendarUsage {
   adminNavigate,
   adminSelectNewSlot,
   userWeeklyReservationsView,
+  courseDetailView,
 }
 
 /// 홈 화면용 간소화된 캘린더 위젯
@@ -84,16 +87,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
   CoursePolicy? _coursePolicy;
   StreamSubscription<List<SessionReservation>>? _sessionReservationSub;
   final Map<String, SessionReservation> _sessionReservationsByKey = {};
-
-  // 구독 파라미터 추적 (중복 구독 방지)
-  String? _lastSubscribedCourseId;
-  String? _lastSubscribedPlaceId;
-  int? _lastSubscribedWeekOffset;
-  DateTime? _lastSubscribedStartDate;
-  DateTime? _lastSubscribedEndDate;
-
-  // 이전 선택 코스 추적 (코스 변경 감지)
-  Course? _previousSelectedCourse;
 
   // UI 상수 정의 (compact calendar용으로 조정)
   static const double _minHourSlotHeight = 60.0; // 세션이 있는 구간의 최소 한 시간당 높이 (px)
@@ -195,7 +188,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     // 선택 코스가 확정된 뒤, 해당 주차의 예약 현황/정책을 구독
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      _previousSelectedCourse = _selectedCourse;
       _subscribeWeekSessionReservations();
     });
   }
@@ -240,6 +232,9 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
   }
 
   void _subscribeWeekSessionReservations() {
+    _sessionReservationSub?.cancel();
+    _sessionReservationsByKey.clear();
+
     final course = _selectedCourse;
     if (course == null) return;
     if (widget.weeklyViewMode) return;
@@ -255,34 +250,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     ).add(Duration(days: 7 * widget.weekOffset));
     final startDate = DateTime(weekStart.year, weekStart.month, weekStart.day);
     final endDate = startDate.add(const Duration(days: 6));
-
-    // 구독 파라미터가 변경되지 않았으면 재구독하지 않음
-    if (_sessionReservationSub != null &&
-        _lastSubscribedCourseId == course.id &&
-        _lastSubscribedPlaceId == placeId &&
-        _lastSubscribedWeekOffset == widget.weekOffset &&
-        _lastSubscribedStartDate != null &&
-        _lastSubscribedEndDate != null &&
-        _lastSubscribedStartDate!.year == startDate.year &&
-        _lastSubscribedStartDate!.month == startDate.month &&
-        _lastSubscribedStartDate!.day == startDate.day &&
-        _lastSubscribedEndDate!.year == endDate.year &&
-        _lastSubscribedEndDate!.month == endDate.month &&
-        _lastSubscribedEndDate!.day == endDate.day) {
-      // 이미 같은 파라미터로 구독 중이면 재구독하지 않음
-      return;
-    }
-
-    // 기존 구독 취소
-    _sessionReservationSub?.cancel();
-    _sessionReservationsByKey.clear();
-
-    // 구독 파라미터 저장
-    _lastSubscribedCourseId = course.id;
-    _lastSubscribedPlaceId = placeId;
-    _lastSubscribedWeekOffset = widget.weekOffset;
-    _lastSubscribedStartDate = startDate;
-    _lastSubscribedEndDate = endDate;
 
     _loadCoursePolicy();
 
@@ -319,24 +286,10 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
   @override
   void didUpdateWidget(CompactCalendarWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-
-    bool needsResubscribe = false;
-
     // 주 변경 시(이번주/다음주/다다음주) 예약 현황/정책 재구독
     if (widget.weekOffset != oldWidget.weekOffset) {
-      needsResubscribe = true;
+      _subscribeWeekSessionReservations();
     }
-
-    // 코스 변경 감지 (이전 선택 코스와 비교)
-    if (_selectedCourse != null && _previousSelectedCourse != null) {
-      if (_selectedCourse!.id != _previousSelectedCourse!.id) {
-        needsResubscribe = true;
-      }
-    } else if (_selectedCourse != null && _previousSelectedCourse == null) {
-      // 코스가 새로 선택된 경우
-      needsResubscribe = true;
-    }
-
     // highlightReservation이 새로 추가되었을 때 애니메이션 시작
     if (widget.highlightReservation != null &&
         oldWidget.highlightReservation == null) {
@@ -350,15 +303,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       );
       _shakeController!.forward();
     }
-
     // 코스 목록이 변경되었을 때 처리
     if (widget.courses != oldWidget.courses) {
-      // 코스 목록이 비어있지 않고, 선택된 코스가 없을 때 마지막 선택 코스 복원 시도
-      if (widget.courses.isNotEmpty && _selectedCourse == null) {
-        _restoreLastSelectedCourse();
-        return; // 복원 로직에서 구독 처리하므로 여기서 리턴
-      }
-
       // 새 코스가 추가되었는지 확인 (목록 길이가 증가)
       final newCourseAdded = widget.courses.length > oldWidget.courses.length;
 
@@ -369,7 +315,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
             _selectedCourse = widget.courses.last;
             _didInitialJump = false; // 초기 점프 리셋
           });
-          needsResubscribe = true; // 코스 변경으로 재구독 필요
         }
       } else {
         // 선택된 코스가 여전히 목록에 있는지 확인
@@ -378,9 +323,17 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
             (course) => course.id == _selectedCourse!.id,
           );
           if (!stillExists) {
-            // 선택된 코스가 없어졌으면 마지막 선택 코스 복원 시도
-            _restoreLastSelectedCourse();
-            return; // 복원 로직에서 구독 처리하므로 여기서 리턴
+            // 선택된 코스가 없어졌으면 첫 번째 코스 선택
+            if (widget.courses.isNotEmpty) {
+              setState(() {
+                _selectedCourse = widget.courses.first;
+                _didInitialJump = false; // 초기 점프 리셋
+              });
+            } else {
+              setState(() {
+                _selectedCourse = null;
+              });
+            }
           } else {
             // 선택된 코스가 여전히 있으면, 최신 정보로 업데이트 (이름, 색상, 이미지, 세션 등 모든 변경사항 반영)
             final updatedCourse = widget.courses.firstWhere(
@@ -404,51 +357,27 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                   ),
                 );
             if (hasChanges) {
-              // 세션 정보가 변경되었는지 확인 (재구독 필요 여부 판단)
-              final sessionsChanged =
-                  updatedCourse.sessions.length !=
-                      _selectedCourse!.sessions.length ||
-                  updatedCourse.sessions.any(
-                    (s) => !_selectedCourse!.sessions.any(
-                      (os) =>
-                          os.dayOfWeek == s.dayOfWeek &&
-                          os.startTime == s.startTime &&
-                          os.endTime == s.endTime &&
-                          os.capacity == s.capacity,
-                    ),
-                  );
-
               setState(() {
                 _selectedCourse = updatedCourse;
                 _didInitialJump = false; // 초기 점프 리셋
               });
-
-              // 세션 정보가 변경되었으면 재구독 필요
-              if (sessionsChanged) {
-                needsResubscribe = true;
-              }
             }
           }
         } else if (widget.courses.isNotEmpty) {
-          // 선택된 코스가 없었는데 코스가 추가되었으면 마지막 선택 코스 복원 시도
-          _restoreLastSelectedCourse();
-          return; // 복원 로직에서 구독 처리하므로 여기서 리턴
+          // 선택된 코스가 없었는데 코스가 추가되었으면 첫 번째 코스 선택
+          setState(() {
+            _selectedCourse = widget.courses.first;
+            _didInitialJump = false; // 초기 점프 리셋
+          });
         }
       }
     }
 
-    // 실제로 변경이 필요한 경우에만 재구독
-    if (needsResubscribe) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        _subscribeWeekSessionReservations();
-        // 코스 변경 추적 업데이트
-        _previousSelectedCourse = _selectedCourse;
-      });
-    } else {
-      // 재구독하지 않아도 이전 선택 코스 추적 업데이트 (코스 정보 업데이트만 된 경우)
-      _previousSelectedCourse = _selectedCourse;
-    }
+    // 코스/주차 변경으로 선택 상태가 바뀌었을 수 있으므로 재구독
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _subscribeWeekSessionReservations();
+    });
   }
 
   @override
@@ -456,13 +385,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     _sessionReservationSub?.cancel();
     _scrollController.dispose();
     _shakeController?.dispose();
-    // 구독 파라미터 초기화
-    _lastSubscribedCourseId = null;
-    _lastSubscribedPlaceId = null;
-    _lastSubscribedWeekOffset = null;
-    _lastSubscribedStartDate = null;
-    _lastSubscribedEndDate = null;
-    _previousSelectedCourse = null;
     super.dispose();
   }
 
@@ -482,6 +404,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
   @override
   Widget build(BuildContext context) {
     super.build(context); // AutomaticKeepAliveClientMixin을 위해 필요
+    // ReservationProvider를 listen하여 예약 변경사항 자동 반영
+    Provider.of<ReservationProvider>(context);
     // 일정보기 모드인 경우
     if (widget.weeklyViewMode) {
       if (widget.userReservations == null || widget.userReservations!.isEmpty) {
@@ -489,8 +413,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       }
 
       // 현재 주의 날짜들 계산 (이번주만)
-      // 주차 계산은 "오늘 00:00" 기준으로 해야 날짜가 안정적이다.
-      final today = TimezoneUtils.getSeoulToday();
+      final today = TimezoneUtils.getSeoulDateTime();
       final daysFromMonday = today.weekday - 1;
       final thisWeekMonday = today.subtract(Duration(days: daysFromMonday));
       final weekStart = thisWeekMonday; // weekOffset 무시하고 항상 이번주
@@ -553,8 +476,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     }
 
     // 현재 주의 날짜들 계산
-    // 주차 계산은 "오늘 00:00" 기준으로 해야 날짜가 안정적이다.
-    final today = TimezoneUtils.getSeoulToday();
+    final today = TimezoneUtils.getSeoulDateTime();
     // 이번 주 월요일 찾기
     final daysFromMonday = today.weekday - 1; // 월요일이 0이 되도록
     final thisWeekMonday = today.subtract(Duration(days: daysFromMonday));
@@ -691,8 +613,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                   _didInitialJump = false; // 코스 변경 시 초기 점프 리셋
                 });
 
-                // 코스 변경 추적 업데이트
-                _previousSelectedCourse = newCourse;
                 _subscribeWeekSessionReservations();
 
                 // 마지막 선택 코스 저장
@@ -849,6 +769,9 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       color: widget.backgroundColor ?? AppColors.backgroundWhite,
       child: SingleChildScrollView(
         controller: _scrollController,
+        physics: _usage == CompactCalendarUsage.courseDetailView
+            ? const NeverScrollableScrollPhysics()
+            : null, // courseDetailView 모드에서는 스크롤 비활성화
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1948,6 +1871,33 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
         ? AppColors.reservedIconGrey
         : Colors.white.withOpacity(0.9);
 
+    // 예약 처리 중인지 확인 (ReservationProvider 사용)
+    final placeId =
+        Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id ??
+        '';
+    final reservationProvider = Provider.of<ReservationProvider>(
+      context,
+      listen: false,
+    );
+    final processingKey = placeId.isEmpty
+        ? null
+        : reservationProvider.operationKeyFromParts(
+            placeId: placeId,
+            courseId: info.course.id,
+            dayOfWeek: session.dayOfWeek,
+            startTime: session.startTime,
+            date: date,
+          );
+    final isProcessing =
+        processingKey != null &&
+        reservationProvider.isOperationInFlightByKey(processingKey);
+    final operationType = processingKey != null
+        ? reservationProvider.getOperationTypeByKey(processingKey)
+        : null;
+
+    // 처리 중일 때 배경색 조정
+    final blockColor = isProcessing ? baseColor.withOpacity(0.45) : baseColor;
+
     return Positioned(
       top: topPosition,
       left: _sessionPadding,
@@ -1978,11 +1928,11 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                         vertical: sessionHeightPx >= 50 ? 2 : 1,
                       ),
                       decoration: BoxDecoration(
-                        color: baseColor,
+                        color: blockColor,
                         borderRadius: BorderRadius.circular(12),
                         boxShadow: [
                           BoxShadow(
-                            color: baseColor.withOpacity(0.4),
+                            color: blockColor.withOpacity(0.4),
                             blurRadius: 12,
                             spreadRadius: 2,
                             offset: const Offset(0, 4),
@@ -1998,38 +1948,86 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                     ),
                   );
                 },
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  mainAxisSize: MainAxisSize.min,
+                child: Stack(
                   children: [
-                    // 코스 이름
-                    Text(
-                      info.course.name,
-                      style: TextStyle(
-                        color: textColor,
-                        fontSize: sessionHeightPx >= 60
-                            ? 18
-                            : (sessionHeightPx >= 40 ? 14 : 12),
-                        fontWeight: FontWeight.bold,
+                    // 로딩 중이 아닐 때만 텍스트 표시
+                    if (!isProcessing)
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // 코스 이름
+                          Text(
+                            info.course.name,
+                            style: TextStyle(
+                              color: textColor,
+                              fontSize: sessionHeightPx >= 60
+                                  ? 18
+                                  : (sessionHeightPx >= 40 ? 14 : 12),
+                              fontWeight: FontWeight.bold,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          // 시간 (높이가 충분할 때만 표시)
+                          if (sessionHeightPx >= 70) ...[
+                            SizedBox(height: sessionHeightPx >= 80 ? 3 : 2),
+                            Text(
+                              '${session.startTime} - ${session.endTime}',
+                              style: TextStyle(
+                                color: iconColor,
+                                fontSize: sessionHeightPx >= 90 ? 13 : 11,
+                                fontWeight: FontWeight.w500,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ],
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    // 시간 (높이가 충분할 때만 표시)
-                    if (sessionHeightPx >= 70) ...[
-                      SizedBox(height: sessionHeightPx >= 80 ? 3 : 2),
-                      Text(
-                        '${session.startTime} - ${session.endTime}',
-                        style: TextStyle(
-                          color: iconColor,
-                          fontSize: sessionHeightPx >= 90 ? 13 : 11,
-                          fontWeight: FontWeight.w500,
+                    // 로딩 중일 때 중앙에 로딩 인디케이터와 텍스트 표시
+                    if (isProcessing)
+                      Center(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 8,
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox(
+                                width: sessionHeightPx >= 50 ? 32 : 24,
+                                height: sessionHeightPx >= 50 ? 32 : 24,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 3.0,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    iconColor,
+                                  ),
+                                ),
+                              ),
+                              if (operationType != null) ...[
+                                SizedBox(height: sessionHeightPx >= 50 ? 8 : 6),
+                                Text(
+                                  operationType ==
+                                          ReservationOperationType.create
+                                      ? '예약중'
+                                      : operationType ==
+                                            ReservationOperationType.cancel
+                                      ? '취소중'
+                                      : '변경중',
+                                  style: TextStyle(
+                                    color: iconColor,
+                                    fontSize: sessionHeightPx >= 50 ? 18 : 16,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                       ),
-                    ],
                   ],
                 ),
               )
@@ -2039,7 +2037,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                   vertical: sessionHeightPx >= 50 ? 2 : 1,
                 ),
                 decoration: BoxDecoration(
-                  color: baseColor,
+                  color: blockColor,
                   borderRadius: BorderRadius.circular(12),
                   boxShadow: [
                     BoxShadow(
@@ -2049,38 +2047,86 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                     ),
                   ],
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  mainAxisSize: MainAxisSize.min,
+                child: Stack(
                   children: [
-                    // 코스 이름
-                    Text(
-                      info.course.name,
-                      style: TextStyle(
-                        color: textColor,
-                        fontSize: sessionHeightPx >= 60
-                            ? 18
-                            : (sessionHeightPx >= 40 ? 14 : 12),
-                        fontWeight: FontWeight.bold,
+                    // 로딩 중이 아닐 때만 텍스트 표시
+                    if (!isProcessing)
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // 코스 이름
+                          Text(
+                            info.course.name,
+                            style: TextStyle(
+                              color: textColor,
+                              fontSize: sessionHeightPx >= 60
+                                  ? 18
+                                  : (sessionHeightPx >= 40 ? 14 : 12),
+                              fontWeight: FontWeight.bold,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          // 시간 (높이가 충분할 때만 표시)
+                          if (sessionHeightPx >= 70) ...[
+                            SizedBox(height: sessionHeightPx >= 80 ? 3 : 2),
+                            Text(
+                              '${session.startTime} - ${session.endTime}',
+                              style: TextStyle(
+                                color: iconColor,
+                                fontSize: sessionHeightPx >= 90 ? 13 : 11,
+                                fontWeight: FontWeight.w500,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ],
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    // 시간 (높이가 충분할 때만 표시)
-                    if (sessionHeightPx >= 70) ...[
-                      SizedBox(height: sessionHeightPx >= 80 ? 3 : 2),
-                      Text(
-                        '${session.startTime} - ${session.endTime}',
-                        style: TextStyle(
-                          color: iconColor,
-                          fontSize: sessionHeightPx >= 90 ? 13 : 11,
-                          fontWeight: FontWeight.w500,
+                    // 로딩 중일 때 중앙에 로딩 인디케이터와 텍스트 표시
+                    if (isProcessing)
+                      Center(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 8,
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox(
+                                width: sessionHeightPx >= 50 ? 32 : 24,
+                                height: sessionHeightPx >= 50 ? 32 : 24,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 3.0,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    iconColor,
+                                  ),
+                                ),
+                              ),
+                              if (operationType != null) ...[
+                                SizedBox(height: sessionHeightPx >= 50 ? 8 : 6),
+                                Text(
+                                  operationType ==
+                                          ReservationOperationType.create
+                                      ? '예약중'
+                                      : operationType ==
+                                            ReservationOperationType.cancel
+                                      ? '취소중'
+                                      : '변경중',
+                                  style: TextStyle(
+                                    color: iconColor,
+                                    fontSize: sessionHeightPx >= 50 ? 18 : 16,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                       ),
-                    ],
                   ],
                 ),
               ),
@@ -2172,6 +2218,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       CompactCalendarUsage.adminSelectNewSlot => !selectableForAdminMove,
       CompactCalendarUsage.adminNavigate => (isFull || isLocked), // 표시는 유지
       CompactCalendarUsage.userWeeklyReservationsView => (isFull || isLocked),
+      CompactCalendarUsage.courseDetailView => (isFull || isLocked),
     };
 
     final baseColor = visuallyDisabled
@@ -2202,10 +2249,11 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
         : 1.0;
 
     final blockColor = baseColor.withOpacity(opacity);
-    final textColor = (isCurrentReservation || isFull || isLocked)
+    // 텍스트 색상은 visuallyDisabled 또는 현재 예약 여부를 기준으로 결정
+    final textColor = (isCurrentReservation || visuallyDisabled)
         ? AppColors.reservedTextGrey
         : Colors.white.withOpacity(opacity);
-    final iconColor = (isCurrentReservation || isFull || isLocked)
+    final iconColor = (isCurrentReservation || visuallyDisabled)
         ? AppColors.reservedIconGrey
         : Colors.white.withOpacity(0.9 * opacity);
 
@@ -2219,6 +2267,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       // 유저 주간(마이페이지) 모드는 이 블록 경로를 사용하지 않음(weeklyViewMode 경로)
       CompactCalendarUsage.userWeeklyReservationsView =>
         widget.onSessionTap != null,
+      // 코스 상세 화면: 탭 가능
+      CompactCalendarUsage.courseDetailView => widget.onSessionTap != null,
     };
 
     return Positioned(
@@ -2333,8 +2383,10 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                       overflow: TextOverflow.ellipsis,
                     ),
                   ],
-                  // 남은 자리 (홈 화면이 아닐 때만, 높이가 충분할 때만 표시)
-                  if (widget.hideCourseSelector && sessionHeightPx >= 90) ...[
+                  // 남은 자리 (홈 화면이 아닐 때만, 높이가 충분할 때만 표시, courseDetailView 모드에서는 숨김)
+                  if (widget.hideCourseSelector &&
+                      sessionHeightPx >= 90 &&
+                      _usage != CompactCalendarUsage.courseDetailView) ...[
                     SizedBox(height: sessionHeightPx >= 100 ? 3 : 2),
                     Text(
                       '$remainingSeats / $totalSeats',

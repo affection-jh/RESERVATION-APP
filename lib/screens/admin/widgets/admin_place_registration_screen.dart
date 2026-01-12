@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
-import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 import '../../../theme/app_colors.dart';
 import '../../../widgets/cached_image_widget.dart';
-import '../../../providers/auth_provider.dart';
 import '../../../services/storage_service.dart';
 import '../../../utils/snackbar_util.dart';
 import '../../../utils/text_field_decoration_util.dart';
@@ -68,9 +66,24 @@ class _AdminPlaceRegistrationScreenState
   }
 
   bool _isFormValid() {
-    return (_selectedImage != null || _uploadedImageUrl != null) &&
-        _nameController.text.trim().isNotEmpty &&
-        _locationController.text.trim().isNotEmpty;
+    // 이미지가 선택되어 있거나 업로드 완료되어 있어야 함 (선택 사항으로 변경 가능)
+    final hasImage = _selectedImage != null || _uploadedImageUrl != null;
+    // 이름과 설명이 입력되어 있어야 함
+    final hasName = _nameController.text.trim().isNotEmpty;
+    final hasLocation = _locationController.text.trim().isNotEmpty;
+
+    // 이미지는 선택 사항으로 변경 (이름과 설명만 필수)
+    final isValid = hasName && hasLocation;
+
+    // 디버깅용 로그
+    debugPrint(
+      '[AdminPlaceRegistration] _isFormValid: hasImage=$hasImage, hasName=$hasName, hasLocation=$hasLocation, isValid=$isValid',
+    );
+    debugPrint(
+      '[AdminPlaceRegistration] _selectedImage: ${_selectedImage != null}, _uploadedImageUrl: ${_uploadedImageUrl != null}',
+    );
+
+    return isValid;
   }
 
   /// 이미지 업로드
@@ -246,8 +259,14 @@ class _AdminPlaceRegistrationScreenState
                 _selectedImage = File(pickedFile.path);
                 _uploadedImageUrl = null; // 새 이미지 선택 시 기존 URL 초기화
               });
+              debugPrint(
+                '[AdminPlaceRegistration] 이미지 선택됨: ${_selectedImage?.path}',
+              );
               // 이미지 선택 시 자동 업로드
               await _uploadImage();
+              debugPrint(
+                '[AdminPlaceRegistration] 이미지 업로드 완료: $_uploadedImageUrl',
+              );
             }
           },
           child: Container(
@@ -420,7 +439,11 @@ class _AdminPlaceRegistrationScreenState
             floatingLabelBehavior: FloatingLabelBehavior.always,
             hasFocus: _nameFocusNode.hasFocus,
           ),
-          style: TextStyle(fontSize: 16, color: AppColors.textPrimary),
+          style: TextStyle(
+            fontSize: 16,
+            color: AppColors.textPrimary,
+            fontWeight: FontWeight.w600,
+          ),
           onChanged: (_) => setState(() {}),
         ),
       ],
@@ -442,6 +465,11 @@ class _AdminPlaceRegistrationScreenState
         ),
         const SizedBox(height: 4),
         TextField(
+          style: TextStyle(
+            fontSize: 16,
+            color: AppColors.textPrimary,
+            fontWeight: FontWeight.w600,
+          ),
           controller: _locationController,
           focusNode: _locationFocusNode,
           textInputAction: TextInputAction.done,
@@ -452,7 +480,7 @@ class _AdminPlaceRegistrationScreenState
             floatingLabelBehavior: FloatingLabelBehavior.always,
             hasFocus: _locationFocusNode.hasFocus,
           ),
-          style: TextStyle(fontSize: 16, color: AppColors.textPrimary),
+
           onChanged: (_) => setState(() {}),
         ),
       ],
@@ -461,83 +489,77 @@ class _AdminPlaceRegistrationScreenState
 
   // 하단 버튼
   Widget _buildBottomButtons() {
-    return Consumer<AuthProvider>(
-      builder: (context, authProvider, child) {
-        final admin = authProvider.currentAdmin;
-        final hasPlace = admin != null && admin.placeIds.isNotEmpty;
-        final canProceed = _isFormValid() && !hasPlace;
+    // 플레이스 추가 플로우에서는 hasPlace 체크 무시 (기존 관리자가 추가 플레이스를 등록하는 경우 허용)
+    final isValid = _isFormValid();
+    // 이미지 업로드 중이어도 이미지가 선택되어 있으면 진행 가능
+    final canProceed = isValid;
 
-        return Row(
-          children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: () => _handleBackButton(),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  side: BorderSide(color: AppColors.borderLight),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                ),
-                child: Text(
-                  '이전으로',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
+    debugPrint(
+      '[AdminPlaceRegistration] 버튼 상태: isValid=$isValid, canProceed=$canProceed',
+    );
+
+    return Row(
+      children: [
+        Expanded(
+          child: OutlinedButton(
+            onPressed: () => _handleBackButton(),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              side: BorderSide(color: AppColors.borderLight),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
               ),
             ),
-            const SizedBox(width: 10),
-            Expanded(
-              flex: 2,
-              child: FilledButton(
-                onPressed: canProceed
-                    ? () {
-                        _removeFocus();
-                        if (hasPlace) {
-                          SnackbarUtil.showError(
-                            context,
-                            '베타 버전에서는 전화번호 하나당 플레이스 하나만 등록할 수 있습니다.',
-                          );
-                          return;
-                        }
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (context) => AdminGreetingSettingScreen(
-                              placeName: _nameController.text.trim(),
-                              placeLocation: _locationController.text.trim(),
-                              placeImage: _uploadedImageUrl == null
-                                  ? _selectedImage
-                                  : null, // 업로드 완료된 경우 null
-                              placeImageUrl: _uploadedImageUrl, // 업로드된 URL 전달
-                            ),
-                          ),
-                        );
-                      }
-                    : null,
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppColors.primaryGreen,
-                  disabledBackgroundColor: AppColors.borderLight,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                ),
-                child: Text(
-                  '계속하기',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.primaryGreen,
-                  ),
-                ),
+            child: Text(
+              '이전으로',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textPrimary,
               ),
             ),
-          ],
-        );
-      },
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          flex: 2,
+          child: FilledButton(
+            onPressed: canProceed
+                ? () {
+                    _removeFocus();
+                    Navigator.of(context).pushReplacement(
+                      MaterialPageRoute(
+                        builder: (context) => AdminGreetingSettingScreen(
+                          placeName: _nameController.text.trim(),
+                          placeLocation: _locationController.text.trim(),
+                          placeImage: _uploadedImageUrl == null
+                              ? _selectedImage
+                              : null, // 업로드 완료된 경우 null
+                          placeImageUrl: _uploadedImageUrl, // 업로드된 URL 전달
+                        ),
+                      ),
+                    );
+                  }
+                : null,
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.primaryGreen,
+              disabledBackgroundColor: AppColors.borderLight,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+            child: Text(
+              '계속하기',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

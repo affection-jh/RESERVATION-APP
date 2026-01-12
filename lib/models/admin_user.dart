@@ -30,14 +30,9 @@ class AdminUser {
   }
 
   // 플레이스 추가
-  // 베타 버전: 전화번호 하나당 플레이스 하나만 허용
   AdminUser addPlace(String placeId) {
     if (placeIds.contains(placeId)) {
       return this;
-    }
-    // 베타 버전 제약: 이미 플레이스가 있으면 예외 발생
-    if (placeIds.isNotEmpty) {
-      throw Exception('베타 버전에서는 전화번호 하나당 플레이스 하나만 등록할 수 있습니다.');
     }
     return copyWith(
       placeIds: [...placeIds, placeId],

@@ -10,6 +10,7 @@ import '../../../models/admin_models.dart';
 import '../../../providers/member_provider.dart';
 import '../../../providers/place_provider.dart';
 import '../../../providers/enrollment_provider.dart';
+import '../../../providers/course_provider.dart';
 import '../../../services/enrollment_service.dart';
 import '../../../services/member_service.dart';
 import '../../../theme/app_colors.dart';
@@ -19,6 +20,7 @@ import '../../../utils/snackbar_util.dart';
 import '../../../utils/format_utils.dart';
 import '../../../utils/date_range_picker_util.dart';
 import '../../../utils/enrollment_valid_until_util.dart';
+import '../../../utils/member_utils.dart';
 import '../../../widgets/defualt_tapbar.dart';
 import '../../../widgets/valid_period_input_widget.dart';
 import '../../../widgets/reservations_input_widget.dart';
@@ -31,6 +33,7 @@ class EnrollmentDetailScreen extends StatefulWidget {
   final CourseEnrollment enrollment;
   final Course course;
   final bool isNewEnrollment; // 새 enrollment 생성 모드
+  final int? initialTabIndex; // 초기 탭 인덱스 (0: 횟수 조정, 1: 기간 연장, 2: 재등록/취소)
 
   const EnrollmentDetailScreen({
     super.key,
@@ -38,6 +41,7 @@ class EnrollmentDetailScreen extends StatefulWidget {
     required this.enrollment,
     required this.course,
     this.isNewEnrollment = false,
+    this.initialTabIndex,
   });
 
   @override
@@ -52,7 +56,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
     // pending 멤버(등록 생성 전) 또는 id 미할당 enrollment는 Firestore enrollments 문서가 없음
     return widget.isNewEnrollment ||
         widget.enrollment.id.isEmpty ||
-        widget.enrollment.userId.startsWith('pending_');
+        MemberUtils.isPendingMember(widget.enrollment.userId);
   }
 
   // 탭 1: 횟수 조정
@@ -102,10 +106,31 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    // 남은 횟수가 0이면 기간 연장 탭 제외
+    // 단, 연장 요청이 있으면 기간 연장 탭을 표시 (연장 요청 처리 가능하도록)
+    final hasRemainingReservations =
+        widget.enrollment.remainingReservations > 0;
+    final hasPendingExtensionRequest =
+        widget.enrollment.hasPendingExtensionRequest;
+    final tabCount = (hasRemainingReservations || hasPendingExtensionRequest)
+        ? 3
+        : 2;
+    final initialIndex = widget.initialTabIndex?.clamp(0, tabCount - 1) ?? 0;
+    _tabController = TabController(
+      length: tabCount,
+      vsync: this,
+      initialIndex: initialIndex,
+    );
     _tabController.addListener(() {
       // 탭 변경 시 기간 연장 탭으로 돌아오면 원래 종료일로 동기화
-      if (_tabController.index == 1 && _extensionPeriodValue == 0) {
+      // 남은 횟수가 있거나 연장 요청이 있으면 기간 연장 탭이 존재 (인덱스 1)
+      final hasRemainingReservations =
+          widget.enrollment.remainingReservations > 0;
+      final hasPendingExtensionRequest =
+          widget.enrollment.hasPendingExtensionRequest;
+      if ((hasRemainingReservations || hasPendingExtensionRequest) &&
+          _tabController.index == 1 &&
+          _extensionPeriodValue == 0) {
         setState(() {
           _extendedValidUntil = _clampValidUntil(_extensionBaseValidUntil);
         });
@@ -148,34 +173,79 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
     _originalReEnrollTotalReservations = widget.enrollment.totalReservations;
     _originalReEnrollValidFrom = widget.enrollment.validFrom;
     _originalReEnrollValidUntil = widget.enrollment.validUntil;
+
+    // 일괄 적용 모드 확인: 코스에 일괄 적용 설정이 있으면 그것을 사용
+    final useUniform = widget.course.useUniformSettings;
+    final initialTotalReservations =
+        useUniform && widget.course.uniformTotalReservations != null
+        ? widget.course.uniformTotalReservations!
+        : widget.enrollment.totalReservations;
+
     _reEnrollTotalReservationsController = TextEditingController(
-      text: widget.enrollment.totalReservations.toString(),
+      text: initialTotalReservations.toString(),
     );
     _reEnrollPeriodController = TextEditingController();
 
     // 재등록 가능 여부 확인
     if (_canReEnroll()) {
-      // 재등록 가능: 시작일 = 오늘, 종료일 = 이전 설정 상속 (기존 유효기간 길이 유지)
+      // 재등록 가능: 시작일 = 오늘
       final seoulToday = TimezoneUtils.getSeoulToday();
-      final originalValidFromDateOnly =
-          EnrollmentValidUntilUtil.toSeoulDateOnly(widget.enrollment.validFrom);
-      final originalValidUntilDateOnly =
-          EnrollmentValidUntilUtil.toSeoulDateOnly(
-            widget.enrollment.validUntil,
-          );
-      final originalDurationDays = originalValidUntilDateOnly
-          .difference(originalValidFromDateOnly)
-          .inDays;
+
+      // 일괄 적용 모드면 일괄 적용 유효기간 사용, 아니면 기존 유효기간 길이 상속
+      DateTime initialValidUntil;
+      PeriodType initialPeriodType;
+      int initialPeriodValue;
+
+      if (useUniform &&
+          widget.course.uniformPeriodType != null &&
+          widget.course.uniformPeriodValue != null) {
+        // 일괄 적용 모드: 일괄 적용 유효기간 사용
+        final uniformPeriodType = widget.course.uniformPeriodType!;
+        final uniformPeriodValue = widget.course.uniformPeriodValue!;
+
+        Duration duration;
+        switch (uniformPeriodType) {
+          case PeriodType.weeks:
+            duration = Duration(days: uniformPeriodValue * 7);
+            break;
+          case PeriodType.days:
+            duration = Duration(days: uniformPeriodValue);
+            break;
+          case PeriodType.months:
+            duration = Duration(days: uniformPeriodValue * 30);
+            break;
+        }
+
+        initialValidUntil = seoulToday.add(duration);
+        initialPeriodType = uniformPeriodType;
+        initialPeriodValue = uniformPeriodValue;
+      } else {
+        // 기존 유효기간 길이 상속
+        final originalValidFromDateOnly =
+            EnrollmentValidUntilUtil.toSeoulDateOnly(
+              widget.enrollment.validFrom,
+            );
+        final originalValidUntilDateOnly =
+            EnrollmentValidUntilUtil.toSeoulDateOnly(
+              widget.enrollment.validUntil,
+            );
+        final originalDurationDays = originalValidUntilDateOnly
+            .difference(originalValidFromDateOnly)
+            .inDays;
+
+        initialValidUntil = seoulToday.add(
+          Duration(days: originalDurationDays.clamp(1, 36500)),
+        );
+        initialPeriodType = PeriodType.days;
+        initialPeriodValue = originalDurationDays.clamp(1, 36500);
+      }
 
       _reEnrollValidFrom = seoulToday;
-      _reEnrollValidUntil = seoulToday.add(
-        Duration(days: originalDurationDays.clamp(1, 36500)),
-      );
-      // 재등록 유효기간 UI는 "일" 단위로 상속 (정확한 기간 유지)
+      _reEnrollValidUntil = initialValidUntil;
       _reEnrollMode = ValidPeriodMode.period;
-      _reEnrollPeriodType = PeriodType.days;
-      _reEnrollPeriodValue = originalDurationDays.clamp(1, 36500);
-      _reEnrollPeriodController.text = _reEnrollPeriodValue.toString();
+      _reEnrollPeriodType = initialPeriodType;
+      _reEnrollPeriodValue = initialPeriodValue;
+      _reEnrollPeriodController.text = initialPeriodValue.toString();
     } else {
       // 재등록 불가능: 기존 유효기간 표시 (회색 처리용)
       _reEnrollValidFrom = widget.enrollment.validFrom;
@@ -267,6 +337,9 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
   }
 
   Future<void> _saveRemainingReservations() async {
+    // 키보드 숨기기
+    FocusScope.of(context).unfocus();
+
     if (!_isRemainingReservationsValid()) {
       SnackbarUtil.showError(context, '입력값을 확인해주세요.');
       return;
@@ -317,11 +390,35 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           SnackbarUtil.showSuccess(context, '대기 등록 정보가 변경되었습니다.');
         }
       } else {
-        // ✅ 트랜잭션으로 원자적 저장 (enrollment 업데이트 + 관리자 액션)
-        final updatedEnrollment = widget.enrollment.copyWith(
+        // ✅ remainingReservations 변경 시 totalReservations도 함께 업데이트
+        // remainingReservations가 totalReservations보다 크면 totalReservations도 증가
+        final currentTotal = widget.enrollment.totalReservations;
+        final newTotal = remaining > currentTotal ? remaining : currentTotal;
+
+        // ⚠️ 엣지 케이스: 횟수를 0으로 줄이면 연장 요청이 의미 없어짐
+        // pending 연장 요청을 자동으로 거부
+        CourseEnrollment updatedEnrollment = widget.enrollment.copyWith(
           remainingReservations: remaining,
+          totalReservations: newTotal,
         );
 
+        // 연장 요청 상태 업데이트 정보 준비 (횟수가 0이 되고 연장 요청이 있는 경우)
+        ExtensionRequestUpdate? extensionRequestUpdate;
+        if (remaining == 0 && widget.enrollment.hasPendingExtensionRequest) {
+          final pendingRequest = widget.enrollment.extensionRequest;
+          if (pendingRequest != null) {
+            updatedEnrollment = updatedEnrollment.rejectExtension(
+              '횟수가 0이 되어 연장 요청이 자동으로 거부되었습니다.',
+            );
+            extensionRequestUpdate = ExtensionRequestUpdate(
+              requestId: pendingRequest.id,
+              status: ExtensionRequestStatus.rejected,
+              rejectionReason: '횟수가 0이 되어 연장 요청이 자동으로 거부되었습니다.',
+            );
+          }
+        }
+
+        // ✅ 트랜잭션으로 원자적 저장 (enrollment 업데이트 + 관리자 액션 + 연장 요청 상태 업데이트)
         await enrollmentService.updateEnrollmentWithAdminAction(
           updatedEnrollment: updatedEnrollment,
           adminAction: AdminAction(
@@ -329,11 +426,19 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
             actionType: AdminActionType.adjustCount,
             performedAt: TimezoneUtils.getSeoulDateTime(),
             performedBy: 'admin', // TODO: 실제 admin ID로 변경
-            details:
-                '남은 횟수를 ${_originalRemainingReservations}회에서 ${remaining}회로 조정',
-            oldValue: {'remainingReservations': _originalRemainingReservations},
-            newValue: {'remainingReservations': remaining},
+            details: newTotal != currentTotal
+                ? '남은 횟수를 $_originalRemainingReservations회에서 ${remaining}회로 조정 (총 횟수: ${currentTotal}회 → ${newTotal}회)'
+                : '남은 횟수를 $_originalRemainingReservations회에서 ${remaining}회로 조정',
+            oldValue: {
+              'remainingReservations': _originalRemainingReservations,
+              'totalReservations': currentTotal,
+            },
+            newValue: {
+              'remainingReservations': remaining,
+              'totalReservations': newTotal,
+            },
           ),
+          extensionRequestUpdate: extensionRequestUpdate,
         );
 
         // 저장 성공 후 변경사항 추적 기준 업데이트
@@ -475,6 +580,9 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
   }
 
   Future<void> _savePeriodExtension() async {
+    // 키보드 숨기기
+    FocusScope.of(context).unfocus();
+
     if (!_hasPeriodExtensionChanges()) {
       SnackbarUtil.showError(context, '변경사항이 없습니다.');
       return;
@@ -536,11 +644,28 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           SnackbarUtil.showSuccess(context, '대기 등록 정보가 변경되었습니다.');
         }
       } else {
-        // ✅ 트랜잭션으로 원자적 저장 (enrollment 업데이트 + 관리자 액션)
-        final updatedEnrollment = widget.enrollment.copyWith(
+        // ⚠️ 엣지 케이스: 기간 연장을 직접 저장하면 연장 요청과 중복됨
+        // pending 연장 요청이 있으면 자동으로 승인 처리
+        CourseEnrollment updatedEnrollment = widget.enrollment.copyWith(
           validUntil: _extendedValidUntil,
         );
 
+        // 연장 요청이 있으면 자동으로 승인
+        final pendingRequest = widget.enrollment.hasPendingExtensionRequest
+            ? widget.enrollment.extensionRequest
+            : null;
+        ExtensionRequestUpdate? extensionRequestUpdate;
+        if (pendingRequest != null) {
+          updatedEnrollment = updatedEnrollment.approveExtension(
+            _extendedValidUntil,
+          );
+          extensionRequestUpdate = ExtensionRequestUpdate(
+            requestId: pendingRequest.id,
+            status: ExtensionRequestStatus.approved,
+          );
+        }
+
+        // ✅ 트랜잭션으로 원자적 저장 (enrollment 업데이트 + 관리자 액션 + 연장 요청 상태 업데이트)
         await enrollmentService.updateEnrollmentWithAdminAction(
           updatedEnrollment: updatedEnrollment,
           adminAction: AdminAction(
@@ -548,11 +673,13 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
             actionType: AdminActionType.extendPeriod,
             performedAt: TimezoneUtils.getSeoulDateTime(),
             performedBy: 'admin', // TODO: 실제 admin ID로 변경
-            details:
-                '유효기간을 ${TimezoneUtils.formatDateToSeoul(_originalValidUntil)}에서 ${TimezoneUtils.formatDateToSeoul(_extendedValidUntil)}로 연장',
+            details: pendingRequest != null
+                ? '유효기간을 ${TimezoneUtils.formatDateToSeoul(_originalValidUntil)}에서 ${TimezoneUtils.formatDateToSeoul(_extendedValidUntil)}로 연장 (연장 요청 자동 승인)'
+                : '유효기간을 ${TimezoneUtils.formatDateToSeoul(_originalValidUntil)}에서 ${TimezoneUtils.formatDateToSeoul(_extendedValidUntil)}로 연장',
             oldValue: {'validUntil': _originalValidUntil.toIso8601String()},
             newValue: {'validUntil': _extendedValidUntil.toIso8601String()},
           ),
+          extensionRequestUpdate: extensionRequestUpdate,
         );
 
         // 저장 성공 후 변경사항 추적 기준 업데이트
@@ -596,7 +723,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
     }
   }
 
-  // 재등록 가능 여부 확인 (기존 코스가 만료되고 횟수가 0일 때만)
+  // 재등록 가능 여부 확인 (잔여 횟수 0 또는 유효기간 만료)
   bool _canReEnroll() {
     // pending(신규 생성 모드)에서는 재등록 불가
     if (_isPendingEnrollment) return false;
@@ -616,10 +743,8 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
       validUntilDateOnly.day,
     );
 
-    // 재등록 조건:
-    // - 잔여 횟수 0
-    // - 유효기간 만료(오늘 이전)
-    return widget.enrollment.remainingReservations == 0 &&
+    // 재등록 조건: 잔여 횟수 0 OR 유효기간 만료(오늘 이전)
+    return widget.enrollment.remainingReservations == 0 ||
         validUntilDateOnlyOnly.isBefore(todayDateOnly);
   }
 
@@ -663,9 +788,12 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
   }
 
   Future<void> _saveReEnrollment() async {
+    // 키보드 숨기기
+    FocusScope.of(context).unfocus();
+
     // 버튼이 비활성인데도 호출되는 케이스 방지
     if (!_canReEnroll()) {
-      SnackbarUtil.showError(context, '재등록은 잔여 횟수 0이고 유효기간이 만료된 경우에만 가능합니다.');
+      SnackbarUtil.showError(context, '재등록은 잔여 횟수가 0이거나 유효기간이 만료된 경우에만 가능합니다.');
       return;
     }
     if (!_isReEnrollValid()) {
@@ -701,42 +829,96 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         _reEnrollTotalReservationsController.text,
       );
 
-      if (widget.isNewEnrollment) {
-        // 새 enrollment 생성
-        final newEnrollment = widget.enrollment.copyWith(
-          enrolledAt: now, // 현재 등록일
-          totalEnrollmentCount: 1, // 첫 등록
+      // ⚠️ 중요: pending 멤버인 경우 enrollments 생성 금지, pendingMembers만 업데이트
+      if (_isPendingEnrollment) {
+        // pending 멤버: pendingMembers의 courseEnrollments만 업데이트
+        final placeProvider = Provider.of<PlaceProvider>(
+          context,
+          listen: false,
+        );
+        final placeId = placeProvider.currentPlace?.id;
+        if (placeId == null) {
+          throw Exception('플레이스를 찾을 수 없습니다.');
+        }
+
+        final memberService = MemberService();
+        final success = await memberService.updatePendingCourseEnrollmentConfig(
+          placeId: placeId,
+          phoneNumber: widget.member.phoneNumber,
+          courseId: widget.course.id,
           totalReservations: totalReservations,
-          remainingReservations: totalReservations,
           validFrom: _reEnrollValidFrom,
           validUntil: _reEnrollValidUntil,
-          // 첫 번째 재등록 이력을 배열에 포함 (서브컬렉션에 저장됨)
-          reenrollmentHistory: [
-            ReenrollmentRecord(
-              enrollmentNumber: 1,
-              totalReservations: totalReservations,
-              enrolledAt: now,
-              validFrom: _reEnrollValidFrom,
-              validUntil: _reEnrollValidUntil,
-            ),
-          ],
         );
 
-        // ✅ Provider를 통해 재등록 처리 (화면을 나가도 진행 상태 유지)
-        final createdEnrollment = await enrollmentProvider.reenrollEnrollment(
-          enrollmentId: enrollmentId,
-          reenrollAction: () async {
-            final created = await enrollmentService.createEnrollment(
-              newEnrollment,
-            );
+        if (!success) {
+          throw Exception('pendingMembers 업데이트 실패');
+        }
 
-            if (created == null) {
-              throw Exception('enrollment 생성 실패');
-            }
+        // MemberProvider 새로고침
+        final memberProvider = Provider.of<MemberProvider>(
+          context,
+          listen: false,
+        );
+        await memberProvider.loadMembers(placeId);
 
-            // 관리자 액션 추가
+        // 완료 후 화면 닫기
+        if (mounted) {
+          SnackbarUtil.showSuccess(context, '대기 등록 정보가 업데이트되었습니다.');
+          Navigator.of(context).pop(true);
+        }
+        return; // pending 멤버 처리는 여기서 종료
+      }
+
+      if (widget.isNewEnrollment) {
+        // ⚠️ 중앙 로직: pending/일반 멤버 자동 분기 처리
+        final placeProvider = Provider.of<PlaceProvider>(
+          context,
+          listen: false,
+        );
+        final placeId = placeProvider.currentPlace?.id;
+        if (placeId == null) {
+          throw Exception('플레이스를 찾을 수 없습니다.');
+        }
+
+        final courseProvider = Provider.of<CourseProvider>(
+          context,
+          listen: false,
+        );
+
+        // courseEnrollments 데이터 준비
+        final courseEnrollments = [
+          {
+            'courseId': widget.course.id,
+            'totalReservations': totalReservations,
+            'validFrom': _reEnrollValidFrom.toIso8601String(),
+            'validUntil': _reEnrollValidUntil.toIso8601String(),
+          },
+        ];
+
+        // ⚠️ 공통 로직 사용: enrollMemberToCourseOrUpdatePending
+        final memberService = MemberService();
+        final success = await memberService.enrollMemberToCourseOrUpdatePending(
+          userId: widget.member.userId,
+          placeId: placeId,
+          phoneNumber: widget.member.phoneNumber,
+          courseEnrollments: courseEnrollments,
+          courses: courseProvider.courses,
+        );
+
+        if (!success) {
+          throw Exception('코스 등록에 실패했습니다.');
+        }
+
+        // 일반 멤버인 경우에만 관리자 액션 추가 (pending 멤버는 pendingMembers만 업데이트됨)
+        if (!_isPendingEnrollment &&
+            widget.member.userId.isNotEmpty &&
+            !widget.member.userId.startsWith('pending_')) {
+          final enrollmentId =
+              '${widget.member.userId}_${placeId}_${widget.course.id}';
+          try {
             await enrollmentService.addAdminAction(
-              enrollmentId: created.id,
+              enrollmentId: enrollmentId,
               action: AdminAction(
                 id: 'action_${DateTime.now().millisecondsSinceEpoch}',
                 actionType: AdminActionType.reenroll,
@@ -745,35 +927,24 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                 details: '재등록 처리 완료',
               ),
             );
-            return created;
-          },
-        );
-
-        if (createdEnrollment == null) {
-          throw Exception('enrollment 생성 실패');
+          } catch (e) {
+            // 관리자 액션 추가 실패는 무시 (등록은 성공했으므로)
+            debugPrint('⚠️ 관리자 액션 추가 실패 (무시): $e');
+          }
         }
 
-        // pendingMembers에서 해당 코스 제거
-        final placeProvider = Provider.of<PlaceProvider>(
+        // pendingMembers에서 해당 코스 제거 (일반 멤버가 pendingMembers에 있을 수 있음)
+        await memberService.removeCourseFromPendingMembers(
+          placeId: placeId,
+          phoneNumber: widget.member.phoneNumber,
+          courseId: widget.course.id,
+        );
+
+        final memberProvider = Provider.of<MemberProvider>(
           context,
           listen: false,
         );
-        final placeId = placeProvider.currentPlace?.id;
-        if (placeId != null) {
-          final memberService = MemberService();
-          await memberService.removeCourseFromPendingMembers(
-            placeId: placeId,
-            phoneNumber: widget.member.phoneNumber,
-            courseId: widget.course.id,
-          );
-        }
-        if (placeId != null) {
-          final memberProvider = Provider.of<MemberProvider>(
-            context,
-            listen: false,
-          );
-          await memberProvider.loadMembers(placeId);
-        }
+        await memberProvider.loadMembers(placeId);
 
         // 재등록 후에는 enrollment 상태가 크게 변경되므로 화면을 닫음
         if (mounted) {
@@ -796,8 +967,9 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           ),
         );
 
-        // ✅ 트랜잭션으로 원자적 저장 (enrollment 업데이트 + 재등록 이력 2개 + 관리자 액션)
-        final updatedEnrollment = widget.enrollment.copyWith(
+        // ⚠️ 엣지 케이스: 재등록 시 기존 연장 요청은 의미 없어짐
+        // pending 연장 요청을 자동으로 거부
+        CourseEnrollment updatedEnrollment = widget.enrollment.copyWith(
           totalEnrollmentCount: widget.enrollment.totalEnrollmentCount + 1,
           enrolledAt: now, // 재등록일로 업데이트
           totalReservations: totalReservations,
@@ -806,7 +978,24 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           validUntil: _reEnrollValidUntil,
         );
 
+        // 재등록 시 기존 연장 요청 자동 거부
+        final pendingRequest = widget.enrollment.hasPendingExtensionRequest
+            ? widget.enrollment.extensionRequest
+            : null;
+        ExtensionRequestUpdate? extensionRequestUpdate;
+        if (pendingRequest != null) {
+          updatedEnrollment = updatedEnrollment.rejectExtension(
+            '재등록으로 인해 연장 요청이 자동으로 거부되었습니다.',
+          );
+          extensionRequestUpdate = ExtensionRequestUpdate(
+            requestId: pendingRequest.id,
+            status: ExtensionRequestStatus.rejected,
+            rejectionReason: '재등록으로 인해 연장 요청이 자동으로 거부되었습니다.',
+          );
+        }
+
         // ✅ Provider를 통해 재등록 처리 (화면을 나가도 진행 상태 유지)
+        // ⚠️ 중요: reenrollWithHistory 트랜잭션 내에서 연장 요청 상태도 함께 업데이트 (원자적 처리)
         await enrollmentProvider.reenrollEnrollment(
           enrollmentId: enrollmentId,
           reenrollAction: () async {
@@ -833,6 +1022,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                 performedBy: 'admin', // TODO: 실제 admin ID로 변경
                 details: '재등록 처리 완료',
               ),
+              extensionRequestUpdate: extensionRequestUpdate,
             );
           },
         );
@@ -894,21 +1084,45 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
     });
 
     try {
+      // ⚠️ pending 멤버 체크 및 디버그 로그
+      final isPending = _isPendingEnrollment;
+      debugPrint(
+        '[EnrollmentDetailScreen] _cancelEnrollment: isPending=$isPending',
+      );
+      debugPrint(
+        '[EnrollmentDetailScreen] enrollment.userId=${widget.enrollment.userId}',
+      );
+      debugPrint(
+        '[EnrollmentDetailScreen] enrollment.id=${widget.enrollment.id}',
+      );
+      debugPrint(
+        '[EnrollmentDetailScreen] isNewEnrollment=${widget.isNewEnrollment}',
+      );
+
       // pending 멤버(등록 전)면 Firestore enrollments 업데이트 없이 pendingMembers에서만 제거
-      if (_isPendingEnrollment) {
+      if (isPending) {
+        debugPrint('[EnrollmentDetailScreen] pending 멤버 취소 처리 시작');
         final placeProvider = Provider.of<PlaceProvider>(
           context,
           listen: false,
         );
         final placeId = placeProvider.currentPlace?.id;
         if (placeId != null) {
+          debugPrint(
+            '[EnrollmentDetailScreen] removeCourseFromPendingMembers 호출: placeId=$placeId, phoneNumber=${widget.member.phoneNumber}, courseId=${widget.course.id}',
+          );
           final memberService = MemberService();
-          await memberService.removeCourseFromPendingMembers(
+          final success = await memberService.removeCourseFromPendingMembers(
             placeId: placeId,
             phoneNumber: widget.member.phoneNumber,
             courseId: widget.course.id,
             keepPendingMember: true, // pending일 때는 코스만 제거하고 멤버는 유지
           );
+          debugPrint(
+            '[EnrollmentDetailScreen] removeCourseFromPendingMembers 결과: success=$success',
+          );
+        } else {
+          debugPrint('[EnrollmentDetailScreen] placeId가 null입니다.');
         }
         if (mounted) {
           SnackbarUtil.showSuccess(context, '수강 리스트에서 제외했습니다.');
@@ -916,6 +1130,8 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         }
         return;
       }
+
+      debugPrint('[EnrollmentDetailScreen] 일반 멤버 취소 처리 시작');
 
       final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
       final placeId = placeProvider.currentPlace?.id;
@@ -1039,7 +1255,11 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 child: DefaultTapbar(
-                  labels: const ['횟수 조정', '기간 연장', '재등록/취소'],
+                  labels:
+                      (widget.enrollment.remainingReservations > 0 ||
+                          widget.enrollment.hasPendingExtensionRequest)
+                      ? const ['횟수 조정', '기간 연장', '재등록/취소']
+                      : const ['횟수 조정', '재등록/취소'],
                   selectedIndex: _tabController.index,
                   onTabChanged: (index) {
                     _tabController.animateTo(index);
@@ -1109,6 +1329,26 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                         children: [
                           SizedBox(height: 10),
                           _buildInfoRow(
+                            '남은 예약 횟수',
+                            '${widget.enrollment.remainingReservations}회',
+                          ),
+                          _buildDivider(),
+                          _buildInfoRow(
+                            '현재 유효기간',
+                            TimezoneUtils.formatDateToSeoul(
+                              widget.enrollment.validUntil,
+                            ),
+                          ),
+                          _buildDivider(),
+                          _buildInfoRow(
+                            '최근 등록일',
+                            TimezoneUtils.formatDateToSeoul(
+                              widget.enrollment.enrolledAt,
+                            ),
+                          ),
+
+                          _buildDivider(),
+                          _buildInfoRow(
                             '최초 등록일',
                             widget.enrollment.firstEnrolledAt != null
                                 ? TimezoneUtils.formatDateToSeoul(
@@ -1119,32 +1359,12 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                                   ),
                           ),
                           _buildDivider(),
-                          _buildInfoRow(
-                            '최근 등록일',
-                            TimezoneUtils.formatDateToSeoul(
-                              widget.enrollment.enrolledAt,
-                            ),
-                          ),
-                          _buildDivider(),
+
                           _buildInfoRow(
                             '총 등록 횟수',
                             '${widget.enrollment.totalEnrollmentCount}회',
                           ),
-                          _buildDivider(),
-                          _buildInfoRow(
-                            '현재 유효기간',
-                            '${TimezoneUtils.formatDateToSeoul(widget.enrollment.validFrom)} ~ ${TimezoneUtils.formatDateToSeoul(widget.enrollment.validUntil)}',
-                          ),
-                          _buildDivider(),
-                          _buildInfoRow(
-                            '총 예약 횟수',
-                            '${widget.enrollment.totalReservations}회',
-                          ),
-                          _buildDivider(),
-                          _buildInfoRow(
-                            '남은 예약 횟수',
-                            '${widget.enrollment.remainingReservations}회',
-                          ),
+
                           if (widget.enrollment.memo != null &&
                               widget.enrollment.memo!.isNotEmpty) ...[
                             _buildDivider(),
@@ -1179,15 +1399,35 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
 
   // 현재 선택된 탭 내용 표시
   Widget _buildCurrentTabContent(int index) {
-    switch (index) {
-      case 0:
-        return _buildRemainingReservationsTabContent();
-      case 1:
-        return _buildPeriodExtensionTabContent();
-      case 2:
-        return _buildReEnrollCancelTabContent();
-      default:
-        return _buildRemainingReservationsTabContent();
+    // 남은 횟수가 0이면 기간 연장 탭 제외
+    // 단, 연장 요청이 있으면 기간 연장 탭을 표시 (연장 요청 처리 가능하도록)
+    final hasRemainingReservations =
+        widget.enrollment.remainingReservations > 0;
+    final hasPendingExtensionRequest =
+        widget.enrollment.hasPendingExtensionRequest;
+
+    if (hasRemainingReservations || hasPendingExtensionRequest) {
+      // 기간 연장 탭 포함 (3개 탭)
+      switch (index) {
+        case 0:
+          return _buildRemainingReservationsTabContent();
+        case 1:
+          return _buildPeriodExtensionTabContent();
+        case 2:
+          return _buildReEnrollCancelTabContent();
+        default:
+          return _buildRemainingReservationsTabContent();
+      }
+    } else {
+      // 기간 연장 탭 제외 (2개 탭)
+      switch (index) {
+        case 0:
+          return _buildRemainingReservationsTabContent();
+        case 1:
+          return _buildReEnrollCancelTabContent();
+        default:
+          return _buildRemainingReservationsTabContent();
+      }
     }
   }
 
@@ -1308,6 +1548,10 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
 
   // 탭 2: 기간 연장 내용
   Widget _buildPeriodExtensionTabContent() {
+    final hasPendingExtensionRequest =
+        widget.enrollment.hasPendingExtensionRequest;
+    final extensionRequest = widget.enrollment.extensionRequest;
+
     return Padding(
       padding: const EdgeInsets.all(12),
       child: Container(
@@ -1319,14 +1563,60 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              '유효기간 연장',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-                color: AppColors.textPrimary,
+            Padding(
+              padding: const EdgeInsets.only(left: 2),
+              child: Text(
+                '유효기간 연장',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
               ),
             ),
+            // 연장 요청이 있을 때 알림 표시
+            if (hasPendingExtensionRequest && extensionRequest != null) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.textLight.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '연장 요청이 있습니다',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.primaryGreen,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            extensionRequest.reason,
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: AppColors.textSecondary,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 24),
             Row(
               children: [
@@ -1903,7 +2193,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
               },
             ),
             const SizedBox(height: 32),
-            // 재등록 저장 버튼 (바깥에 padding 4)
+            // 재등록 버튼
             Padding(
               padding: const EdgeInsets.all(4),
               child: SizedBox(
@@ -1943,7 +2233,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                           ),
                         )
                       : Text(
-                          '재등록 처리',
+                          '재등록',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
@@ -2154,7 +2444,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
             Text(
               '히스토리',
               style: TextStyle(
-                fontSize: 16,
+                fontSize: 18,
                 fontWeight: FontWeight.bold,
                 color: AppColors.textPrimary,
               ),
@@ -2197,7 +2487,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
               ],
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 22),
         ],
         // 타임라인 아이템들
         _buildTimelineContainer(displayItems, hasMore),
@@ -2234,16 +2524,12 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
           color: isSelected
               ? AppColors.primaryGreen
-              : AppColors.backgroundLight,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isSelected ? AppColors.primaryGreen : AppColors.borderLight,
-            width: 1,
-          ),
+              : const Color.fromARGB(255, 238, 238, 238),
+          borderRadius: BorderRadius.circular(16),
         ),
         child: Text(
           label,
@@ -2390,7 +2676,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                     ? '${record.enrollmentNumber}차 등록 취소'
                     : '${record.enrollmentNumber}차 등록',
                 style: TextStyle(
-                  fontSize: 14,
+                  fontSize: 16,
                   fontWeight: FontWeight.w600,
                   color: AppColors.textPrimary,
                 ),
@@ -2452,7 +2738,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           Text(
             _getActionTypeLabel(action.actionType),
             style: TextStyle(
-              fontSize: 14,
+              fontSize: 16,
               fontWeight: FontWeight.w600,
               color: AppColors.textPrimary,
             ),
@@ -2491,7 +2777,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
               Text(
                 '연장 요청',
                 style: TextStyle(
-                  fontSize: 14,
+                  fontSize: 16,
                   fontWeight: FontWeight.w600,
                   color: AppColors.textPrimary,
                 ),

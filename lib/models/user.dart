@@ -7,7 +7,8 @@ class User {
   final String userId;
   final String name;
   final String phoneNumber; // 필수
-  final List<String> placeIds; // 속한 플레이스들 (학원)
+  @Deprecated('users.placeIds는 더 이상 사용하지 않습니다. placeMemberships 기반으로 조회하세요.')
+  final List<String> placeIds; // (레거시) 속한 플레이스들
   final List<String> adminForPlaces; // 관리자로 관리하는 플레이스들 (새 필드)
   final List<CourseEnrollment> enrollments; // 등록한 코스들
   final List<Reservation> reservations; // 예약 기록
@@ -186,7 +187,7 @@ class User {
       'userId': userId,
       'name': name,
       'phoneNumber': phoneNumber,
-      'placeIds': placeIds,
+      // users.placeIds는 더 이상 Firestore에 저장하지 않음 (placeMemberships 기반)
       'adminForPlaces': adminForPlaces, // 새 필드 추가
       // enrollments 필드 제거: enrollments 컬렉션에서 직접 조회
       'reservations': reservations.map((r) => r.toJson()).toList(),

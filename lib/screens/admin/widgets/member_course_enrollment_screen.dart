@@ -3,7 +3,8 @@ import 'package:provider/provider.dart';
 import '../../../providers/course_provider.dart';
 import '../../../providers/member_provider.dart';
 import '../../../providers/place_provider.dart';
-import '../../../services/enrollment_service.dart';
+import '../../../providers/auth_provider.dart';
+import '../../../services/member_service.dart';
 import '../../../theme/app_colors.dart';
 import '../../../utils/timezone_utils.dart';
 import '../../../utils/snackbar_util.dart';
@@ -177,7 +178,6 @@ class _MemberCourseEnrollmentScreenState
         return;
       }
 
-      final enrollmentService = EnrollmentService();
       final courseProvider = Provider.of<CourseProvider>(
         context,
         listen: false,
@@ -203,16 +203,22 @@ class _MemberCourseEnrollmentScreenState
           .cast<Map<String, dynamic>>()
           .toList();
 
-      // EnrollmentService를 사용하여 일괄 등록
-      final success = await enrollmentService.enrollMemberToCourses(
+      // ⚠️ 중앙 로직: pending/일반 멤버 자동 분기 처리
+      final memberService = MemberService();
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      final adminId = authProvider.currentAdmin?.userId;
+
+      final success = await memberService.enrollMemberToCourseOrUpdatePending(
         userId: widget.member.userId,
         placeId: placeId,
+        phoneNumber: widget.member.phoneNumber,
         courseEnrollments: courseEnrollments,
         courses: courseProvider.courses,
+        adminId: adminId,
       );
 
       if (!success) {
-        throw Exception('일부 코스 등록에 실패했습니다.');
+        throw Exception('코스 등록에 실패했습니다.');
       }
 
       // MemberProvider 새로고침
@@ -231,7 +237,17 @@ class _MemberCourseEnrollmentScreenState
       }
     } catch (e) {
       if (mounted) {
-        SnackbarUtil.showError(context, '코스 등록 중 오류가 발생했습니다: ${e.toString()}');
+        // 에러 메시지를 클라이언트 친화적으로 변환
+        String errorMessage = '코스 등록 중 오류가 발생했습니다.';
+        final errorStr = e.toString();
+        if (errorStr.contains('이미 등록되어 있습니다') || errorStr.contains('이미 등록된')) {
+          errorMessage = '이미 등록되어 있습니다.';
+        } else if (errorStr.contains('코스 등록에 실패')) {
+          errorMessage = '코스 등록에 실패했습니다.';
+        } else {
+          errorMessage = '코스 등록 중 오류가 발생했습니다.';
+        }
+        SnackbarUtil.showError(context, errorMessage);
       }
     } finally {
       if (mounted) {

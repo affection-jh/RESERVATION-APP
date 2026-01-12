@@ -242,7 +242,7 @@ class _UserReservationManageBottomSheetState
                             ],
                           ),
                         ),
-                        const SizedBox(height: 30),
+                        const SizedBox(height: 24),
 
                         // 남은 자리 섹션 (실시간 업데이트)
                         Padding(
@@ -305,7 +305,7 @@ class _UserReservationManageBottomSheetState
                                   letterSpacing: -1,
                                 ),
                               ),
-                              const SizedBox(height: 52),
+                              const SizedBox(height: 42),
                             ],
                           ),
                         ),
@@ -317,7 +317,7 @@ class _UserReservationManageBottomSheetState
                             child: ElevatedButton(
                               onPressed: _isSubmitting
                                   ? null
-                                  : _showCancelDialog,
+                                  : _cancelReservation,
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: AppColors.textPrimary
                                     .withOpacity(0.1),
@@ -330,25 +330,13 @@ class _UserReservationManageBottomSheetState
                                 ),
                                 elevation: 0,
                               ),
-                              child: _isSubmitting
-                                  ? const SizedBox(
-                                      width: 18,
-                                      height: 18,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        valueColor:
-                                            AlwaysStoppedAnimation<Color>(
-                                              AppColors.primaryGreen,
-                                            ),
-                                      ),
-                                    )
-                                  : const Text(
-                                      '예약 취소',
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                    ),
+                              child: const Text(
+                                '예약 취소',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
                             ),
                           )
                         else
@@ -530,127 +518,34 @@ class _UserReservationManageBottomSheetState
     }
   }
 
-  void _showCancelDialog() {
-    debugPrint('[UserReservationManageBottomSheet] _showCancelDialog open');
-    // 바텀시트 먼저 닫기
-    Navigator.of(context).pop();
+  Future<void> _cancelReservation() async {
+    final reservation = widget.reservation;
+    if (reservation == null) return;
 
-    // 다이얼로그 띄우기
-    CommonDialog.show(
+    final confirmed = await CommonDialog.show(
       context: context,
       title: '예약 취소',
       message: '예약을 취소하시겠습니까?',
       cancelText: '취소',
       confirmText: '예약 취소',
       confirmButtonColor: Colors.red,
-      onCancel: () {
-        // 취소 시 바텀시트 다시 열기 (롤백)
-        if (mounted) {
-          UserReservationManageBottomSheet.show(
-            context: context,
-            course: widget.course,
-            session: widget.session,
-            date: widget.date,
-            reservation: widget.reservation,
-            onReservationCancelled: widget.onReservationCancelled,
-            onReservationCreated: widget.onReservationCreated,
-          );
-        }
-      },
-      onConfirm: () async {
-        debugPrint('[UserReservationManageBottomSheet] cancel confirm pressed');
-        // ⚠️ CommonDialog 내부에서 이미 다이얼로그는 닫힘.
-        // 여기서 Navigator.pop(context)를 호출하면 바텀시트까지 닫혀버릴 수 있음.
-        final reservation = widget.reservation;
-        if (reservation == null) {
-          debugPrint(
-            '[UserReservationManageBottomSheet] cancel abort: widget.reservation is null',
-          );
-          return;
-        }
-
-        // 바텀시트를 닫은 후 context 사용을 위해 rootContext 저장
-        final rootContext = navigatorKey.currentContext ?? context;
-
-        try {
-          debugPrint('[UserReservationManageBottomSheet] cancel submit start');
-          debugPrint(
-            '[UserReservationManageBottomSheet] cancel target reservationId=${reservation.id} userId=${reservation.userId} placeId=${reservation.placeId} courseId=${reservation.courseId}',
-          );
-          debugPrint(
-            '[UserReservationManageBottomSheet] cancel target date=${reservation.reservedDate} dayOfWeek=${reservation.dayOfWeek} startTime=${reservation.startTime}',
-          );
-
-          // 예약 취소 진행 중 로딩 다이얼로그
-          showDialog(
-            context: rootContext,
-            barrierDismissible: false,
-            builder: (_) {
-              return WillPopScope(
-                onWillPop: () async => false,
-                child: const Center(
-                  child: CircularProgressIndicator(
-                    color: AppColors.primaryGreen,
-                  ),
-                ),
-              );
-            },
-          );
-
-          await Provider.of<ReservationProvider>(
-            context,
-            listen: false,
-          ).cancelReservation(reservation);
-          debugPrint(
-            '[UserReservationManageBottomSheet] ReservationProvider.deleteReservation success',
-          );
-
-          // 로딩 다이얼로그 닫기
-          if (rootContext.mounted) {
-            Navigator.of(rootContext, rootNavigator: true).pop();
-          }
-
-          // 바텀시트는 이미 닫혔으므로 다시 열지 않음
-          widget.onReservationCancelled?.call();
-          if (mounted) {
-            SnackbarUtil.showSuccess(context, '예약이 취소되었습니다.');
-          } else {
-            // 바텀시트가 닫힌 상태여도 사용자에게 피드백은 필요함 (전역 context 사용)
-            final ctx = navigatorKey.currentContext;
-            if (ctx != null) {
-              SnackbarUtil.showSuccess(ctx, '예약이 취소되었습니다.');
-            }
-          }
-          debugPrint(
-            '[UserReservationManageBottomSheet] cancel flow done -> bottom sheet closed',
-          );
-        } catch (e) {
-          debugPrint(
-            '[UserReservationManageBottomSheet] cancel flow failed: $e',
-          );
-
-          // 로딩 다이얼로그가 떠있으면 닫기
-          if (rootContext.mounted) {
-            try {
-              Navigator.of(rootContext, rootNavigator: true).pop();
-            } catch (_) {}
-          }
-
-          if (!mounted) return;
-          SnackbarUtil.showError(context, '예약 취소 중 오류가 발생했습니다: $e');
-          // 에러 발생 시 바텀시트 다시 열기
-          UserReservationManageBottomSheet.show(
-            context: context,
-            course: widget.course,
-            session: widget.session,
-            date: widget.date,
-            reservation: widget.reservation,
-            onReservationCancelled: widget.onReservationCancelled,
-            onReservationCreated: widget.onReservationCreated,
-          );
-          debugPrint('[UserReservationManageBottomSheet] cancel submit end');
-        }
-      },
     );
+    if (confirmed != true) return;
+
+    final rp = Provider.of<ReservationProvider>(context, listen: false);
+
+    // ✅ 바텀시트를 닫아도 Provider(in-flight) 기반으로 백그라운드에서 계속 처리됨
+    Navigator.of(context).pop();
+
+    try {
+      await rp.cancelReservation(reservation);
+      widget.onReservationCancelled?.call();
+      // 성공 피드백은 CalendarScreen/MyPageScreen의 operationEvents에서 처리됨
+    } catch (e) {
+      final ctx = navigatorKey.currentContext;
+      if (ctx != null) {
+        SnackbarUtil.showError(ctx, '예약 취소 중 오류가 발생했습니다: $e');
+      }
+    }
   }
 }

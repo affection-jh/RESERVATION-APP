@@ -8,7 +8,11 @@ import '../../../models/pending_member.dart';
 import '../../../models/user.dart';
 import '../../../providers/course_provider.dart';
 import '../../../providers/member_provider.dart';
+import '../../../providers/place_provider.dart';
 import '../../../services/firestore_service.dart';
+import '../../../services/member_service.dart';
+import '../../../utils/snackbar_util.dart';
+import '../../../utils/member_utils.dart';
 import '../../../theme/app_colors.dart';
 import '../../../utils/text_field_decoration_util.dart';
 import '../../../utils/timezone_utils.dart';
@@ -98,6 +102,7 @@ class _CourseMemberRegistrationScreenState
   // 선택된 멤버 (기존 멤버에서 추가 모드)
   String? _selectedMemberName;
   String? _selectedMemberPhone;
+  String? _selectedMemberUserId; // ⚠️ 중요: pending 멤버 구분용
 
   // 현재 추가할 멤버의 설정
   CourseEnrollmentConfig? _currentConfig;
@@ -314,6 +319,10 @@ class _CourseMemberRegistrationScreenState
       _mode = index == 0
           ? CourseMemberRegistrationMode.inputNew
           : CourseMemberRegistrationMode.selectExisting;
+      // 탭 변경 시 선택된 멤버 초기화
+      _selectedMemberName = null;
+      _selectedMemberPhone = null;
+      _selectedMemberUserId = null;
     });
   }
 
@@ -332,44 +341,48 @@ class _CourseMemberRegistrationScreenState
 
     if (_isSaving) return;
 
-    // 기존 멤버 중복 체크 (동기적으로 먼저 체크)
+    // ⚠️ 중요: 기존 멤버에서 추가하는 경우와 신규 입력하는 경우 구분
+    final isExistingMemberAdd = _selectedMemberUserId != null;
     final memberProvider = Provider.of<MemberProvider>(context, listen: false);
 
-    // 동기 체크: memberProvider.members에서 즉시 확인
-    bool isExistingMemberSync = false;
-    for (final member in memberProvider.members) {
-      if (_normalizePhone(member.phoneNumber) == normalizedPhone) {
-        isExistingMemberSync = true;
-        break;
+    if (!isExistingMemberAdd) {
+      // 신규 입력 모드: 중복 체크 필요
+      // 동기 체크: memberProvider.members에서 즉시 확인
+      bool isExistingMemberSync = false;
+      for (final member in memberProvider.members) {
+        if (_normalizePhone(member.phoneNumber) == normalizedPhone) {
+          isExistingMemberSync = true;
+          break;
+        }
       }
-    }
 
-    if (isExistingMemberSync) {
+      if (isExistingMemberSync) {
+        setState(() {
+          _phoneErrorText = '이미 등록된 멤버입니다. 기존 멤버에서 추가해주세요.';
+          _isExistingMember = true; // 기존 멤버 플래그 설정 (신규 추가 완전 차단)
+        });
+        return;
+      }
+
+      // 비동기 체크: pendingMembers도 확인
       setState(() {
-        _phoneErrorText = '이미 등록된 멤버입니다. 기존 멤버에서 추가해주세요.';
-        _isExistingMember = true; // 기존 멤버 플래그 설정 (신규 추가 완전 차단)
+        _isCheckingPhone = true;
+        _phoneErrorText = null;
+        _isExistingMember = false;
       });
-      return;
-    }
 
-    // 비동기 체크: pendingMembers도 확인
-    setState(() {
-      _isCheckingPhone = true;
-      _phoneErrorText = null;
-      _isExistingMember = false;
-    });
+      final isDuplicate = await _isPhoneDuplicateInFirebase(trimmedPhone);
 
-    final isDuplicate = await _isPhoneDuplicateInFirebase(trimmedPhone);
+      if (!mounted) return;
 
-    if (!mounted) return;
-
-    if (isDuplicate) {
-      setState(() {
-        _phoneErrorText = '이미 등록된 멤버입니다. 기존 멤버에서 추가해주세요.';
-        _isCheckingPhone = false;
-        _isExistingMember = true; // 기존 멤버 플래그 설정 (신규 추가 완전 차단)
-      });
-      return;
+      if (isDuplicate) {
+        setState(() {
+          _phoneErrorText = '이미 등록된 멤버입니다. 기존 멤버에서 추가해주세요.';
+          _isCheckingPhone = false;
+          _isExistingMember = true; // 기존 멤버 플래그 설정 (신규 추가 완전 차단)
+        });
+        return;
+      }
     }
 
     setState(() {
@@ -379,26 +392,88 @@ class _CourseMemberRegistrationScreenState
     });
 
     try {
-      final payload = [
-        {
-          'name': trimmedName,
-          'phoneNumber': trimmedPhone,
-          'courseEnrollments': [
-            {
-              'courseId': widget.courseId,
-              'totalReservations': _currentConfig!.totalReservations,
-              'validFrom': _currentConfig!.validFrom.toIso8601String(),
-              'validUntil': _currentConfig!.validUntil.toIso8601String(),
-            },
-          ],
-        },
-      ];
+      // ⚠️ 중요: 기존 멤버에서 추가하는 경우와 신규 입력하는 경우 구분
+      final isExistingMemberAdd = _selectedMemberUserId != null;
 
-      await widget.onSave(payload);
+      if (isExistingMemberAdd) {
+        // 기존 멤버에 코스 추가 (중앙 로직 사용)
+        final placeProvider = Provider.of<PlaceProvider>(
+          context,
+          listen: false,
+        );
+        final placeId = placeProvider.currentPlace?.id ?? widget.placeId;
+        final courseProvider = Provider.of<CourseProvider>(
+          context,
+          listen: false,
+        );
 
-      // 저장 성공 후 화면 닫기
+        final courseEnrollments = [
+          {
+            'courseId': widget.courseId,
+            'totalReservations': _currentConfig!.totalReservations,
+            'validFrom': _currentConfig!.validFrom.toIso8601String(),
+            'validUntil': _currentConfig!.validUntil.toIso8601String(),
+          },
+        ];
+
+        // ⚠️ 중앙 로직: pending/일반 멤버 자동 분기 처리
+        final memberService = MemberService();
+        final success = await memberService.enrollMemberToCourseOrUpdatePending(
+          userId: _selectedMemberUserId!,
+          placeId: placeId,
+          phoneNumber: trimmedPhone,
+          courseEnrollments: courseEnrollments,
+          courses: courseProvider.courses,
+        );
+
+        if (!success) {
+          throw Exception('코스 등록에 실패했습니다.');
+        }
+
+        // MemberProvider 새로고침
+        await memberProvider.loadMembers(placeId);
+
+        if (mounted) {
+          SnackbarUtil.showSuccess(context, '추가되었습니다.');
+          Navigator.of(context).pop();
+        }
+      } else {
+        // 신규 멤버 등록 (기존 로직)
+        final payload = [
+          {
+            'name': trimmedName,
+            'phoneNumber': trimmedPhone,
+            'courseEnrollments': [
+              {
+                'courseId': widget.courseId,
+                'totalReservations': _currentConfig!.totalReservations,
+                'validFrom': _currentConfig!.validFrom.toIso8601String(),
+                'validUntil': _currentConfig!.validUntil.toIso8601String(),
+              },
+            ],
+          },
+        ];
+
+        await widget.onSave(payload);
+
+        // 저장 성공 후 화면 닫기
+        if (mounted) {
+          Navigator.of(context).pop();
+        }
+      }
+    } catch (e) {
       if (mounted) {
-        Navigator.of(context).pop();
+        // 에러 메시지를 클라이언트 친화적으로 변환
+        String errorMessage = '코스 등록 중 오류가 발생했습니다.';
+        final errorStr = e.toString();
+        if (errorStr.contains('이미 등록되어 있습니다') || errorStr.contains('이미 등록된')) {
+          errorMessage = '이미 등록되어 있습니다.';
+        } else if (errorStr.contains('코스 등록에 실패')) {
+          errorMessage = '코스 등록에 실패했습니다.';
+        } else {
+          errorMessage = '코스 등록 중 오류가 발생했습니다.';
+        }
+        SnackbarUtil.showError(context, errorMessage);
       }
     } finally {
       if (mounted) {
@@ -691,6 +766,7 @@ class _CourseMemberRegistrationScreenState
                       // 탭 변경 시 선택된 멤버 초기화
                       _selectedMemberName = null;
                       _selectedMemberPhone = null;
+                      _selectedMemberUserId = null;
                       _currentConfig = null;
                     });
                     _initializeCurrentConfig();
@@ -771,7 +847,8 @@ class _CourseMemberRegistrationScreenState
                           final now = TimezoneUtils.getSeoulDateTime();
                           final pendingAsUsers = memberProvider.pendingMembers
                               .map((PendingMember pm) {
-                                final courseIds = pm.courseIds ?? [];
+                                // ⚠️ courseIds 제거: courseEnrollments에서 유도
+                                final courseIds = pm.derivedCourseIds;
                                 final enrollments = courseIds.map((courseId) {
                                   return CourseEnrollment(
                                     id: 'pending_${pm.id}_$courseId',
@@ -872,13 +949,16 @@ class _CourseMemberRegistrationScreenState
                                 (u) => _buildExistingRow(
                                   name: u.name,
                                   phone: u.phoneNumber,
-                                  statusLabel: u.userId.startsWith('pending_')
+                                  statusLabel:
+                                      MemberUtils.isPendingMember(u.userId)
                                       ? '대기'
                                       : null,
                                   onTap: () {
                                     setState(() {
                                       _selectedMemberName = u.name;
                                       _selectedMemberPhone = u.phoneNumber;
+                                      _selectedMemberUserId =
+                                          u.userId; // ⚠️ 중요: userId 저장
                                     });
                                     // 설정 초기화
                                     _initializeCurrentConfig();

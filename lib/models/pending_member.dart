@@ -11,8 +11,21 @@ class PendingMember {
   final String createdBy; // 관리자 ID
   final DateTime createdAt;
   final bool autoApprove; // 자동 승인 여부
-  final List<String>? courseIds; // 초대된 코스 ID 목록
+  final List<String>?
+  courseIds; // 초대된 코스 ID 목록 (deprecated: courseEnrollments에서 유도)
   final List<Map<String, dynamic>>? courseEnrollments; // 코스별 등록 정보
+
+  /// courseEnrollments에서 courseIds를 추출 (courseIds 필드가 없거나 비어있을 때 사용)
+  List<String> get derivedCourseIds {
+    if (courseEnrollments == null || courseEnrollments!.isEmpty) {
+      return courseIds ?? [];
+    }
+    return courseEnrollments!
+        .map((e) => e['courseId']?.toString())
+        .whereType<String>()
+        .where((e) => e.isNotEmpty)
+        .toList();
+  }
 
   PendingMember({
     required this.id,
@@ -68,26 +81,27 @@ class PendingMember {
 
   /// JSON에서 생성
   factory PendingMember.fromJson(Map<String, dynamic> json) {
-    final courseIdsData = json['courseIds'];
-    final courseIds = courseIdsData != null
-        ? (courseIdsData as List<dynamic>).map((e) => e.toString()).toList()
-        : null;
-
     // courseEnrollments 필드 처리
     final courseEnrollmentsData = json['courseEnrollments'];
     List<Map<String, dynamic>>? courseEnrollments;
     if (courseEnrollmentsData != null) {
       if (courseEnrollmentsData is List) {
         courseEnrollments = courseEnrollmentsData
-            .map((e) => e as Map<String, dynamic>)
+            .map((e) => Map<String, dynamic>.from(e as Map))
             .toList();
       } else if (courseEnrollmentsData is Map) {
         // Map 형태로 저장된 경우 (인덱스가 키인 경우) List로 변환
         courseEnrollments = courseEnrollmentsData.values
-            .map((e) => e as Map<String, dynamic>)
+            .map((e) => Map<String, dynamic>.from(e as Map))
             .toList();
       }
     }
+
+    // courseIds 처리
+    final courseIdsData = json['courseIds'];
+    final courseIds = courseIdsData != null
+        ? (courseIdsData as List<dynamic>).map((e) => e.toString()).toList()
+        : null;
 
     // createdAt 필드 처리 (Timestamp 또는 String)
     DateTime createdAt;
@@ -101,11 +115,11 @@ class PendingMember {
     }
 
     return PendingMember(
-      id: json['id'] as String,
-      placeId: json['placeId'] as String,
-      phoneNumber: json['phoneNumber'] as String,
+      id: json['id'] as String? ?? '',
+      placeId: json['placeId'] as String? ?? '',
+      phoneNumber: json['phoneNumber'] as String? ?? '',
       name: json['name'] as String?,
-      createdBy: json['createdBy'] as String,
+      createdBy: json['createdBy'] as String? ?? '',
       createdAt: createdAt,
       autoApprove: json['autoApprove'] as bool? ?? true,
       courseIds: courseIds,

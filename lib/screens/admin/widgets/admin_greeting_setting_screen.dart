@@ -7,9 +7,16 @@ import 'dart:io';
 import '../../../theme/app_colors.dart';
 
 import '../../../widgets/cached_image_widget.dart';
-import '../../../screens/admin_screen.dart';
 import '../../../providers/place_provider.dart';
 import '../../../providers/auth_provider.dart';
+import '../../../providers/admin_provider.dart';
+import '../../../providers/course_provider.dart';
+import '../../../providers/enrollment_provider.dart';
+import '../../../providers/member_provider.dart';
+import '../../../providers/notification_provider.dart';
+import '../../../providers/reservation_provider.dart';
+import '../../../providers/story_provider.dart';
+import '../../../services/auth_service.dart';
 import '../../../services/storage_service.dart';
 import '../../../utils/snackbar_util.dart';
 
@@ -38,6 +45,41 @@ class _AdminGreetingSettingScreenState
     text: '',
   );
   final FocusNode _greetingFocusNode = FocusNode();
+  bool _isSubmitting = false;
+
+  Future<void> _resetAllProvidersForSwitch(BuildContext context) async {
+    // PlaceSwitchWidget의 전환 플로우와 동일하게 "스플래시 기반 리로드"를 위해
+    // place 의존 Provider들을 모두 비운다.
+    final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+    final courseProvider = Provider.of<CourseProvider>(context, listen: false);
+    final reservationProvider = Provider.of<ReservationProvider>(
+      context,
+      listen: false,
+    );
+    final enrollmentProvider = Provider.of<EnrollmentProvider>(
+      context,
+      listen: false,
+    );
+    final memberProvider = Provider.of<MemberProvider>(context, listen: false);
+    final storyProvider = Provider.of<StoryProvider>(context, listen: false);
+    final notificationProvider = Provider.of<NotificationProvider>(
+      context,
+      listen: false,
+    );
+    final adminProvider = Provider.of<AdminProvider>(context, listen: false);
+
+    // 현재 플레이스 제거
+    placeProvider.clearPlace();
+
+    // 모든 데이터/구독 초기화
+    courseProvider.clear();
+    storyProvider.clear();
+    notificationProvider.clear();
+    adminProvider.clearAdmin();
+    await memberProvider.clear();
+    await reservationProvider.clear();
+    await enrollmentProvider.clear();
+  }
 
   @override
   void initState() {
@@ -427,9 +469,11 @@ class _AdminGreetingSettingScreenState
           child: FilledButton(
             onPressed: _isFormValid()
                 ? () async {
+                    if (_isSubmitting) return;
                     _removeFocus();
 
                     try {
+                      setState(() => _isSubmitting = true);
                       final authProvider = Provider.of<AuthProvider>(
                         context,
                         listen: false,
@@ -445,15 +489,6 @@ class _AdminGreetingSettingScreenState
                       }
 
                       final admin = authProvider.currentAdmin!;
-
-                      // 베타 버전 제약: 이미 플레이스가 있으면 등록 불가
-                      if (admin.placeIds.isNotEmpty) {
-                        SnackbarUtil.showError(
-                          context,
-                          '베타 버전에서는 전화번호 하나당 플레이스 하나만 등록할 수 있습니다.',
-                        );
-                        return;
-                      }
 
                       // 이미지 URL 처리 (이미 업로드된 경우 URL 사용, 아니면 업로드)
                       String? imageUrl = widget.placeImageUrl;
@@ -493,15 +528,25 @@ class _AdminGreetingSettingScreenState
                       // AuthProvider 업데이트
                       authProvider.setCurrentAdmin(updatedAdmin);
 
-                      // 관리자 홈 화면으로 이동 (모든 이전 화면 제거)
-                      if (mounted) {
-                        Navigator.of(context).pushAndRemoveUntil(
-                          MaterialPageRoute(
-                            builder: (context) => const AdminScreen(),
-                          ),
-                          (route) => false,
-                        );
-                      }
+                      // ✅ 플레이스 전환과 동일한 플로우:
+                      // - 모든 place 의존 Provider 초기화
+                      // - 새 place를 미리 주입
+                      // - 마지막 접속 플레이스 저장
+                      // - 스플래시(AppStartup)로 스택 리셋 → 로딩 → 홈 진입
+                      if (!mounted) return;
+                      await _resetAllProvidersForSwitch(context);
+                      if (!mounted) return;
+
+                      // 다음 화면에서 currentPlace null로 로드가 스킵되지 않도록 미리 주입
+                      placeProvider.setCurrentPlace(place);
+
+                      final authService = AuthService();
+                      await authService.updateLastAccessedPlace(place.id);
+
+                      if (!mounted) return;
+                      Navigator.of(
+                        context,
+                      ).pushNamedAndRemoveUntil('/', (route) => false);
                     } catch (e) {
                       if (mounted) {
                         final errorMessage = e.toString().replaceAll(
@@ -509,6 +554,10 @@ class _AdminGreetingSettingScreenState
                           '',
                         );
                         SnackbarUtil.showError(context, errorMessage);
+                      }
+                    } finally {
+                      if (mounted) {
+                        setState(() => _isSubmitting = false);
                       }
                     }
                   }

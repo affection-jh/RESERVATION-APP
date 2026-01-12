@@ -71,8 +71,10 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
     _uniformPeriodType =
         widget.course.uniformPeriodType ?? reservation_models.PeriodType.weeks;
     _uniformPeriodValue = widget.course.uniformPeriodValue ?? 1;
-    _uniformTotalReservationsController.text = _uniformTotalReservations
-        .toString();
+    // 0이면 빈 문자열로 표시 (hintText로 "0" 표시)
+    _uniformTotalReservationsController.text = _uniformTotalReservations == 0
+        ? ''
+        : _uniformTotalReservations.toString();
     _uniformPeriodController.text = _uniformPeriodValue.toString();
 
     // 코스명 입력 시 실시간 검증
@@ -142,7 +144,17 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
   }
 
   bool _isFormValid() {
-    return _nameController.text.trim().isNotEmpty && _nameErrorText == null;
+    // 코스명 검증
+    if (_nameController.text.trim().isEmpty || _nameErrorText != null) {
+      return false;
+    }
+
+    // 일괄 적용 모드가 켜져 있을 때 수업 횟수가 0이면 유효하지 않음
+    if (_useUniformSettings && _uniformTotalReservations == 0) {
+      return false;
+    }
+
+    return true;
   }
 
   /// 변경사항이 있는지 확인
@@ -398,7 +410,14 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
       }
     } catch (e) {
       if (mounted) {
-        SnackbarUtil.showError(context, '삭제에 실패했습니다: ${e.toString()}');
+        // 에러 메시지를 유저 친화적으로 변환
+        String errorMessage;
+        if (e.toString().contains('ACTIVE_RESERVATIONS_EXIST')) {
+          errorMessage = '아직 예약된 수업이 있어서 삭제할 수 없어요.\n먼저 예약을 취소해주세요.';
+        } else {
+          errorMessage = '코스 삭제 중 문제가 발생했어요.\n잠시 후 다시 시도해주세요.';
+        }
+        SnackbarUtil.showError(context, errorMessage);
       }
     } finally {
       if (mounted) {
@@ -475,7 +494,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                                             height: 20,
                                             child: CircularProgressIndicator(
                                               strokeWidth: 2,
-                                              color: AppColors.primaryGreen,
+                                              color: Colors.red,
                                             ),
                                           )
                                         : SvgPicture.asset(
@@ -590,7 +609,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                             height: 20,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
-                              color: AppColors.primaryGreen,
+                              color: Colors.white,
                             ),
                           )
                         : Text(
@@ -704,12 +723,6 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
             decoration: BoxDecoration(
               color: AppColors.backgroundLight,
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: (_selectedImage != null || _uploadedImageUrl != null)
-                    ? AppColors.primaryGreen
-                    : AppColors.borderLight,
-                width: 1,
-              ),
             ),
             child: _buildImageContent(),
           ),
@@ -966,6 +979,12 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                     color: AppColors.textPrimary,
                   ),
                   decoration: InputDecoration(
+                    hintText: '0',
+                    hintStyle: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textSecondary,
+                    ),
                     contentPadding: const EdgeInsets.symmetric(
                       horizontal: 16,
                       vertical: 0,
@@ -986,15 +1005,24 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                     ),
                   ),
                   onChanged: (value) {
-                    final total = int.tryParse(value);
-                    if (total != null && total >= 0) {
-                      setState(() {
-                        _uniformTotalReservations = total;
-                      });
-                    } else if (value.isEmpty) {
+                    if (value.isEmpty) {
                       setState(() {
                         _uniformTotalReservations = 0;
+                        // controller는 빈 문자열 유지 (hintText 표시)
                       });
+                    } else {
+                      final total = int.tryParse(value);
+                      if (total != null && total > 0) {
+                        setState(() {
+                          _uniformTotalReservations = total;
+                        });
+                      } else if (total == 0) {
+                        // 0을 입력하면 빈 문자열로 변경
+                        _uniformTotalReservationsController.text = '';
+                        setState(() {
+                          _uniformTotalReservations = 0;
+                        });
+                      }
                     }
                   },
                 ),

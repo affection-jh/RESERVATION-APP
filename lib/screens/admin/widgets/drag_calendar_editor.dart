@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:reservation/utils/timezone_utils.dart';
 import '../../../theme/app_colors.dart';
 import '../../../models/session_draft.dart';
-import '../../../widgets/course_color_picker_bottom_sheet.dart';
 
 /// 드래그 가능한 캘린더 에디터
 class DragCalendarEditor extends StatefulWidget {
@@ -315,10 +314,23 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
       ),
       child: Builder(
         builder: (context) {
-          // 색상 팔레트에서 정의된 onColor 사용 (원본 색상 기준)
-          final textColor = CourseColorPickerBottomSheet.getOnColorForColor(
-            widget.courseColor.value,
+          // 배경색 밝기에 따라 텍스트 색상 동적 결정
+          // opacity가 적용된 색상의 실제 밝기를 계산하기 위해
+          // 배경이 흰색이라고 가정하고 블렌딩된 색상의 밝기 계산
+          final backgroundColor = AppColors.backgroundWhite;
+          final actualBlockColor = isPreview
+              ? widget.courseColor.withOpacity(0.3)
+              : widget.courseColor;
+          final blendedColor = Color.alphaBlend(
+            actualBlockColor,
+            backgroundColor,
           );
+          final luminance = blendedColor.computeLuminance();
+
+          // 밝기에 따라 텍스트 색상 결정 (밝으면 검정, 어두우면 흰색)
+          final textColor = luminance > 0.5
+              ? AppColors.textPrimary
+              : Colors.white;
 
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,

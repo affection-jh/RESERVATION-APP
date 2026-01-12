@@ -11,7 +11,6 @@ import '../../../widgets/common_dialog.dart';
 import 'reservation_manage_bottom_sheet.dart';
 import 'member_selection_side_panel.dart';
 import '../../../utils/snackbar_util.dart';
-import '../../../utils/format_utils.dart';
 import 'dart:async';
 
 /// 세션 상세보기 화면
@@ -38,8 +37,6 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   Map<String, User> _userCache = {};
   bool _isLoading = false;
-  bool _shouldShowSpinner = false; // 1초 이상 걸릴 때만 스피너 표시
-  Timer? _loadingTimer; // 로딩 스피너 표시 타이머
   Map<String, bool> _copiedPhones = {}; // 전화번호 복사 상태 관리
   List<Reservation> _dateReservations = [];
   StreamSubscription<List<Reservation>>? _reservationsSub;
@@ -48,28 +45,12 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
   @override
   void initState() {
     super.initState();
-    // 초기 로딩 상태 설정
-    setState(() {
-      _isLoading = true;
-      _shouldShowSpinner = false; // 초기에는 스피너 숨김
-    });
-
-    // 1초 후에 스피너 표시
-    _loadingTimer = Timer(const Duration(seconds: 1), () {
-      if (mounted && _isLoading) {
-        setState(() {
-          _shouldShowSpinner = true;
-        });
-      }
-    });
-
     _listenReservations();
   }
 
   @override
   void dispose() {
     _reservationsSub?.cancel();
-    _loadingTimer?.cancel();
     super.dispose();
   }
 
@@ -94,25 +75,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
   }
 
   Future<void> _loadUserDataFor(List<Reservation> reservations) async {
-    final loadingStartTime = DateTime.now();
-
-    // 기존 타이머 취소
-    _loadingTimer?.cancel();
-
-    setState(() {
-      _isLoading = true;
-      _shouldShowSpinner = false; // 초기에는 스피너 숨김
-    });
-
-    // 1초 후에 스피너 표시
-    _loadingTimer = Timer(const Duration(seconds: 1), () {
-      if (mounted && _isLoading) {
-        setState(() {
-          _shouldShowSpinner = true;
-        });
-      }
-    });
-
+    setState(() => _isLoading = true);
     for (final reservation in reservations) {
       if (_userCache.containsKey(reservation.userId)) continue;
       try {
@@ -127,22 +90,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
         // ignore
       }
     }
-
-    // 최소 로딩 시간 보장 (300ms) - UI 깨짐 방지
-    final elapsed = DateTime.now().difference(loadingStartTime);
-    final minLoadingDuration = const Duration(milliseconds: 300);
-    if (elapsed < minLoadingDuration) {
-      await Future.delayed(minLoadingDuration - elapsed);
-    }
-
-    // 타이머 취소 및 로딩 상태 해제
-    _loadingTimer?.cancel();
-    if (mounted) {
-      setState(() {
-        _isLoading = false;
-        _shouldShowSpinner = false;
-      });
-    }
+    if (mounted) setState(() => _isLoading = false);
   }
 
   void _refreshReservations() {
@@ -219,12 +167,8 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                   children: [
                     const SizedBox(height: 16),
                     Expanded(
-                      child: (_isLoading && _shouldShowSpinner)
-                          ? Center(
-                              child: CircularProgressIndicator(
-                                color: AppColors.primaryGreen,
-                              ),
-                            )
+                      child: _isLoading
+                          ? Center(child: CircularProgressIndicator())
                           : dateReservations.isEmpty
                           ? Center(
                               child: Column(
@@ -375,10 +319,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
   }) {
     final user = _userCache[reservation.userId];
     final userName = user?.name ?? '예약자 $index';
-    final rawPhoneNumber = user?.phoneNumber ?? '01000000000';
-    final formattedPhoneNumber = rawPhoneNumber.isNotEmpty
-        ? FormatUtils.formatPhoneNumber(rawPhoneNumber)
-        : '010-0000-0000';
+    final phoneNumber = user?.phoneNumber ?? '010-0000-0000';
 
     return InkWell(
       onTap: () =>
@@ -404,7 +345,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                   Row(
                     children: [
                       Text(
-                        formattedPhoneNumber,
+                        phoneNumber,
                         style: TextStyle(
                           fontSize: 16,
                           color: AppColors.textSecondary,
@@ -413,10 +354,8 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                       const SizedBox(width: 8),
                       GestureDetector(
                         onTap: () {
-                          // 클립보드에 원본 전화번호 복사
-                          Clipboard.setData(
-                            ClipboardData(text: rawPhoneNumber),
-                          );
+                          // 클립보드에 복사
+                          Clipboard.setData(ClipboardData(text: phoneNumber));
                           setState(() {
                             _copiedPhones[reservation.id] = true;
                           });
@@ -465,15 +404,15 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
       enableDrag: true,
       builder: (context) => ReservationManageBottomSheet(
         course: widget.course,
-        session: widget.session,
-        date: widget.date,
+        sourceSession: widget.session,
+        sourceDate: widget.date,
         reservation: reservation,
         user: user,
-        onReservationCancelled: () {
+        onCancelled: () {
           _refreshReservations();
           Navigator.of(context).pop();
         },
-        onReservationChanged: () {
+        onMoved: () {
           _refreshReservations();
           Navigator.of(context).pop();
         },

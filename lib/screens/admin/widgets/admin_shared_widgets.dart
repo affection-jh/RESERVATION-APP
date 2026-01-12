@@ -8,6 +8,7 @@ import '../../../models/course.dart' as reservation_models;
 import '../../../models/place.dart';
 import '../../../providers/place_provider.dart';
 import '../../../providers/auth_provider.dart';
+import '../../../providers/member_provider.dart';
 import '../../../services/reservation_service.dart';
 import '../../../services/auth_service.dart';
 import '../../../utils/snackbar_util.dart';
@@ -491,16 +492,26 @@ class ReservationCourseCard extends StatelessWidget {
   }
 }
 
+/// 연장 요청 정보
+class ExtensionRequestInfo {
+  final int count;
+  final List<String> courseNames;
+
+  ExtensionRequestInfo({required this.count, required this.courseNames});
+}
+
 class MemberCard extends StatefulWidget {
   final MemberData member;
   final VoidCallback? onMemberTapped;
   final Color? backgroundColor;
+  final ExtensionRequestInfo? extensionRequestInfo;
 
   const MemberCard({
     super.key,
     required this.member,
     this.onMemberTapped,
     this.backgroundColor,
+    this.extensionRequestInfo,
   });
 
   @override
@@ -526,108 +537,215 @@ class _MemberCardState extends State<MemberCard> {
   @override
   Widget build(BuildContext context) {
     final hasRequests = widget.member.hasPendingRequests;
+    final memberProvider = Provider.of<MemberProvider>(context);
+    final isDeleting = memberProvider.isDeletingMember(widget.member.userId);
 
     return GestureDetector(
-      onTap: () {
-        // 최근 본 멤버 추가 콜백 호출
-        widget.onMemberTapped?.call();
-        MemberDetailBottomSheet.show(context: context, member: widget.member);
-      },
-      child: Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: widget.backgroundColor ?? AppColors.backgroundWhite,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          widget.member.name,
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.textPrimary,
+      onTap: isDeleting
+          ? null // 삭제 중일 때는 탭 비활성화
+          : () {
+              // 최근 본 멤버 추가 콜백 호출
+              widget.onMemberTapped?.call();
+              MemberDetailBottomSheet.show(
+                context: context,
+                member: widget.member,
+              );
+            },
+      child: Opacity(
+        opacity: isDeleting ? 0.5 : 1.0, // 삭제 중일 때 반투명 처리
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: widget.backgroundColor ?? AppColors.backgroundWhite,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            widget.member.name,
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: isDeleting
+                                  ? AppColors.textSecondary
+                                  : AppColors.textPrimary,
+                            ),
                           ),
                         ),
-                      ),
-                      // 재등록 필요 또는 요청 배지 (작은 레드 도트)
-                      if (widget.member.needsReenrollment == true ||
-                          hasRequests)
-                        Container(
-                          margin: const EdgeInsets.only(right: 8),
-                          width: 8,
-                          height: 8,
-                          decoration: BoxDecoration(
-                            color: Colors.red,
-                            shape: BoxShape.circle,
+                        // 삭제 중 표시
+                        if (isDeleting)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                SizedBox(
+                                  width: 12,
+                                  height: 12,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      AppColors.primaryGreen,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  '삭제 중',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: AppColors.textSecondary,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        else if (widget.member.needsReenrollment == true ||
+                            hasRequests)
+                          Container(
+                            margin: const EdgeInsets.only(right: 8),
+                            width: 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              color: Colors.red,
+                              shape: BoxShape.circle,
+                            ),
                           ),
-                        ),
-                    ],
-                  ),
+                      ],
+                    ),
 
-                  Row(
-                    children: [
-                      Text(
-                        _formatPhoneNumber(widget.member.phoneNumber),
-                        style: TextStyle(
-                          color: AppColors.textSecondary,
-                          fontSize: 16,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      GestureDetector(
-                        onTap: () {
-                          Clipboard.setData(
-                            ClipboardData(text: widget.member.phoneNumber),
-                          );
-                          setState(() {
-                            _isCopied = true;
-                          });
-                          // 스낵바 표시
-                          SnackbarUtil.showSuccess(context, '클립보드에 복사되었습니다');
-                          // 2초 후 원래 아이콘으로 복귀
-                          Future.delayed(const Duration(seconds: 2), () {
-                            if (mounted) {
-                              setState(() {
-                                _isCopied = false;
-                              });
-                            }
-                          });
-                        },
-                        child: AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 200),
-                          child: Icon(
-                            _isCopied ? Icons.check : Icons.copy,
-                            key: ValueKey(_isCopied),
-                            size: 16,
-                            color: _isCopied
-                                ? AppColors.primaryGreen
-                                : AppColors.textSecondary,
+                    Row(
+                      children: [
+                        Text(
+                          _formatPhoneNumber(widget.member.phoneNumber),
+                          style: TextStyle(
+                            color: AppColors.textSecondary,
+                            fontSize: 16,
                           ),
                         ),
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: () {
+                            Clipboard.setData(
+                              ClipboardData(text: widget.member.phoneNumber),
+                            );
+                            setState(() {
+                              _isCopied = true;
+                            });
+                            // 스낵바 표시
+                            SnackbarUtil.showSuccess(context, '클립보드에 복사되었습니다');
+                            // 2초 후 원래 아이콘으로 복귀
+                            Future.delayed(const Duration(seconds: 2), () {
+                              if (mounted) {
+                                setState(() {
+                                  _isCopied = false;
+                                });
+                              }
+                            });
+                          },
+                          child: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 200),
+                            child: Icon(
+                              _isCopied ? Icons.check : Icons.copy,
+                              key: ValueKey(_isCopied),
+                              size: 16,
+                              color: _isCopied
+                                  ? AppColors.primaryGreen
+                                  : AppColors.textSecondary,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    // 연장 요청 정보 표시
+                    if (widget.extensionRequestInfo != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.primaryGreen.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.schedule,
+                              size: 14,
+                              color: AppColors.primaryGreen,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              '기간 연장 요청',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.primaryGreen,
+                              ),
+                            ),
+                            if (widget.extensionRequestInfo!.count > 1) ...[
+                              const SizedBox(width: 4),
+                              Text(
+                                '(${widget.extensionRequestInfo!.count})',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.primaryGreen,
+                                ),
+                              ),
+                            ],
+                            if (widget
+                                .extensionRequestInfo!
+                                .courseNames
+                                .isNotEmpty) ...[
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Text(
+                                  widget
+                                              .extensionRequestInfo!
+                                              .courseNames
+                                              .length ==
+                                          1
+                                      ? widget
+                                            .extensionRequestInfo!
+                                            .courseNames
+                                            .first
+                                      : '${widget.extensionRequestInfo!.courseNames.first} 외 ${widget.extensionRequestInfo!.courseNames.length - 1}개',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: AppColors.textSecondary,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  // 연장 요청 정보
-                ],
+                  ],
+                ),
               ),
-            ),
-            // Forward icon
-            Icon(
-              Icons.arrow_forward_ios,
-              size: 16,
-              color: AppColors.textSecondary.withOpacity(0.5),
-            ),
-          ],
+              // Forward icon
+              Icon(
+                Icons.arrow_forward_ios,
+                size: 16,
+                color: AppColors.textSecondary.withOpacity(0.5),
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../theme/app_colors.dart';
 import '../widgets/common_dialog.dart';
 import '../screens/admin/widgets/admin_shared_widgets.dart' show SectionHeader;
 import '../constants/app_constants.dart';
+import '../screens/admin/widgets/admin_pin_verify_for_place_screen.dart';
+import '../screens/admin/admin_pin_register_screen.dart';
+import '../providers/auth_provider.dart';
 
 /// 프로필 섹션 위젯 (공통)
 class ProfileSection extends StatelessWidget {
@@ -36,17 +40,10 @@ class ProfileSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 20),
+      margin: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
         color: AppColors.backgroundWhite,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
       ),
       child: Material(
         color: Colors.transparent,
@@ -163,17 +160,10 @@ class SettingsSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 20),
+      margin: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
         color: AppColors.backgroundWhite,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
       ),
       child: Column(
         children: [
@@ -188,6 +178,45 @@ class SettingsSection extends StatelessWidget {
 
 /// 설정 항목 리스트 생성 (공통)
 class SettingsItemsBuilder {
+  /// 플레이스 탭 처리
+  static void _handlePlaceTap(BuildContext context) {
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final admin = authProvider.currentAdmin;
+    final currentUser = authProvider.currentUser;
+
+    // 관리자로 등록되어 있으면 핀 확인 화면으로
+    if (admin != null) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => const AdminPinVerifyForPlaceScreen(),
+        ),
+      );
+      return;
+    }
+
+    // 관리자로 등록되지 않았으면 핀 등록 화면으로 바로 이동
+    // 전화번호는 현재 로그인된 사용자 또는 관리자의 전화번호 사용
+    final phoneNumber = currentUser?.phoneNumber ?? '';
+    if (phoneNumber.isEmpty) {
+      // 전화번호가 없으면 전화번호 인증부터 시작
+      Navigator.of(context).pushNamed(
+        '/phone-number',
+        arguments: {'isPlaceRegistrationFlow': true},
+      );
+      return;
+    }
+
+    // 전화번호가 있으면 핀 등록 화면으로 바로 이동 (인증 없이)
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => AdminPinRegisterScreen(
+          phoneNumber: phoneNumber,
+          verificationCode: '', // 인증 코드 불필요
+        ),
+      ),
+    );
+  }
+
   /// 일반 설정 항목 리스트 생성
   ///
   /// [context] - BuildContext
@@ -270,6 +299,15 @@ class SettingsItemsBuilder {
               'title': '개인정보 처리방침',
             },
           );
+        },
+      ),
+
+      // 플레이스 추가
+      SettingItem(
+        icon: Icons.add_business,
+        title: '플레이스 추가',
+        onTap: () {
+          _handlePlaceTap(context);
         },
       ),
 

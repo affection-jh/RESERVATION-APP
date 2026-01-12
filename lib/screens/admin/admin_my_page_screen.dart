@@ -41,8 +41,7 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
               // 관리중인 플레이스 정보
               _buildPlacesSection(context),
 
-              _buildPlaceAddingButton(context),
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
 
               // 개설된 코스 목록
               _buildCoursesSection(context),
@@ -142,63 +141,6 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
           ),
         ),
       ),
-    );
-  }
-
-  Widget _buildPlaceAddingButton(BuildContext context) {
-    return Consumer<AuthProvider>(
-      builder: (context, authProvider, child) {
-        final admin = authProvider.currentAdmin;
-        final hasPlace = admin != null && admin.placeIds.isNotEmpty;
-
-        // 베타 버전: 이미 플레이스가 있으면 버튼 숨김
-        if (hasPlace) {
-          return const SizedBox.shrink();
-        }
-
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: Material(
-            color: AppColors.backgroundWhite,
-            borderRadius: BorderRadius.circular(16),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(16),
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => AdminPlaceRegistrationScreen(),
-                  ),
-                );
-              },
-              child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 20),
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.add,
-                      size: 30,
-                      color: AppColors.primaryGreen,
-                    ),
-                    const SizedBox(width: 16),
-                    Text(
-                      '플레이스 추가',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w500,
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      },
     );
   }
 

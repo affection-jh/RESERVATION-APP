@@ -221,8 +221,78 @@ class MemberService {
         }
 
         // ========== 2단계: 모든 쓰기 작업 수행 ==========
-        // 2-1. pendingMembers 생성/업데이트는 제거
-        // 초대 요청은 pushMessage만 전송하도록 변경
+        // 2-1. pendingMembers 생성/업데이트 (User가 존재하지 않는 경우에만)
+        if (existingUserId == null && courseIds.isNotEmpty) {
+          debugPrint('📝 [MemberService] pendingMembers 생성/업데이트 시작');
+          final now = TimezoneUtils.getSeoulDateTime();
+
+          // courseEnrollments 배열 생성
+          final courseEnrollmentsList = <Map<String, dynamic>>[];
+          for (final courseId in courseIds) {
+            final courseEnrollmentConfig = courseEnrollmentMap[courseId];
+            final course = courseMap[courseId];
+
+            if (course == null) {
+              debugPrint('⚠️ [MemberService] 코스를 찾을 수 없음: $courseId');
+              continue;
+            }
+
+            final defaultTotalReservations =
+                (course as dynamic).defaultTotalReservations ?? 0;
+
+            final totalReservations =
+                courseEnrollmentConfig?['totalReservations'] as int? ??
+                defaultTotalReservations;
+
+            DateTime validFrom;
+            DateTime validUntil;
+            if (courseEnrollmentConfig?['validFrom'] != null &&
+                courseEnrollmentConfig?['validUntil'] != null) {
+              validFrom = DateTime.parse(
+                courseEnrollmentConfig!['validFrom'] as String,
+              );
+              validUntil = DateTime.parse(
+                courseEnrollmentConfig['validUntil'] as String,
+              );
+            } else {
+              validFrom = now;
+              validUntil = now.add(const Duration(days: 365));
+            }
+
+            courseEnrollmentsList.add({
+              'courseId': courseId,
+              'totalReservations': totalReservations,
+              'validFrom': validFrom.toIso8601String(),
+              'validUntil': validUntil.toIso8601String(),
+            });
+          }
+
+          // pendingMembers 문서 생성/업데이트
+          // ⚠️ courseIds 제거: courseEnrollments에서만 유도
+          final pendingData = <String, dynamic>{
+            'placeId': placeId,
+            'phoneNumber': normalizedPhone,
+            'name': name,
+            'courseEnrollments': courseEnrollmentsList,
+            'createdAt': _firestoreService.dateTimeToTimestamp(now),
+            'updatedAt': _firestoreService.dateTimeToTimestamp(now),
+          };
+
+          if (existingPending.exists) {
+            // 기존 pendingMembers 업데이트
+            // ⚠️ courseIds 제거: courseEnrollments에서만 유도
+            tx.update(pendingRef, {
+              'name': name,
+              'courseEnrollments': courseEnrollmentsList,
+              'updatedAt': _firestoreService.dateTimeToTimestamp(now),
+            });
+            debugPrint('✅ [MemberService] pendingMembers 업데이트 완료');
+          } else {
+            // 새 pendingMembers 생성
+            tx.set(pendingRef, pendingData);
+            debugPrint('✅ [MemberService] pendingMembers 생성 완료');
+          }
+        }
 
         // 2-2. placeMembership 보장 (User가 존재하는 경우에만)
         if (existingUserId != null &&
@@ -626,21 +696,48 @@ class MemberService {
         .where('placeId', isEqualTo: placeId)
         .snapshots()
         .map((snapshot) {
-          return snapshot.docs.map((doc) {
-            final data = doc.data();
-            // Timestamp를 DateTime으로 변환
-            if (data['createdAt'] != null) {
-              data['createdAt'] = _timestampToDateTime(
-                data['createdAt'],
-              ).toIso8601String();
-            }
-            if (data['updatedAt'] != null) {
-              data['updatedAt'] = _timestampToDateTime(
-                data['updatedAt'],
-              ).toIso8601String();
-            }
-            return PendingMember.fromJson(data);
-          }).toList();
+          return snapshot.docs
+              .map((doc) {
+                try {
+                  final data = doc.data();
+                  // doc.id를 data에 포함 (PendingMember.fromJson에서 id 필요)
+                  data['id'] = doc.id;
+
+                  // 필수 필드 검증
+                  if (data['placeId'] == null || data['phoneNumber'] == null) {
+                    debugPrint(
+                      '[MemberService] watchPendingMembersByPlace: 필수 필드 누락 - placeId: ${data['placeId']}, phoneNumber: ${data['phoneNumber']}',
+                    );
+                    return null;
+                  }
+
+                  // Timestamp를 DateTime으로 변환
+                  if (data['createdAt'] != null) {
+                    data['createdAt'] = _timestampToDateTime(
+                      data['createdAt'],
+                    ).toIso8601String();
+                  }
+                  if (data['updatedAt'] != null) {
+                    data['updatedAt'] = _timestampToDateTime(
+                      data['updatedAt'],
+                    ).toIso8601String();
+                  }
+
+                  // createdBy가 null이면 빈 문자열로 설정 (기본값)
+                  if (data['createdBy'] == null) {
+                    data['createdBy'] = '';
+                  }
+
+                  return PendingMember.fromJson(data);
+                } catch (e) {
+                  debugPrint(
+                    '[MemberService] watchPendingMembersByPlace: 파싱 에러 - docId: ${doc.id}, error: $e',
+                  );
+                  return null;
+                }
+              })
+              .whereType<PendingMember>()
+              .toList();
         });
   }
 
@@ -676,20 +773,14 @@ class MemberService {
 
         final data = snap.data() as Map<String, dynamic>;
         final rawCourseEnrollments = data['courseEnrollments'];
-        final rawCourseIds = data['courseIds'];
 
         List<Map<String, dynamic>> courseEnrollments;
-        if (rawCourseEnrollments is List) {
+        if (rawCourseEnrollments is List && rawCourseEnrollments.isNotEmpty) {
           courseEnrollments = rawCourseEnrollments
               .map((e) => Map<String, dynamic>.from(e as Map))
               .toList();
-        } else if (rawCourseIds is List) {
-          // courseEnrollments가 없으면 courseIds 기반으로 생성 (다른 코스 유지)
-          courseEnrollments = rawCourseIds
-              .map((e) => <String, dynamic>{'courseId': e.toString()})
-              .toList();
         } else {
-          // 둘 다 없으면 현재 코스만 생성
+          // courseEnrollments가 없으면 현재 코스만 생성
           courseEnrollments = [
             <String, dynamic>{'courseId': courseId},
           ];
@@ -718,6 +809,7 @@ class MemberService {
           courseEnrollments.add(current);
         }
 
+        // ⚠️ courseIds 제거: courseEnrollments만 저장
         tx.update(pendingRef, {
           'courseEnrollments': courseEnrollments,
           'updatedAt': FieldValue.serverTimestamp(),
@@ -769,59 +861,37 @@ class MemberService {
 
         for (var doc in snapshot.docs) {
           final data = doc.data();
-          final courseIds =
-              (data['courseIds'] as List<dynamic>?)
-                  ?.map((e) => e.toString())
-                  .toList() ??
-              <String>[];
 
-          // courseEnrollments에서도 제거
+          // ⚠️ courseIds 제거: courseEnrollments에서만 확인
           final rawCourseEnrollments = data['courseEnrollments'];
           List<Map<String, dynamic>>? courseEnrollments;
           if (rawCourseEnrollments is List) {
             courseEnrollments = rawCourseEnrollments
                 .map((e) => Map<String, dynamic>.from(e as Map))
                 .toList();
+
+            // courseEnrollments에서 해당 코스 제거
+            final beforeCount = courseEnrollments.length;
             courseEnrollments.removeWhere(
               (e) => e['courseId']?.toString() == courseId,
             );
-          }
 
-          // courseIds에서 제거
-          if (courseIds.contains(courseId)) {
-            courseIds.remove(courseId);
-            removedCount++;
-            batchOperationCount++;
+            if (beforeCount > courseEnrollments.length) {
+              // 코스가 제거되었으면 업데이트
+              removedCount++;
+              batchOperationCount++;
 
-            if (courseIds.isEmpty) {
-              // courseIds가 비어있으면 pendingMember 삭제
-              batch.delete(doc.reference);
-            } else {
-              // courseIds가 있으면 업데이트
-              final updateData = <String, dynamic>{
-                'courseIds': courseIds,
-                'updatedAt': FieldValue.serverTimestamp(),
-              };
-              if (courseEnrollments != null && courseEnrollments.isNotEmpty) {
-                updateData['courseEnrollments'] = courseEnrollments;
-              } else if (courseEnrollments != null &&
-                  courseEnrollments.isEmpty) {
-                updateData['courseEnrollments'] = <Map<String, dynamic>>[];
+              if (courseEnrollments.isEmpty) {
+                // courseEnrollments가 비어있으면 pendingMember 삭제
+                batch.delete(doc.reference);
+              } else {
+                // courseEnrollments가 있으면 업데이트
+                batch.update(doc.reference, {
+                  'courseEnrollments': courseEnrollments,
+                  'updatedAt': FieldValue.serverTimestamp(),
+                });
               }
-              batch.update(doc.reference, updateData);
             }
-          } else if (courseEnrollments != null &&
-              courseEnrollments.any(
-                (e) => e['courseId']?.toString() == courseId,
-              )) {
-            // courseIds에는 없지만 courseEnrollments에만 있는 경우
-            removedCount++;
-            batchOperationCount++;
-            final updateData = <String, dynamic>{
-              'courseEnrollments': courseEnrollments,
-              'updatedAt': FieldValue.serverTimestamp(),
-            };
-            batch.update(doc.reference, updateData);
           }
         }
 
@@ -860,57 +930,148 @@ class MemberService {
     bool keepPendingMember = false,
   }) async {
     try {
+      debugPrint('🗑️ [MemberService] removeCourseFromPendingMembers 시작');
+      debugPrint(
+        '🗑️ [MemberService] placeId=$placeId, phoneNumber=$phoneNumber, courseId=$courseId, keepPendingMember=$keepPendingMember',
+      );
+
       final normalizedPhone = _normalizePhone(phoneNumber);
       final pendingId = '${placeId}_$normalizedPhone';
       final pendingRef = _firestore.collection('pendingMembers').doc(pendingId);
 
+      debugPrint('🗑️ [MemberService] pendingId=$pendingId');
+
       await _firestore.runTransaction((tx) async {
         final existingPending = await tx.get(pendingRef);
+        debugPrint(
+          '🗑️ [MemberService] pendingMembers 문서 존재 여부: ${existingPending.exists}',
+        );
+
         if (existingPending.exists) {
           final existingData = existingPending.data()!;
-          final existingCourseIds =
-              (existingData['courseIds'] as List<dynamic>?)
-                  ?.map((e) => e.toString())
-                  .toList() ??
-              <String>[];
 
-          // courseEnrollments에서도 제거
+          // ⚠️ courseIds 제거: courseEnrollments에서만 확인
           final rawCourseEnrollments = existingData['courseEnrollments'];
+          debugPrint(
+            '🗑️ [MemberService] 기존 courseEnrollments: $rawCourseEnrollments',
+          );
+
           List<Map<String, dynamic>>? courseEnrollments;
           if (rawCourseEnrollments is List) {
             courseEnrollments = rawCourseEnrollments
                 .map((e) => Map<String, dynamic>.from(e as Map))
                 .toList();
+            final beforeCount = courseEnrollments.length;
             courseEnrollments.removeWhere(
               (e) => e['courseId']?.toString() == courseId,
             );
+            final afterCount = courseEnrollments.length;
+            debugPrint(
+              '🗑️ [MemberService] courseEnrollments 제거: $beforeCount -> $afterCount',
+            );
           }
 
-          existingCourseIds.remove(courseId);
-
-          if (existingCourseIds.isEmpty && !keepPendingMember) {
-            // courseIds가 비어있고 keepPendingMember가 false면 pendingMembers 삭제
-            tx.delete(pendingRef);
-          } else {
-            // courseIds가 비어있지 않거나 keepPendingMember가 true면 업데이트만 수행
-            final updateData = <String, dynamic>{
-              'courseIds': existingCourseIds,
-              'updatedAt': FieldValue.serverTimestamp(),
-            };
-            if (courseEnrollments != null && courseEnrollments.isNotEmpty) {
-              updateData['courseEnrollments'] = courseEnrollments;
-            } else if (courseEnrollments != null && courseEnrollments.isEmpty) {
-              // courseEnrollments가 비어있으면 빈 배열로 설정
-              updateData['courseEnrollments'] = <Map<String, dynamic>>[];
-            }
-            tx.update(pendingRef, updateData);
-          }
+          // ⚠️ 단순화: courseEnrollments만 업데이트 (빈 배열이어도 업데이트)
+          final finalCourseEnrollments =
+              courseEnrollments ?? <Map<String, dynamic>>[];
+          debugPrint(
+            '🗑️ [MemberService] pendingMembers 문서 업데이트: courseEnrollments=$finalCourseEnrollments',
+          );
+          tx.update(pendingRef, {
+            'courseEnrollments': finalCourseEnrollments,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+        } else {
+          debugPrint(
+            '⚠️ [MemberService] pendingMembers 문서가 존재하지 않음: $pendingId',
+          );
         }
       });
 
+      debugPrint('✅ [MemberService] removeCourseFromPendingMembers 완료');
       return true;
     } catch (e) {
-      debugPrint('pendingMembers에서 코스 제거 실패: $e');
+      debugPrint('❌ [MemberService] pendingMembers에서 코스 제거 실패: $e');
+      return false;
+    }
+  }
+
+  // ==================== 통합 코스 등록 메서드 ====================
+
+  /// 멤버에게 코스 등록 (pending/일반 멤버 자동 분기 처리)
+  ///
+  /// ⚠️ 중요: 이 메서드는 pending 멤버와 일반 멤버를 자동으로 구분하여 처리합니다.
+  /// - pending 멤버: pendingMembers의 courseEnrollments만 업데이트
+  /// - 일반 멤버: enrollments 컬렉션에 생성
+  ///
+  /// [userId] 사용자 ID (pending_로 시작하면 pending 멤버)
+  /// [placeId] 플레이스 ID
+  /// [phoneNumber] 전화번호 (pending 멤버 업데이트용)
+  /// [courseEnrollments] 코스별 등록 설정 목록
+  /// [courses] 코스 목록
+  /// [adminId] 관리자 ID (pending 멤버 등록용, 선택적)
+  ///
+  /// Returns: 등록 성공 여부
+  Future<bool> enrollMemberToCourseOrUpdatePending({
+    required String userId,
+    required String placeId,
+    required String phoneNumber,
+    required List<Map<String, dynamic>> courseEnrollments,
+    required List<dynamic> courses,
+    String? adminId,
+  }) async {
+    try {
+      final isPending = userId.startsWith('pending_');
+
+      if (isPending) {
+        // ⚠️ pending 멤버: pendingMembers만 업데이트
+        debugPrint('📝 [MemberService] pending 멤버 코스 등록: pendingMembers 업데이트');
+
+        // 각 코스에 대해 pendingMembers 업데이트
+        for (final courseEnrollmentData in courseEnrollments) {
+          final courseId = courseEnrollmentData['courseId'] as String;
+          final totalReservations =
+              courseEnrollmentData['totalReservations'] as int?;
+          final validFromStr = courseEnrollmentData['validFrom'] as String?;
+          final validUntilStr = courseEnrollmentData['validUntil'] as String?;
+
+          DateTime? validFrom;
+          DateTime? validUntil;
+          if (validFromStr != null && validUntilStr != null) {
+            validFrom = DateTime.parse(validFromStr);
+            validUntil = DateTime.parse(validUntilStr);
+          }
+
+          final success = await updatePendingCourseEnrollmentConfig(
+            placeId: placeId,
+            phoneNumber: phoneNumber,
+            courseId: courseId,
+            totalReservations: totalReservations,
+            validFrom: validFrom,
+            validUntil: validUntil,
+          );
+
+          if (!success) {
+            debugPrint('❌ [MemberService] pending 멤버 코스 등록 실패: $courseId');
+            // 에러 메시지를 더 친화적으로 변경하기 위해 예외를 던짐
+            throw Exception('이미 등록되어 있습니다.');
+          }
+        }
+
+        debugPrint('✅ [MemberService] pending 멤버 코스 등록 완료');
+        return true;
+      } else {
+        // 일반 멤버: enrollments 생성
+        debugPrint('📝 [MemberService] 일반 멤버 코스 등록: enrollments 생성');
+        return await _enrollmentService.enrollMemberToCourses(
+          userId: userId,
+          placeId: placeId,
+          courseEnrollments: courseEnrollments,
+          courses: courses,
+        );
+      }
+    } catch (e) {
+      debugPrint('❌ [MemberService] 멤버 코스 등록 실패: $e');
       return false;
     }
   }

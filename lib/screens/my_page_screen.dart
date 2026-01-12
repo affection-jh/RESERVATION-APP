@@ -72,6 +72,17 @@ class _MyPageScreenState extends State<MyPageScreen> {
         } catch (_) {}
         SnackbarUtil.showSuccess(context, '예약이 취소되었습니다.');
       }
+
+      // cancel 실패 시: 바텀시트가 닫혀 있어도 즉시 피드백
+      if (event.type == ReservationOperationType.cancel &&
+          event.success == false) {
+        if (!mounted) return;
+        final msg = event.error?.toString();
+        SnackbarUtil.showError(
+          context,
+          (msg == null || msg.isEmpty) ? '예약 취소에 실패했습니다.' : '예약 취소 실패: $msg',
+        );
+      }
     });
   }
 
@@ -84,8 +95,20 @@ class _MyPageScreenState extends State<MyPageScreen> {
   Future<void> _init() async {
     await _loadData();
     if (!mounted) return;
+    // highlightReservation이 있어도 자동으로 애니메이션을 시작하지 않음
+    // 명시적으로 클릭한 경우(shouldShowBottomSheet가 true)에만 애니메이션 적용
     if (widget.highlightReservation != null) {
-      _processHighlightReservationWithRetry();
+      // shouldShowBottomSheet 플래그 확인 - 명시적으로 클릭한 경우에만 애니메이션 실행
+      final shouldShowBottomSheet =
+          widget.highlightReservation!['shouldShowBottomSheet'] == true;
+
+      // 명시적으로 클릭한 경우에만 애니메이션 실행
+      if (shouldShowBottomSheet) {
+        _processHighlightReservationWithRetry(
+          shouldShowBottomSheet: shouldShowBottomSheet,
+        );
+      }
+      // 탭 전환 등으로 넘어온 경우는 애니메이션 실행하지 않음
     }
   }
 
@@ -146,7 +169,10 @@ class _MyPageScreenState extends State<MyPageScreen> {
     }
   }
 
-  void _processHighlightReservationWithRetry([int attempt = 0]) {
+  void _processHighlightReservationWithRetry({
+    int attempt = 0,
+    bool shouldShowBottomSheet = false,
+  }) {
     if (!mounted) return;
     if (widget.highlightReservation == null) return;
     if (attempt > 10) return; // 0.2s * 10 = 최대 ~2초 대기
@@ -173,12 +199,15 @@ class _MyPageScreenState extends State<MyPageScreen> {
 
     if (match == null) {
       Future.delayed(const Duration(milliseconds: 200), () {
-        _processHighlightReservationWithRetry(attempt + 1);
+        _processHighlightReservationWithRetry(
+          attempt: attempt + 1,
+          shouldShowBottomSheet: shouldShowBottomSheet,
+        );
       });
       return;
     }
 
-    _processHighlightReservation();
+    _processHighlightReservation(shouldShowBottomSheet: shouldShowBottomSheet);
   }
 
   // 사용자가 예약한 코스만 필터링
@@ -195,8 +224,14 @@ class _MyPageScreenState extends State<MyPageScreen> {
   }
 
   // 강조할 예약 처리
-  void _processHighlightReservation() {
+  void _processHighlightReservation({bool shouldShowBottomSheet = false}) {
     if (widget.highlightReservation == null) return;
+
+    // 명시적으로 클릭한 경우(shouldShowBottomSheet가 true)에만 애니메이션 실행
+    if (!shouldShowBottomSheet) {
+      // 탭 전환 등으로 넘어온 경우는 애니메이션 실행하지 않음
+      return;
+    }
 
     final reservationProvider = Provider.of<ReservationProvider>(
       context,
@@ -261,7 +296,7 @@ class _MyPageScreenState extends State<MyPageScreen> {
       _highlightedDate = reservation.reservedDate;
     });
 
-    // 애니메이션 후 바텀시트 표시
+    // 애니메이션 후 바텀시트 표시 (명시적으로 요청한 경우에만)
     Future.delayed(const Duration(milliseconds: 800), () {
       if (mounted) {
         setState(() {
