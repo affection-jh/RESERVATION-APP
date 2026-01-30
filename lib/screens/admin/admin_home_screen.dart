@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../theme/app_colors.dart';
@@ -10,6 +11,7 @@ import '../../models/admin_models.dart';
 import 'widgets/session_detail_screen.dart';
 import 'widgets/story_add_screen.dart';
 import 'widgets/course_add_flow.dart';
+import 'widgets/weekly_override_schedule_screen.dart';
 import '../../providers/place_provider.dart';
 import '../../providers/course_provider.dart';
 import '../../providers/story_provider.dart' show Story, StoryProvider;
@@ -17,6 +19,8 @@ import '../../models/course.dart';
 import '../../services/firestore_service.dart';
 import '../../utils/week_range_calculator.dart';
 import '../../utils/storage_service.dart';
+import '../../utils/timezone_utils.dart';
+import '../../policies/course_policy.dart';
 
 class AdminHomeScreen extends StatefulWidget {
   const AdminHomeScreen({super.key});
@@ -33,6 +37,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
 
   // 캘린더 관련
   final GlobalKey _calendarKey = GlobalKey();
+  Course? _selectedCourse; // 선택된 코스
 
   // 데이터 로드 완료 플래그 (플레이스별로 관리)
   String? _loadedPlaceId;
@@ -40,6 +45,9 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
   // 정책 기반 주차 범위
   final FirestoreService _firestoreService = FirestoreService();
   List<int> _availableWeekOffsets = [0, 1, 2]; // 기본값: 이번주, 다음주, 다다음주
+  StreamSubscription<Set<String>>? _bookingWeekOpensSub;
+  Set<String> _openedWeekStartDates = {}; // 미리 열린 주차의 weekStartDate 집합
+  CoursePolicy? _currentCoursePolicy; // 현재 코스의 정책
 
   @override
   bool get wantKeepAlive => true; // 상태 유지 활성화
@@ -51,6 +59,12 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadDataIfNeeded();
     });
+  }
+
+  @override
+  void dispose() {
+    _bookingWeekOpensSub?.cancel();
+    super.dispose();
   }
 
   /// 데이터가 로드되지 않았으면 로드
@@ -72,6 +86,16 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
         storyProvider.loadStories(currentPlace.id),
       ]);
 
+      // 비정기 일정 구독 시작 (현재 주차 포함)
+      final now = TimezoneUtils.getSeoulDateTime();
+      final daysFromMonday = now.weekday - 1;
+      final thisWeekMonday = now.subtract(Duration(days: daysFromMonday));
+      final weekStartDates = List.generate(3, (i) {
+        final weekStart = thisWeekMonday.add(Duration(days: 7 * i));
+        return TimezoneUtils.formatDateToSeoul(weekStart);
+      });
+      courseProvider.subscribeToOverrides(currentPlace.id, weekStartDates);
+
       // 저장된 마지막 선택 코스 또는 첫 번째 코스의 정책 기반 주차 범위 계산
       if (courseProvider.courses.isNotEmpty) {
         Course? initialCourse;
@@ -80,6 +104,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
           final storageService = StorageService();
           final lastCourseId = await storageService.getLastSelectedCourseId(
             currentPlace.id,
+            scope: StorageService.scopeAdmin,
           );
 
           if (lastCourseId != null) {
@@ -99,6 +124,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
 
         // 초기 코스의 정책에 따라 주차 범위 설정
         await _calculateWeekOffsetsForCourse(initialCourse, currentPlace.id);
+        // 미리 열린 주차 구독 시작
+        _subscribeBookingWeekOpens(initialCourse, currentPlace.id);
       } else {
         setState(() => _availableWeekOffsets = [0, 1, 2]);
       }
@@ -121,7 +148,10 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
     String placeId,
   ) async {
     if (course == null) {
-      setState(() => _availableWeekOffsets = [0, 1, 2]);
+      setState(() {
+        _availableWeekOffsets = [0, 1, 2];
+        _currentCoursePolicy = null;
+      });
       return;
     }
 
@@ -130,30 +160,108 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
         courseId: course.id,
         placeId: placeId,
       );
-      final offsets = WeekRangeCalculator.getAvailableWeekOffsets(policy);
-
-      if (offsets.isEmpty) {
-        // 정책에서 주차 범위를 찾을 수 없으면 기본값
-        setState(() => _availableWeekOffsets = [0, 1, 2]);
-      } else {
-        // 정책에서 계산된 주차 범위 사용 (최소 1개, 최대 8개)
-        final maxWeekOffset = offsets.reduce((a, b) => a > b ? a : b);
-        final maxWeeks = (maxWeekOffset + 1).clamp(1, 8);
-        if (mounted) {
-          setState(() {
-            _availableWeekOffsets = List.generate(maxWeeks, (i) => i);
-            // 선택된 탭이 범위를 벗어나면 조정
-            if (_selectedWeekTab >= _availableWeekOffsets.length) {
-              _selectedWeekTab = _availableWeekOffsets.length - 1;
-            }
-          });
-        }
-      }
+      _currentCoursePolicy = policy;
+      _updateAvailableWeekOffsets(policy);
     } catch (_) {
       // 정책 로드 실패 시 기본값 사용
       if (mounted) {
-        setState(() => _availableWeekOffsets = [0, 1, 2]);
+        setState(() {
+          _availableWeekOffsets = [0, 1, 2];
+          _currentCoursePolicy = null;
+        });
       }
+    }
+  }
+
+  /// 정책 기반 주차 범위 계산 (미리 열린 주차 포함)
+  void _updateAvailableWeekOffsets(CoursePolicy? policy) {
+    if (policy == null) {
+      setState(() => _availableWeekOffsets = [0, 1, 2]);
+      return;
+    }
+
+    // 정책 기반 기본 주차 범위
+    final baseOffsets = WeekRangeCalculator.getAvailableWeekOffsets(policy);
+    final now = TimezoneUtils.getSeoulDateTime();
+    final daysFromMonday = now.weekday - 1;
+    final thisWeekMonday = now.subtract(Duration(days: daysFromMonday));
+
+    // 미리 열린 주차의 weekOffset 계산
+    final openedOffsets = <int>{};
+    for (final weekStartDateStr in _openedWeekStartDates) {
+      try {
+        final parts = weekStartDateStr.split('-');
+        final weekStartDate = DateTime(
+          int.parse(parts[0]),
+          int.parse(parts[1]),
+          int.parse(parts[2]),
+        );
+        final diffDays = weekStartDate.difference(thisWeekMonday).inDays;
+        final weekOffset = (diffDays / 7).round();
+        if (weekOffset >= 0) {
+          openedOffsets.add(weekOffset);
+        }
+      } catch (_) {
+        // 날짜 파싱 실패 시 스킵
+      }
+    }
+
+    // 정책 기반 주차 + 미리 열린 주차 합치기
+    final allOffsets = <int>{...baseOffsets, ...openedOffsets};
+    final sortedOffsets = allOffsets.toList()..sort();
+
+    // 최소 1개, 최대 8개로 제한
+    final maxWeekOffset =
+        sortedOffsets.isNotEmpty
+            ? sortedOffsets.reduce((a, b) => a > b ? a : b)
+            : 0;
+    final maxWeeks = (maxWeekOffset + 1).clamp(1, 8);
+    final finalOffsets =
+        List.generate(
+          maxWeeks,
+          (i) => i,
+        ).where((i) => sortedOffsets.contains(i)).toList();
+    if (finalOffsets.isEmpty) {
+      finalOffsets.addAll([0, 1, 2]);
+    }
+
+    if (mounted) {
+      setState(() {
+        _availableWeekOffsets = finalOffsets;
+        // 선택된 탭이 범위를 벗어나면 조정
+        if (_selectedWeekTab >= _availableWeekOffsets.length) {
+          _selectedWeekTab = _availableWeekOffsets.length - 1;
+        }
+      });
+    }
+  }
+
+  /// 미리 열린 주차 구독
+  void _subscribeBookingWeekOpens(Course? course, String placeId) {
+    _bookingWeekOpensSub?.cancel();
+
+    if (course == null) return;
+
+    try {
+      _bookingWeekOpensSub = _firestoreService
+          .streamBookingWeekOpens(placeId: placeId, courseId: course.id)
+          .listen(
+            (openedWeekStartDates) {
+              if (!mounted) return;
+              setState(() {
+                _openedWeekStartDates = openedWeekStartDates;
+              });
+              // 정책이 로드되어 있으면 주차 범위 업데이트
+              if (_currentCoursePolicy != null) {
+                _updateAvailableWeekOffsets(_currentCoursePolicy);
+              }
+            },
+            onError: (e) {
+              debugPrint('[AdminHomeScreen] bookingWeekOpens stream error: $e');
+            },
+          );
+    } catch (e) {
+      debugPrint('[AdminHomeScreen] bookingWeekOpens subscribe error: $e');
     }
   }
 
@@ -200,7 +308,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
                         color: AppColors.primaryGreen,
                         size: 34,
                       ),
-                      onPressed: () => _showCourseAddFlow(context),
+                      onPressed: () => _showWeeklyOverrideSchedule(context),
                     ),
                   ),
 
@@ -238,6 +346,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
             enabled: false,
             showDescription: false,
             padding: EdgeInsets.zero,
+            heroTagSuffix: 'admin_home',
           ),
         ),
         // 알림 아이콘
@@ -275,31 +384,40 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
               weekOffset: _selectedWeekTab,
               height: 450,
               onSessionTap: (course, session, date) {
-                final placeId = Provider.of<PlaceProvider>(
-                  context,
-                  listen: false,
-                ).currentPlace?.id;
+                final placeId =
+                    Provider.of<PlaceProvider>(
+                      context,
+                      listen: false,
+                    ).currentPlace?.id;
                 if (placeId == null) return;
                 Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (context) => SessionDetailScreen(
-                      course: course,
-                      session: session,
-                      date: date,
-                      placeId: placeId,
-                    ),
+                    builder:
+                        (context) => SessionDetailScreen(
+                          course: course,
+                          session: session,
+                          date: date,
+                          placeId: placeId,
+                        ),
                   ),
                 );
               },
               onAddCourseTap: () => _showCourseAddFlow(context),
               onCourseSelected: (Course? course) async {
+                // 선택된 코스 저장
+                setState(() {
+                  _selectedCourse = course;
+                });
                 // 선택된 코스의 정책에 따라 주차 범위 업데이트
-                final placeId = Provider.of<PlaceProvider>(
-                  context,
-                  listen: false,
-                ).currentPlace?.id;
+                final placeId =
+                    Provider.of<PlaceProvider>(
+                      context,
+                      listen: false,
+                    ).currentPlace?.id;
                 if (placeId != null) {
                   await _calculateWeekOffsetsForCourse(course, placeId);
+                  // 미리 열린 주차 구독 업데이트
+                  _subscribeBookingWeekOpens(course, placeId);
                 }
               },
             ),
@@ -399,25 +517,26 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
 
         Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (context) => StoryAddScreen(
-              existingStory: _storyToStoryData(story),
-              onSave: (updatedStory) async {
-                // StoryData를 Story로 변환하여 업데이트
-                final updated = Story(
-                  id: story.id,
-                  placeId: story.placeId,
-                  title: updatedStory.title,
-                  content: updatedStory.content,
-                  createdAt: story.createdAt,
-                  imageUrls: updatedStory.imageUrls,
-                  backgroundImageUrl: updatedStory.backgroundImageUrl,
-                );
-                await storyProvider.updateStory(updated);
-              },
-              onDelete: () async {
-                await storyProvider.deleteStory(story.id);
-              },
-            ),
+            builder:
+                (context) => StoryAddScreen(
+                  existingStory: _storyToStoryData(story),
+                  onSave: (updatedStory) async {
+                    // StoryData를 Story로 변환하여 업데이트
+                    final updated = Story(
+                      id: story.id,
+                      placeId: story.placeId,
+                      title: updatedStory.title,
+                      content: updatedStory.content,
+                      createdAt: story.createdAt,
+                      imageUrls: updatedStory.imageUrls,
+                      backgroundImageUrl: updatedStory.backgroundImageUrl,
+                    );
+                    await storyProvider.updateStory(updated);
+                  },
+                  onDelete: () async {
+                    await storyProvider.deleteStory(story.id);
+                  },
+                ),
           ),
         );
       },
@@ -428,14 +547,58 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
   void _showCourseAddFlow(BuildContext context) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => CourseAddFlow(
-          onComplete: (course) {
-            // CourseAddFlow 내부에서 정책 설정 및 최종 등록 처리
-            // 여기서는 아무것도 하지 않음
-          },
-        ),
+        builder:
+            (context) => CourseAddFlow(
+              onComplete: (course) {
+                // CourseAddFlow 내부에서 정책 설정 및 최종 등록 처리
+                // 여기서는 아무것도 하지 않음
+              },
+            ),
       ),
     );
+  }
+
+  // 비정기 일정 편집 화면 표시
+  Future<void> _showWeeklyOverrideSchedule(BuildContext context) async {
+    final result = await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder:
+            (context) => WeeklyOverrideScheduleScreen(
+              weekOffset: _selectedWeekTab,
+              selectedCourseId: _selectedCourse?.id, // 선택된 코스만
+            ),
+      ),
+    );
+
+    // 저장 성공 시 데이터 다시 로드
+    if (result == true && mounted) {
+      final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+      final courseProvider = Provider.of<CourseProvider>(
+        context,
+        listen: false,
+      );
+      final currentPlace = placeProvider.currentPlace;
+
+      if (currentPlace != null) {
+        // 코스 데이터 다시 로드하여 비정기 일정 반영
+        await courseProvider.loadCourses(currentPlace.id);
+
+        // 비정기 일정 구독 시작 (현재 주차 포함)
+        final now = TimezoneUtils.getSeoulDateTime();
+        final daysFromMonday = now.weekday - 1;
+        final thisWeekMonday = now.subtract(Duration(days: daysFromMonday));
+        final weekStartDates = List.generate(3, (i) {
+          final weekStart = thisWeekMonday.add(Duration(days: 7 * i));
+          return TimezoneUtils.formatDateToSeoul(weekStart);
+        });
+        courseProvider.subscribeToOverrides(currentPlace.id, weekStartDates);
+
+        // 캘린더 위젯 강제 리빌드 및 뷰포트 업데이트
+        setState(() {
+          // 상태 변경으로 캘린더가 다시 빌드되도록 함
+        });
+      }
+    }
   }
 
   // 스토리 추가 화면 표시
@@ -448,18 +611,19 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
 
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => StoryAddScreen(
-          existingStory: null, // 새 스토리 추가
-          onSave: (storyData) async {
-            await storyProvider.createStory(
-              placeId: currentPlace.id,
-              title: storyData.title,
-              content: storyData.content,
-              imageUrls: storyData.imageUrls,
-              backgroundImageUrl: storyData.backgroundImageUrl,
-            );
-          },
-        ),
+        builder:
+            (context) => StoryAddScreen(
+              existingStory: null, // 새 스토리 추가
+              onSave: (storyData) async {
+                await storyProvider.createStory(
+                  placeId: currentPlace.id,
+                  title: storyData.title,
+                  content: storyData.content,
+                  imageUrls: storyData.imageUrls,
+                  backgroundImageUrl: storyData.backgroundImageUrl,
+                );
+              },
+            ),
       ),
     );
   }
@@ -496,9 +660,10 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
                     width: 10,
                     height: 10,
                     decoration: BoxDecoration(
-                      color: _storyPageIndex == index
-                          ? AppColors.primaryGreen
-                          : AppColors.primaryGreen.withOpacity(0.3),
+                      color:
+                          _storyPageIndex == index
+                              ? AppColors.primaryGreen
+                              : AppColors.primaryGreen.withOpacity(0.3),
                       shape: BoxShape.circle,
                     ),
                   ),

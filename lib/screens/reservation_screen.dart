@@ -139,9 +139,12 @@ class _ReservationScreenState extends State<ReservationScreen> {
       // unmodifiable list를 수정 가능한 리스트로 복사
       filtered = List.from(courses);
     } else {
-      filtered = courses
-          .where((course) => course.name.toLowerCase().contains(searchQuery))
-          .toList();
+      filtered =
+          courses
+              .where(
+                (course) => course.name.toLowerCase().contains(searchQuery),
+              )
+              .toList();
     }
 
     // 정렬 우선순위:
@@ -367,208 +370,219 @@ class _ReservationScreenState extends State<ReservationScreen> {
       course.id,
     );
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      decoration: BoxDecoration(
-        color: AppColors.backgroundWhite,
+    void openCalendar() {
+      if (!isEnrolled) {
+        SnackbarUtil.showInfo(context, '등록한 코스가 아니에요.');
+        return;
+      }
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (context) => CalendarScreen(course: course)),
+      );
+    }
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
         borderRadius: BorderRadius.circular(16),
-      ),
-      child: Stack(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // 상단: 플레이스 정보
-                Row(
+        onTap: openCalendar, // ✅ 카드 전체 탭으로도 예약 화면 이동
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 16),
+          decoration: BoxDecoration(
+            color: AppColors.backgroundWhite,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Stack(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // 플레이스 로고 + 이름
-                    Expanded(
-                      child: Row(
-                        children: [
-                          // 원형 로고 (과목 이미지 우선, 없으면 플레이스 이미지) - 이중 테두리
-                          Container(
-                            width: 80,
-                            height: 80,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: AppColors.textSecondary.withOpacity(
-                                  0.25,
-                                ),
-                                width: 2,
-                              ),
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.all(4),
-                              child: Container(
+                    // 상단: 플레이스 정보
+                    Row(
+                      children: [
+                        // 플레이스 로고 + 이름
+                        Expanded(
+                          child: Row(
+                            children: [
+                              // 원형 로고 (과목 이미지 우선, 없으면 플레이스 이미지) - 이중 테두리
+                              Container(
+                                width: 80,
+                                height: 80,
                                 decoration: BoxDecoration(
-                                  color: AppColors.backgroundLight,
                                   shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: AppColors.textSecondary.withOpacity(
+                                      0.25,
+                                    ),
+                                    width: 2,
+                                  ),
                                 ),
-                                child: ClipOval(
-                                  child: () {
-                                    // 과목 이미지 우선
-                                    if (course.imageUrl != null &&
-                                        course.imageUrl!.isNotEmpty) {
-                                      return CourseImageWidget(
-                                        imageUrl: course.imageUrl!,
-                                        width: 80,
-                                        height: 80,
-                                      );
-                                    }
-                                    // 플레이스 이미지
-                                    final placeImageUrl =
-                                        currentPlace?.imageUrl;
-                                    if (placeImageUrl != null &&
-                                        placeImageUrl.isNotEmpty) {
-                                      return PlaceImageWidget(
-                                        imageUrl: placeImageUrl,
-                                        width: 80,
-                                        height: 80,
-                                      );
-                                    }
-                                    // 기본 텍스트
-                                    return Container(
-                                      width: 80,
-                                      height: 80,
-                                      decoration: BoxDecoration(
-                                        color: AppColors.backgroundLight,
-                                        shape: BoxShape.circle,
-                                      ),
-                                      child: Center(
-                                        child: Text(
-                                          course.name.substring(0, 1),
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 18,
-                                            fontWeight: FontWeight.bold,
+                                child: Padding(
+                                  padding: const EdgeInsets.all(4),
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: AppColors.backgroundLight,
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: ClipOval(
+                                      child: () {
+                                        // 과목 이미지 우선
+                                        if (course.imageUrl != null &&
+                                            course.imageUrl!.isNotEmpty) {
+                                          return CourseImageWidget(
+                                            imageUrl: course.imageUrl!,
+                                            width: 80,
+                                            height: 80,
+                                          );
+                                        }
+                                        // 플레이스 이미지
+                                        final placeImageUrl =
+                                            currentPlace?.imageUrl;
+                                        if (placeImageUrl != null &&
+                                            placeImageUrl.isNotEmpty) {
+                                          return PlaceImageWidget(
+                                            imageUrl: placeImageUrl,
+                                            width: 80,
+                                            height: 80,
+                                          );
+                                        }
+                                        // 기본 텍스트
+                                        return Container(
+                                          width: 80,
+                                          height: 80,
+                                          decoration: BoxDecoration(
+                                            color: AppColors.backgroundLight,
+                                            shape: BoxShape.circle,
                                           ),
-                                        ),
-                                      ),
-                                    );
-                                  }(),
+                                          child: Center(
+                                            child: Text(
+                                              course.name.substring(0, 1),
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 18,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                        );
+                                      }(),
+                                    ),
+                                  ),
                                 ),
                               ),
-                            ),
+                              const SizedBox(width: 12),
+                            ],
                           ),
-                          const SizedBox(width: 12),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 26),
+                    // 코스명 (큰 제목)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            course.name,
+                            style: TextStyle(
+                              fontSize: 26,
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.textPrimary,
+                              letterSpacing: -0.5,
+                              height: 1.2,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 6),
+                          // 설명
+                          if (course.description.isNotEmpty)
+                            Text(
+                              course.description,
+                              style: TextStyle(
+                                fontSize: 17,
+                                color: AppColors.textPrimary.withOpacity(0.8),
+                                fontWeight: FontWeight.w500,
+                                letterSpacing: -0.2,
+                              ),
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          const SizedBox(height: 10),
+                          // 하단: 요일 태그 + 예약하기 버튼
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              // 왼쪽: 요일 태그
+                              Expanded(
+                                child: _buildDayChips(
+                                  course.availableDayNames,
+                                  courseColor,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              // 오른쪽: 예약하기 버튼
+                              GestureDetector(
+                                onTap: openCalendar,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 26,
+                                    vertical: 10,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color:
+                                        isEnrolled
+                                            ? Colors.black
+                                            : Colors.black12,
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  child: Text(
+                                    '예약하기',
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w600,
+                                      color:
+                                          isEnrolled
+                                              ? Colors.white
+                                              : AppColors.textSecondary,
+                                      letterSpacing: -0.2,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
                         ],
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 26),
-                // 코스명 (큰 제목)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        course.name,
-                        style: TextStyle(
-                          fontSize: 26,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.textPrimary,
-                          letterSpacing: -0.5,
-                          height: 1.2,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 6),
-                      // 설명
-                      if (course.description.isNotEmpty)
-                        Text(
-                          course.description,
-                          style: TextStyle(
-                            fontSize: 17,
-                            color: AppColors.textPrimary.withOpacity(0.8),
-                            fontWeight: FontWeight.w500,
-                            letterSpacing: -0.2,
-                          ),
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      const SizedBox(height: 10),
-                      // 하단: 요일 태그 + 예약하기 버튼
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          // 왼쪽: 요일 태그
-                          Expanded(
-                            child: _buildDayChips(
-                              course.availableDayNames,
-                              courseColor,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          // 오른쪽: 예약하기 버튼
-                          GestureDetector(
-                            onTap: isEnrolled
-                                ? () {
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        builder: (context) =>
-                                            CalendarScreen(course: course),
-                                      ),
-                                    );
-                                  }
-                                : null,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 26,
-                                vertical: 10,
-                              ),
-                              decoration: BoxDecoration(
-                                color: isEnrolled
-                                    ? Colors.black
-                                    : Colors.black12,
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                              child: Text(
-                                '예약하기',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w600,
-                                  color: isEnrolled
-                                      ? Colors.white
-                                      : AppColors.textSecondary,
-                                  letterSpacing: -0.2,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
+              ),
+              // 오른쪽 위 하트 아이콘
+              Positioned(
+                top: 8,
+                right: 8,
+                child: GestureDetector(
+                  onTap: () => _toggleFavorite(course.id),
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+
+                    child: Icon(
+                      isFavorite ? Icons.favorite : Icons.favorite_border,
+                      size: 20,
+                      color:
+                          isFavorite
+                              ? const Color.fromARGB(255, 255, 79, 67)
+                              : AppColors.textSecondary.withOpacity(0.6),
+                    ),
                   ),
                 ),
-              ],
-            ),
-          ),
-          // 오른쪽 위 하트 아이콘
-          Positioned(
-            top: 8,
-            right: 8,
-            child: GestureDetector(
-              onTap: () => _toggleFavorite(course.id),
-              child: Container(
-                padding: const EdgeInsets.all(6),
-
-                child: Icon(
-                  isFavorite ? Icons.favorite : Icons.favorite_border,
-                  size: 20,
-                  color: isFavorite
-                      ? const Color.fromARGB(255, 255, 79, 67)
-                      : AppColors.textSecondary.withOpacity(0.6),
-                ),
               ),
-            ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -602,24 +616,25 @@ class _ReservationScreenState extends State<ReservationScreen> {
     return Wrap(
       spacing: 4,
       runSpacing: 8,
-      children: dayNames.map((dayName) {
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: AppColors.backgroundLight,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Text(
-            dayName,
-            style: TextStyle(
-              color: AppColors.textPrimary,
-              fontSize: 15,
-              fontWeight: FontWeight.w500,
-              letterSpacing: -0.2,
-            ),
-          ),
-        );
-      }).toList(),
+      children:
+          dayNames.map((dayName) {
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: AppColors.backgroundLight,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                dayName,
+                style: TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: -0.2,
+                ),
+              ),
+            );
+          }).toList(),
     );
   }
 }

@@ -77,9 +77,10 @@ class CourseEnrollment {
   // 하위 호환성: 가장 최근 연장 요청 반환 (pending 우선)
   ExtensionRequest? get extensionRequest {
     // pending 상태인 요청이 있으면 반환
-    final pending = extensionRequests
-        .where((r) => r.status == ExtensionRequestStatus.pending)
-        .toList();
+    final pending =
+        extensionRequests
+            .where((r) => r.status == ExtensionRequestStatus.pending)
+            .toList();
     if (pending.isNotEmpty) {
       // 가장 최근 pending 요청 반환
       pending.sort((a, b) => b.requestedAt.compareTo(a.requestedAt));
@@ -133,16 +134,17 @@ class CourseEnrollment {
 
   // 연장 요청 취소
   CourseEnrollment cancelExtensionRequest() {
-    final updatedRequests = extensionRequests.map((r) {
-      if (r.status == ExtensionRequestStatus.pending) {
-        return r.copyWith(
-          status: ExtensionRequestStatus.rejected,
-          rejectedAt: TimezoneUtils.getSeoulDateTime(),
-          rejectionReason: '사용자 취소',
-        );
-      }
-      return r;
-    }).toList();
+    final updatedRequests =
+        extensionRequests.map((r) {
+          if (r.status == ExtensionRequestStatus.pending) {
+            return r.copyWith(
+              status: ExtensionRequestStatus.rejected,
+              rejectedAt: TimezoneUtils.getSeoulDateTime(),
+              rejectionReason: '사용자 취소',
+            );
+          }
+          return r;
+        }).toList();
     return copyWith(extensionRequests: updatedRequests);
   }
 
@@ -153,15 +155,16 @@ class CourseEnrollment {
         pendingRequest.status != ExtensionRequestStatus.pending) {
       throw Exception('승인할 연장 요청이 없습니다.');
     }
-    final updatedRequests = extensionRequests.map((r) {
-      if (r.id == pendingRequest.id) {
-        return r.copyWith(
-          status: ExtensionRequestStatus.approved,
-          approvedAt: TimezoneUtils.getSeoulDateTime(),
-        );
-      }
-      return r;
-    }).toList();
+    final updatedRequests =
+        extensionRequests.map((r) {
+          if (r.id == pendingRequest.id) {
+            return r.copyWith(
+              status: ExtensionRequestStatus.approved,
+              approvedAt: TimezoneUtils.getSeoulDateTime(),
+            );
+          }
+          return r;
+        }).toList();
     return copyWith(
       validUntil: newValidUntil,
       extensionRequests: updatedRequests,
@@ -175,16 +178,17 @@ class CourseEnrollment {
         pendingRequest.status != ExtensionRequestStatus.pending) {
       throw Exception('거부할 연장 요청이 없습니다.');
     }
-    final updatedRequests = extensionRequests.map((r) {
-      if (r.id == pendingRequest.id) {
-        return r.copyWith(
-          status: ExtensionRequestStatus.rejected,
-          rejectedAt: TimezoneUtils.getSeoulDateTime(),
-          rejectionReason: reason,
-        );
-      }
-      return r;
-    }).toList();
+    final updatedRequests =
+        extensionRequests.map((r) {
+          if (r.id == pendingRequest.id) {
+            return r.copyWith(
+              status: ExtensionRequestStatus.rejected,
+              rejectedAt: TimezoneUtils.getSeoulDateTime(),
+              rejectionReason: reason,
+            );
+          }
+          return r;
+        }).toList();
     return copyWith(extensionRequests: updatedRequests);
   }
 
@@ -260,9 +264,8 @@ class CourseEnrollment {
       'totalReservations': totalReservations,
       'remainingReservations': remainingReservations,
       'extensionRequests': extensionRequests.map((r) => r.toJson()).toList(),
-      'reenrollmentHistory': reenrollmentHistory
-          .map((r) => r.toJson())
-          .toList(),
+      'reenrollmentHistory':
+          reenrollmentHistory.map((r) => r.toJson()).toList(),
       'adminActions': adminActions.map((a) => a.toJson()).toList(),
       'memo': memo,
       // 하위 호환성: 가장 최근 extensionRequest도 포함
@@ -276,9 +279,10 @@ class CourseEnrollment {
     // 하위 호환성: extensionRequest가 있으면 extensionRequests로 변환
     List<ExtensionRequest> extensionRequestsList = [];
     if (json['extensionRequests'] != null) {
-      extensionRequestsList = (json['extensionRequests'] as List)
-          .map((e) => ExtensionRequest.fromJson(e as Map<String, dynamic>))
-          .toList();
+      extensionRequestsList =
+          (json['extensionRequests'] as List)
+              .map((e) => ExtensionRequest.fromJson(e as Map<String, dynamic>))
+              .toList();
     } else if (json['extensionRequest'] != null) {
       // 기존 단일 extensionRequest를 배열로 변환
       extensionRequestsList = [
@@ -302,18 +306,21 @@ class CourseEnrollment {
       totalReservations: json['totalReservations'] as int,
       remainingReservations: json['remainingReservations'] as int,
       extensionRequests: extensionRequestsList,
-      reenrollmentHistory: json['reenrollmentHistory'] != null
-          ? (json['reenrollmentHistory'] as List)
-                .map(
-                  (e) => ReenrollmentRecord.fromJson(e as Map<String, dynamic>),
-                )
-                .toList()
-          : [],
-      adminActions: json['adminActions'] != null
-          ? (json['adminActions'] as List)
-                .map((e) => AdminAction.fromJson(e as Map<String, dynamic>))
-                .toList()
-          : [],
+      reenrollmentHistory:
+          json['reenrollmentHistory'] != null
+              ? (json['reenrollmentHistory'] as List)
+                  .map(
+                    (e) =>
+                        ReenrollmentRecord.fromJson(e as Map<String, dynamic>),
+                  )
+                  .toList()
+              : [],
+      adminActions:
+          json['adminActions'] != null
+              ? (json['adminActions'] as List)
+                  .map((e) => AdminAction.fromJson(e as Map<String, dynamic>))
+                  .toList()
+              : [],
       memo: json['memo'] as String?,
     );
   }
@@ -397,12 +404,14 @@ class ExtensionRequest {
         (e) => e.name == json['status'],
         orElse: () => ExtensionRequestStatus.pending,
       ),
-      approvedAt: json['approvedAt'] != null
-          ? DateTime.parse(json['approvedAt'] as String)
-          : null,
-      rejectedAt: json['rejectedAt'] != null
-          ? DateTime.parse(json['rejectedAt'] as String)
-          : null,
+      approvedAt:
+          json['approvedAt'] != null
+              ? DateTime.parse(json['approvedAt'] as String)
+              : null,
+      rejectedAt:
+          json['rejectedAt'] != null
+              ? DateTime.parse(json['rejectedAt'] as String)
+              : null,
       rejectionReason: json['rejectionReason'] as String?,
     );
   }
@@ -453,9 +462,10 @@ class ReenrollmentRecord {
       enrolledAt: DateTime.parse(json['enrolledAt'] as String),
       validFrom: DateTime.parse(json['validFrom'] as String),
       validUntil: DateTime.parse(json['validUntil'] as String),
-      cancelledAt: json['cancelledAt'] != null
-          ? DateTime.parse(json['cancelledAt'] as String)
-          : null,
+      cancelledAt:
+          json['cancelledAt'] != null
+              ? DateTime.parse(json['cancelledAt'] as String)
+              : null,
     );
   }
 }
@@ -515,8 +525,6 @@ enum AdminActionType {
   adjustCount, // 횟수 조정
   extendPeriod, // 기간 연장
   reenroll, // 재등록
-  approveExtension, // 연장 승인
-  rejectExtension, // 연장 거부
   cancel, // 취소
   memoUpdated, // 메모 업데이트
   other, // 기타

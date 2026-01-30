@@ -66,9 +66,10 @@ class MemberService {
       }
 
       // courseEnrollments에서 courseIds 추출
-      final courseIds = courseEnrollments != null
-          ? courseEnrollments.map((e) => e['courseId'] as String).toList()
-          : <String>[];
+      final courseIds =
+          courseEnrollments != null
+              ? courseEnrollments.map((e) => e['courseId'] as String).toList()
+              : <String>[];
 
       debugPrint(
         '🔥 [MemberService] courseIds: $courseIds (개수: ${courseIds.length})',
@@ -262,6 +263,8 @@ class MemberService {
             courseEnrollmentsList.add({
               'courseId': courseId,
               'totalReservations': totalReservations,
+              'remainingReservations':
+                  totalReservations, // 초기값은 totalReservations와 동일
               'validFrom': validFrom.toIso8601String(),
               'validUntil': validUntil.toIso8601String(),
             });
@@ -479,30 +482,76 @@ class MemberService {
       final authService = AuthService();
       final user = await authService.findUserByPhone(normalizedPhone);
 
-      if (user == null) {
-        debugPrint('❌ [MemberService] User를 찾을 수 없음');
+      if (user != null) {
+        debugPrint('✅ [MemberService] User 발견: ${user.userId}');
+
+        // 이름이 같으면 업데이트 불필요
+        if (user.name == newName) {
+          debugPrint('ℹ️ [MemberService] 이름이 동일하여 업데이트 불필요');
+          return user;
+        }
+
+        // 이름 업데이트
+        final updatedUser = user.copyWith(
+          name: newName,
+          updatedAt: TimezoneUtils.getSeoulDateTime(),
+        );
+
+        debugPrint('📝 [MemberService] User 업데이트 시작');
+        await _userService.updateUserDirect(updatedUser);
+        debugPrint('✅ [MemberService] User 업데이트 완료');
+
+        return updatedUser;
+      }
+
+      // User가 없으면 pending 멤버 확인
+      debugPrint('🔍 [MemberService] User 없음, pendingMembers 조회 시작');
+      final pendingQuery = _firestore
+          .collection('pendingMembers')
+          .where('phoneNumber', isEqualTo: normalizedPhone);
+      final pendingSnapshot = await pendingQuery.get();
+
+      if (pendingSnapshot.docs.isEmpty) {
+        debugPrint('❌ [MemberService] User와 pendingMembers 모두 찾을 수 없음');
         return null;
       }
 
-      debugPrint('✅ [MemberService] User 발견: ${user.userId}');
-
-      // 이름이 같으면 업데이트 불필요
-      if (user.name == newName) {
-        debugPrint('ℹ️ [MemberService] 이름이 동일하여 업데이트 불필요');
-        return user;
+      // pending 멤버 이름 업데이트 (여러 플레이스에 있을 수 있으므로 모두 업데이트)
+      debugPrint(
+        '✅ [MemberService] pendingMembers 발견: ${pendingSnapshot.docs.length}개',
+      );
+      final batch = _firestore.batch();
+      for (final doc in pendingSnapshot.docs) {
+        final data = doc.data();
+        final currentName = data['name'] as String? ?? '';
+        if (currentName != newName) {
+          batch.update(doc.reference, {
+            'name': newName,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+          debugPrint(
+            '📝 [MemberService] pendingMembers 업데이트: ${doc.id} ($currentName -> $newName)',
+          );
+        }
       }
+      await batch.commit();
+      debugPrint('✅ [MemberService] pendingMembers 업데이트 완료');
 
-      // 이름 업데이트
-      final updatedUser = user.copyWith(
+      // User 객체로 변환하여 반환 (첫 번째 pending 멤버 기준)
+      final firstPending = pendingSnapshot.docs.first.data();
+      return User(
+        userId: 'pending_${pendingSnapshot.docs.first.id}',
         name: newName,
+        phoneNumber: normalizedPhone,
+        placeIds: [firstPending['placeId'] as String? ?? ''],
+        enrollments: const [],
+        reservations: const [],
+        notificationsEnabled: false,
+        createdAt:
+            (firstPending['createdAt'] as Timestamp?)?.toDate() ??
+            TimezoneUtils.getSeoulDateTime(),
         updatedAt: TimezoneUtils.getSeoulDateTime(),
       );
-
-      debugPrint('📝 [MemberService] User 업데이트 시작');
-      await _userService.updateUserDirect(updatedUser);
-      debugPrint('✅ [MemberService] User 업데이트 완료');
-
-      return updatedUser;
     } catch (e) {
       debugPrint('❌ [MemberService] 멤버 이름 업데이트 실패: $e');
       return null;
@@ -602,23 +651,26 @@ class MemberService {
 
       // 코스 등록 업데이트
       final now = TimezoneUtils.getSeoulDateTime();
-      final currentEnrolledCourseIds = updatedUser.enrollments
-          .where((e) => e.isValid && e.placeId == placeId)
-          .map((e) => e.courseId)
-          .toSet();
+      final currentEnrolledCourseIds =
+          updatedUser.enrollments
+              .where((e) => e.isValid && e.placeId == placeId)
+              .map((e) => e.courseId)
+              .toSet();
 
       debugPrint('📋 [MemberService] 현재 등록된 코스: $currentEnrolledCourseIds');
       debugPrint('📋 [MemberService] 선택된 코스: $selectedCourseIds');
 
       // 추가할 코스들
-      final coursesToAdd = selectedCourseIds
-          .where((courseId) => !currentEnrolledCourseIds.contains(courseId))
-          .toList();
+      final coursesToAdd =
+          selectedCourseIds
+              .where((courseId) => !currentEnrolledCourseIds.contains(courseId))
+              .toList();
 
       // 제거할 코스들
-      final coursesToRemove = currentEnrolledCourseIds
-          .where((courseId) => !selectedCourseIds.contains(courseId))
-          .toList();
+      final coursesToRemove =
+          currentEnrolledCourseIds
+              .where((courseId) => !selectedCourseIds.contains(courseId))
+              .toList();
 
       debugPrint('➕ [MemberService] 추가할 코스: $coursesToAdd');
       debugPrint('➖ [MemberService] 제거할 코스: $coursesToRemove');
@@ -713,14 +765,16 @@ class MemberService {
 
                   // Timestamp를 DateTime으로 변환
                   if (data['createdAt'] != null) {
-                    data['createdAt'] = _timestampToDateTime(
-                      data['createdAt'],
-                    ).toIso8601String();
+                    data['createdAt'] =
+                        _timestampToDateTime(
+                          data['createdAt'],
+                        ).toIso8601String();
                   }
                   if (data['updatedAt'] != null) {
-                    data['updatedAt'] = _timestampToDateTime(
-                      data['updatedAt'],
-                    ).toIso8601String();
+                    data['updatedAt'] =
+                        _timestampToDateTime(
+                          data['updatedAt'],
+                        ).toIso8601String();
                   }
 
                   // createdBy가 null이면 빈 문자열로 설정 (기본값)
@@ -776,9 +830,10 @@ class MemberService {
 
         List<Map<String, dynamic>> courseEnrollments;
         if (rawCourseEnrollments is List && rawCourseEnrollments.isNotEmpty) {
-          courseEnrollments = rawCourseEnrollments
-              .map((e) => Map<String, dynamic>.from(e as Map))
-              .toList();
+          courseEnrollments =
+              rawCourseEnrollments
+                  .map((e) => Map<String, dynamic>.from(e as Map))
+                  .toList();
         } else {
           // courseEnrollments가 없으면 현재 코스만 생성
           courseEnrollments = [
@@ -789,12 +844,25 @@ class MemberService {
         final idx = courseEnrollments.indexWhere(
           (e) => e['courseId']?.toString() == courseId,
         );
-        final Map<String, dynamic> current = idx >= 0
-            ? courseEnrollments[idx]
-            : <String, dynamic>{'courseId': courseId};
+        final Map<String, dynamic> current =
+            idx >= 0
+                ? courseEnrollments[idx]
+                : <String, dynamic>{'courseId': courseId};
 
         if (totalReservations != null) {
           current['totalReservations'] = totalReservations;
+          // 기존 데이터에 remainingReservations가 없거나, total이 변경된 경우 안전하게 보정
+          final currentRemainingRaw = current['remainingReservations'];
+          final currentRemaining =
+              currentRemainingRaw is int
+                  ? currentRemainingRaw
+                  : (currentRemainingRaw is num
+                      ? currentRemainingRaw.toInt()
+                      : int.tryParse('$currentRemainingRaw'));
+          if (currentRemaining == null ||
+              currentRemaining > totalReservations) {
+            current['remainingReservations'] = totalReservations;
+          }
         }
         if (validFrom != null) {
           current['validFrom'] = validFrom.toIso8601String();
@@ -866,9 +934,10 @@ class MemberService {
           final rawCourseEnrollments = data['courseEnrollments'];
           List<Map<String, dynamic>>? courseEnrollments;
           if (rawCourseEnrollments is List) {
-            courseEnrollments = rawCourseEnrollments
-                .map((e) => Map<String, dynamic>.from(e as Map))
-                .toList();
+            courseEnrollments =
+                rawCourseEnrollments
+                    .map((e) => Map<String, dynamic>.from(e as Map))
+                    .toList();
 
             // courseEnrollments에서 해당 코스 제거
             final beforeCount = courseEnrollments.length;
@@ -958,9 +1027,10 @@ class MemberService {
 
           List<Map<String, dynamic>>? courseEnrollments;
           if (rawCourseEnrollments is List) {
-            courseEnrollments = rawCourseEnrollments
-                .map((e) => Map<String, dynamic>.from(e as Map))
-                .toList();
+            courseEnrollments =
+                rawCourseEnrollments
+                    .map((e) => Map<String, dynamic>.from(e as Map))
+                    .toList();
             final beforeCount = courseEnrollments.length;
             courseEnrollments.removeWhere(
               (e) => e['courseId']?.toString() == courseId,
@@ -1089,19 +1159,16 @@ class MemberService {
             final data = doc.data();
             // Timestamp 변환
             if (data['requestedAt'] != null) {
-              data['requestedAt'] = _timestampToDateTime(
-                data['requestedAt'],
-              ).toIso8601String();
+              data['requestedAt'] =
+                  _timestampToDateTime(data['requestedAt']).toIso8601String();
             }
             if (data['approvedAt'] != null) {
-              data['approvedAt'] = _timestampToDateTime(
-                data['approvedAt'],
-              ).toIso8601String();
+              data['approvedAt'] =
+                  _timestampToDateTime(data['approvedAt']).toIso8601String();
             }
             if (data['rejectedAt'] != null) {
-              data['rejectedAt'] = _timestampToDateTime(
-                data['rejectedAt'],
-              ).toIso8601String();
+              data['rejectedAt'] =
+                  _timestampToDateTime(data['rejectedAt']).toIso8601String();
             }
             return PlaceMembership.fromJson(data);
           }).toList();

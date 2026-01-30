@@ -15,6 +15,7 @@ import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
 import '../utils/snackbar_util.dart';
 import '../widgets/cached_image_widget.dart' show PlaceImageWidget;
+import '../widgets/place_image_detail_screen.dart';
 
 /// 플레이스 정보 및 전환 위젯 (공통)
 class PlaceSwitchWidget extends StatefulWidget {
@@ -31,12 +32,16 @@ class PlaceSwitchWidget extends StatefulWidget {
   /// 알림 아이콘 표시 여부 (홈 화면에서 사용)
   final bool showNotificationIcon;
 
+  /// Hero 태그 고유성을 위한 접미사 (여러 화면에서 사용 시 중복 방지)
+  final String? heroTagSuffix;
+
   const PlaceSwitchWidget({
     super.key,
     this.padding,
     this.enabled = true,
     this.showDescription = false,
     this.showNotificationIcon = false,
+    this.heroTagSuffix,
   });
 
   @override
@@ -142,87 +147,142 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
       child: Column(
         children: [
           // 플레이스 정보 (클릭 가능)
-          InkWell(
-            onTap: canSwitch
-                ? () {
+          Row(
+            children: [
+              // 플레이스 이미지와 이름 (이미지 상세 보기용)
+              Expanded(
+                child: InkWell(
+                  onTap: () {
+                    // 이미지 상세 화면 표시
+                    final heroTag =
+                        widget.heroTagSuffix != null
+                            ? 'place_image_${currentPlace.id}_${widget.heroTagSuffix}'
+                            : 'place_image_${currentPlace.id}_${widget.key?.hashCode ?? hashCode}';
+                    Navigator.of(context).push(
+                      PageRouteBuilder(
+                        pageBuilder:
+                            (context, animation, secondaryAnimation) =>
+                                PlaceImageDetailScreen(
+                                  imageUrl: currentPlace.imageUrl,
+                                  placeName: currentPlace.name,
+                                  heroTag: heroTag,
+                                ),
+                        transitionDuration: const Duration(milliseconds: 300),
+                        reverseTransitionDuration: const Duration(
+                          milliseconds: 300,
+                        ),
+                        opaque: false,
+                        transitionsBuilder: (
+                          context,
+                          animation,
+                          secondaryAnimation,
+                          child,
+                        ) {
+                          return FadeTransition(
+                            opacity: animation,
+                            child: child,
+                          );
+                        },
+                      ),
+                    );
+                  },
+                  borderRadius: BorderRadius.circular(16),
+                  splashColor: Colors.transparent,
+                  highlightColor: Colors.transparent,
+                  child: Row(
+                    children: [
+                      // 플레이스 이미지 (Hero 태그)
+                      Hero(
+                        tag:
+                            widget.heroTagSuffix != null
+                                ? 'place_image_${currentPlace.id}_${widget.heroTagSuffix}'
+                                : 'place_image_${currentPlace.id}_${widget.key?.hashCode ?? hashCode}',
+                        child: PlaceImageWidget(
+                          imageUrl: currentPlace.imageUrl,
+                          width: 50,
+                          height: 50,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      // 플레이스 이름
+                      Expanded(
+                        child: Builder(
+                          builder: (context) {
+                            // description이 있는지 확인
+                            final descriptionText =
+                                widget.showDescription
+                                    ? (currentPlace.description ??
+                                            currentPlace.location ??
+                                            '')
+                                        .trim()
+                                    : '';
+                            final hasDescription = descriptionText.isNotEmpty;
+
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  currentPlace.name,
+                                  style: TextStyle(
+                                    // showDescription이 true이고 description이 없을 때는 크게 (20)
+                                    // showDescription이 true이고 description이 있을 때는 중간 (18)
+                                    // showDescription이 false일 때는 작게 (16)
+                                    fontSize:
+                                        widget.showDescription
+                                            ? (hasDescription ? 18 : 20)
+                                            : 20,
+                                    fontWeight: FontWeight.bold,
+                                    color: AppColors.textPrimary,
+                                    letterSpacing: -0.5,
+                                  ),
+                                ),
+                                // showDescription이 true이고 description이 있을 때만 표시
+                                if (widget.showDescription &&
+                                    hasDescription) ...[
+                                  Text(
+                                    descriptionText,
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: AppColors.textSecondary,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ],
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              // 토글 모드일 때만 화살표 표시 (별도 클릭 영역)
+              if (widget.enabled && hasMultiplePlaces)
+                InkWell(
+                  onTap: () {
                     setState(() {
                       _isExpanded = !_isExpanded;
                     });
-                  }
-                : null,
-            borderRadius: BorderRadius.circular(16),
-            splashColor: Colors.transparent,
-            highlightColor: Colors.transparent,
-            child: Row(
-              children: [
-                // 플레이스 이미지
-                PlaceImageWidget(
-                  imageUrl: currentPlace.imageUrl,
-                  width: 50,
-                  height: 50,
+                  },
                   borderRadius: BorderRadius.circular(16),
-                ),
-                const SizedBox(width: 16),
-                // 플레이스 이름
-                Expanded(
-                  child: Builder(
-                    builder: (context) {
-                      // description이 있는지 확인
-                      final descriptionText = widget.showDescription
-                          ? (currentPlace.description ??
-                                    currentPlace.location ??
-                                    '')
-                                .trim()
-                          : '';
-                      final hasDescription = descriptionText.isNotEmpty;
-
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            currentPlace.name,
-                            style: TextStyle(
-                              // showDescription이 true이고 description이 없을 때는 크게 (20)
-                              // showDescription이 true이고 description이 있을 때는 중간 (18)
-                              // showDescription이 false일 때는 작게 (16)
-                              fontSize: widget.showDescription
-                                  ? (hasDescription ? 18 : 20)
-                                  : 20,
-                              fontWeight: FontWeight.bold,
-                              color: AppColors.textPrimary,
-                              letterSpacing: -0.5,
-                            ),
-                          ),
-                          // showDescription이 true이고 description이 있을 때만 표시
-                          if (widget.showDescription && hasDescription) ...[
-                            Text(
-                              descriptionText,
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: AppColors.textSecondary,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ],
-                        ],
-                      );
-                    },
-                  ),
-                ),
-
-                // 토글 모드일 때만 화살표 표시
-                if (widget.enabled && hasMultiplePlaces)
-                  Icon(
-                    _isExpanded
-                        ? Icons
+                  splashColor: Colors.transparent,
+                  highlightColor: Colors.transparent,
+                  child: Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: Icon(
+                      _isExpanded
+                          ? Icons
                               .keyboard_arrow_up // 펼쳐졌을 때: 위로 닫기 화살표
-                        : Icons.keyboard_arrow_down, // 접혔을 때: 아래로 펼치기 화살표
-                    color: AppColors.textSecondary,
-                    size: 28,
+                          : Icons.keyboard_arrow_down, // 접혔을 때: 아래로 펼치기 화살표
+                      color: AppColors.textSecondary,
+                      size: 28,
+                    ),
                   ),
-              ],
-            ),
+                ),
+            ],
           ),
 
           // 플레이스 리스트 (펼쳐질 때)
@@ -230,170 +290,210 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
             AnimatedSize(
               duration: const Duration(milliseconds: 250),
               curve: Curves.easeInOut,
-              child: _isExpanded
-                  ? Column(
-                      children: [
-                        const SizedBox(height: 12),
-                        FutureBuilder<List<Place>>(
-                          future: _loadPlaces(uniquePlaceIds),
-                          builder: (context, snapshot) {
-                            if (snapshot.connectionState ==
-                                ConnectionState.waiting) {
-                              return const Padding(
-                                padding: EdgeInsets.all(16),
-                                child: Center(
-                                  child: CircularProgressIndicator(
-                                    color: AppColors.primaryGreen,
+              child:
+                  _isExpanded
+                      ? Column(
+                        children: [
+                          const SizedBox(height: 12),
+                          FutureBuilder<List<Place>>(
+                            future: _loadPlaces(uniquePlaceIds),
+                            builder: (context, snapshot) {
+                              if (snapshot.connectionState ==
+                                  ConnectionState.waiting) {
+                                return const Padding(
+                                  padding: EdgeInsets.all(16),
+                                  child: Center(
+                                    child: CircularProgressIndicator(
+                                      color: AppColors.primaryGreen,
+                                    ),
                                   ),
-                                ),
-                              );
-                            }
+                                );
+                              }
 
-                            if (snapshot.hasError || !snapshot.hasData) {
-                              return const SizedBox.shrink();
-                            }
+                              if (snapshot.hasError || !snapshot.hasData) {
+                                return const SizedBox.shrink();
+                              }
 
-                            final places = snapshot.data!;
-                            final placeMap = {for (final p in places) p.id: p};
-                            final inAdminMode =
-                                authProvider.currentAdmin != null;
+                              final places = snapshot.data!;
+                              final placeMap = {
+                                for (final p in places) p.id: p,
+                              };
+                              final inAdminMode =
+                                  authProvider.currentAdmin != null;
 
-                            return Column(
-                              children: accessEntries.map((entry) {
-                                final place = placeMap[entry.placeId];
-                                if (place == null)
-                                  return const SizedBox.shrink();
+                              return Column(
+                                children:
+                                    accessEntries.map((entry) {
+                                      final place = placeMap[entry.placeId];
+                                      if (place == null)
+                                        return const SizedBox.shrink();
 
-                                final isCurrentEntry =
-                                    place.id == currentPlaceId &&
-                                    entry.isAdmin == inAdminMode;
+                                      final isCurrentEntry =
+                                          place.id == currentPlaceId &&
+                                          entry.isAdmin == inAdminMode;
 
-                                return Padding(
-                                  padding: const EdgeInsets.only(bottom: 6),
-                                  child: Material(
-                                    color: Colors.transparent,
-                                    child: InkWell(
-                                      onTap: isCurrentEntry || _isSwitching
-                                          ? null
-                                          : () => _switchPlace(
-                                              place,
-                                              entry.isAdmin,
+                                      return Padding(
+                                        padding: const EdgeInsets.only(
+                                          bottom: 6,
+                                        ),
+                                        child: Material(
+                                          color: Colors.transparent,
+                                          child: InkWell(
+                                            onTap:
+                                                isCurrentEntry || _isSwitching
+                                                    ? null
+                                                    : () => _switchPlace(
+                                                      place,
+                                                      entry.isAdmin,
+                                                    ),
+                                            borderRadius: BorderRadius.circular(
+                                              16,
                                             ),
-                                      borderRadius: BorderRadius.circular(16),
-                                      splashColor: AppColors.primaryGreen
-                                          .withOpacity(0.1),
-                                      highlightColor: AppColors.primaryGreen
-                                          .withOpacity(0.05),
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 20,
-                                          vertical: 16,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: isCurrentEntry
-                                              ? Colors.black
-                                              : AppColors.backgroundWhite
-                                                    .withOpacity(0.6),
-                                          borderRadius: BorderRadius.circular(
-                                            16,
-                                          ),
-                                          boxShadow: isCurrentEntry
-                                              ? [
-                                                  BoxShadow(
-                                                    color: Colors.black
-                                                        .withOpacity(0.15),
-                                                    blurRadius: 8,
-                                                    offset: const Offset(0, 2),
+                                            splashColor: AppColors.primaryGreen
+                                                .withOpacity(0.1),
+                                            highlightColor: AppColors
+                                                .primaryGreen
+                                                .withOpacity(0.05),
+                                            child: Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 20,
+                                                    vertical: 16,
                                                   ),
-                                                ]
-                                              : [
-                                                  BoxShadow(
-                                                    color: Colors.black
-                                                        .withOpacity(0.04),
-                                                    blurRadius: 4,
-                                                    offset: const Offset(0, 1),
-                                                  ),
-                                                ],
-                                        ),
-                                        child: Row(
-                                          children: [
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
+                                              decoration: BoxDecoration(
+                                                color:
+                                                    isCurrentEntry
+                                                        ? Colors.black
+                                                        : AppColors
+                                                            .backgroundWhite
+                                                            .withOpacity(0.6),
+                                                borderRadius:
+                                                    BorderRadius.circular(16),
+                                                boxShadow:
+                                                    isCurrentEntry
+                                                        ? [
+                                                          BoxShadow(
+                                                            color: Colors.black
+                                                                .withOpacity(
+                                                                  0.15,
+                                                                ),
+                                                            blurRadius: 8,
+                                                            offset:
+                                                                const Offset(
+                                                                  0,
+                                                                  2,
+                                                                ),
+                                                          ),
+                                                        ]
+                                                        : [
+                                                          BoxShadow(
+                                                            color: Colors.black
+                                                                .withOpacity(
+                                                                  0.04,
+                                                                ),
+                                                            blurRadius: 4,
+                                                            offset:
+                                                                const Offset(
+                                                                  0,
+                                                                  1,
+                                                                ),
+                                                          ),
+                                                        ],
+                                              ),
+                                              child: Row(
                                                 children: [
-                                                  Text(
-                                                    place.name,
-                                                    style: TextStyle(
-                                                      fontSize: 18,
-                                                      fontWeight: isCurrentEntry
-                                                          ? FontWeight.w700
-                                                          : FontWeight.w600,
-                                                      color: isCurrentEntry
-                                                          ? Colors.white
-                                                          : AppColors
-                                                                .textPrimary,
-                                                      letterSpacing: -0.3,
+                                                  Expanded(
+                                                    child: Column(
+                                                      crossAxisAlignment:
+                                                          CrossAxisAlignment
+                                                              .start,
+                                                      children: [
+                                                        Text(
+                                                          place.name,
+                                                          style: TextStyle(
+                                                            fontSize: 18,
+                                                            fontWeight:
+                                                                isCurrentEntry
+                                                                    ? FontWeight
+                                                                        .w700
+                                                                    : FontWeight
+                                                                        .w600,
+                                                            color:
+                                                                isCurrentEntry
+                                                                    ? Colors
+                                                                        .white
+                                                                    : AppColors
+                                                                        .textPrimary,
+                                                            letterSpacing: -0.3,
+                                                          ),
+                                                        ),
+
+                                                        if (entry.isAdmin)
+                                                          Text(
+                                                            '관리자',
+                                                            style: TextStyle(
+                                                              fontSize: 15,
+                                                              color:
+                                                                  isCurrentEntry
+                                                                      ? Colors
+                                                                          .white
+                                                                          .withOpacity(
+                                                                            0.7,
+                                                                          )
+                                                                      : AppColors
+                                                                          .textSecondary,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w500,
+                                                              letterSpacing:
+                                                                  -0.2,
+                                                            ),
+                                                          ),
+                                                      ],
                                                     ),
                                                   ),
+                                                  if (isCurrentEntry)
+                                                    Container(
+                                                      padding:
+                                                          const EdgeInsets.all(
+                                                            4,
+                                                          ),
 
-                                                  if (entry.isAdmin)
-                                                    Text(
-                                                      '관리자',
-                                                      style: TextStyle(
-                                                        fontSize: 15,
-                                                        color: isCurrentEntry
-                                                            ? Colors.white
-                                                                  .withOpacity(
-                                                                    0.7,
-                                                                  )
-                                                            : AppColors
-                                                                  .textSecondary,
-                                                        fontWeight:
-                                                            FontWeight.w500,
-                                                        letterSpacing: -0.2,
+                                                      child: Icon(
+                                                        Icons.check,
+                                                        color: Colors.white,
+                                                        size: 20,
+                                                      ),
+                                                    ),
+                                                  if (_isSwitching &&
+                                                      !isCurrentEntry)
+                                                    SizedBox(
+                                                      width: 18,
+                                                      height: 18,
+                                                      child: CircularProgressIndicator(
+                                                        strokeWidth: 2,
+                                                        valueColor:
+                                                            AlwaysStoppedAnimation<
+                                                              Color
+                                                            >(
+                                                              AppColors
+                                                                  .primaryGreen,
+                                                            ),
                                                       ),
                                                     ),
                                                 ],
                                               ),
                                             ),
-                                            if (isCurrentEntry)
-                                              Container(
-                                                padding: const EdgeInsets.all(
-                                                  4,
-                                                ),
-
-                                                child: Icon(
-                                                  Icons.check,
-                                                  color: Colors.white,
-                                                  size: 20,
-                                                ),
-                                              ),
-                                            if (_isSwitching && !isCurrentEntry)
-                                              SizedBox(
-                                                width: 18,
-                                                height: 18,
-                                                child: CircularProgressIndicator(
-                                                  strokeWidth: 2,
-                                                  valueColor:
-                                                      AlwaysStoppedAnimation<
-                                                        Color
-                                                      >(AppColors.primaryGreen),
-                                                ),
-                                              ),
-                                          ],
+                                          ),
                                         ),
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              }).toList(),
-                            );
-                          },
-                        ),
-                      ],
-                    )
-                  : const SizedBox.shrink(),
+                                      );
+                                    }).toList(),
+                              );
+                            },
+                          ),
+                        ],
+                      )
+                      : const SizedBox.shrink(),
             ),
         ],
       ),

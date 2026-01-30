@@ -16,8 +16,6 @@ import '../providers/story_provider.dart';
 import '../services/firestore_service.dart';
 import '../services/member_service.dart';
 import '../services/auth_service.dart';
-import '../utils/timezone_utils.dart';
-import '../widgets/invitation_request_bottom_sheet.dart';
 import '../widgets/common_dialog.dart';
 import '../widgets/cached_image_widget.dart';
 import '../constants/app_constants.dart';
@@ -99,8 +97,8 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
   /// 사용자 초기화
   Future<void> _initializeUser() async {
     try {
-      _requireManualEntrySelection = await _authService
-          .requiresManualEntrySelection();
+      _requireManualEntrySelection =
+          await _authService.requiresManualEntrySelection();
 
       // Firebase Auth에서 현재 사용자 확인
       final firebaseUser = _authService.currentFirebaseUser;
@@ -131,9 +129,10 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
 
       // AuthProvider에 없으면 findUserByPhone 시도
       if (user == null) {
-        String phoneNumber = widget.phoneNumber.isNotEmpty
-            ? widget.phoneNumber
-            : (firebaseUser.phoneNumber ?? '');
+        String phoneNumber =
+            widget.phoneNumber.isNotEmpty
+                ? widget.phoneNumber
+                : (firebaseUser.phoneNumber ?? '');
 
         // ✅ AuthService의 _normalizePhoneNumber와 동일한 정규화 적용
         // (Firestore에 저장된 형식과 일치해야 함)
@@ -172,9 +171,10 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
           // ✅ Main 진입 시 enrollments/reservations 로드를 위해 currentUser 보장
           String? fallbackPhone;
           try {
-            fallbackPhone = widget.phoneNumber.isNotEmpty
-                ? widget.phoneNumber
-                : (firebaseUser.phoneNumber ?? '');
+            fallbackPhone =
+                widget.phoneNumber.isNotEmpty
+                    ? widget.phoneNumber
+                    : (firebaseUser.phoneNumber ?? '');
             fallbackPhone = fallbackPhone.replaceAll(RegExp(r'[^\d+]'), '');
             if (fallbackPhone.startsWith('+82')) {
               fallbackPhone = '0${fallbackPhone.substring(3)}';
@@ -261,10 +261,11 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
           final placesMap = <String, Place>{};
 
           // 이미 로드된 플레이스는 재사용
-          final placeIdsToLoad = approvedMemberships
-              .map((m) => m.placeId)
-              .where((placeId) => !_placesMap.containsKey(placeId))
-              .toList();
+          final placeIdsToLoad =
+              approvedMemberships
+                  .map((m) => m.placeId)
+                  .where((placeId) => !_placesMap.containsKey(placeId))
+                  .toList();
 
           // 배치로 플레이스 로드 (병렬 처리)
           if (placeIdsToLoad.isNotEmpty) {
@@ -454,17 +455,19 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
   Future<void> _precacheAllStoryImages(StoryProvider storyProvider) async {
     try {
       // 일반 이미지 URL 수집
-      final imageUrls = <String>{
-        for (final story in storyProvider.stories) ...story.imageUrls,
-      }.where((u) => u.trim().isNotEmpty).toList();
+      final imageUrls =
+          <String>{
+            for (final story in storyProvider.stories) ...story.imageUrls,
+          }.where((u) => u.trim().isNotEmpty).toList();
 
       // 배경 이미지 URL 수집
-      final backgroundImageUrls = <String>{
-        for (final story in storyProvider.stories)
-          if (story.backgroundImageUrl != null &&
-              story.backgroundImageUrl!.isNotEmpty)
-            story.backgroundImageUrl!,
-      }.where((u) => u.trim().isNotEmpty).toList();
+      final backgroundImageUrls =
+          <String>{
+            for (final story in storyProvider.stories)
+              if (story.backgroundImageUrl != null &&
+                  story.backgroundImageUrl!.isNotEmpty)
+                story.backgroundImageUrl!,
+          }.where((u) => u.trim().isNotEmpty).toList();
 
       final allUrls = [...imageUrls, ...backgroundImageUrls];
 
@@ -580,60 +583,16 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
               ],
             ),
             body: SafeArea(
-              child: _isLoading
-                  ? const Center(
-                      child: CircularProgressIndicator(
-                        color: AppColors.primaryGreen,
-                      ),
-                    )
-                  : _buildContent(),
-            ),
-            bottomNavigationBar: _buildBottomButtons(),
-          ),
-          if (_isEnteringPlace)
-            Positioned.fill(
-              child: Container(
-                color: AppColors.backgroundWhite,
-                child: Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 96,
-                        height: 96,
-                        decoration: BoxDecoration(
-                          color: AppColors.primaryGreen,
-                          borderRadius: BorderRadius.circular(24),
-                          boxShadow: [
-                            BoxShadow(
-                              color: AppColors.primaryGreen.withOpacity(0.25),
-                              blurRadius: 20,
-                              spreadRadius: 4,
-                            ),
-                          ],
-                        ),
-                        child: const Icon(
-                          Icons.train,
-                          size: 48,
-                          color: Colors.white,
-                        ),
-                      ),
-                      const SizedBox(height: 28),
-                      SizedBox(
-                        width: 40,
-                        height: 40,
+              child:
+                  _isLoading
+                      ? const Center(
                         child: CircularProgressIndicator(
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            AppColors.primaryGreen,
-                          ),
-                          strokeWidth: 3,
+                          color: AppColors.primaryGreen,
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+                      )
+                      : _buildContent(),
             ),
+          ),
         ],
       ),
     );
@@ -763,101 +722,6 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
         ),
       ),
     );
-  }
-
-  /// 바텀 버튼들 (로그아웃, 초대요청)
-  Widget _buildBottomButtons() {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(24, 4, 24, 12),
-      child: SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // 초대요청 버튼
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: _onRequestInvitation,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primaryGreen,
-                  foregroundColor: Colors.white,
-                  disabledBackgroundColor: AppColors.borderLight,
-                  disabledForegroundColor: AppColors.textLight,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(18),
-                  ),
-                  elevation: 0,
-                ),
-                child: const Text(
-                  '초대요청 보내기',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// 초대요청 보내기
-  Future<void> _onRequestInvitation() async {
-    if (_userId == null) {
-      // 사용자가 없으면 전화번호로 사용자 생성 또는 찾기
-      await _createOrFindUser();
-      return;
-    }
-    InvitationRequestBottomSheet.show(context: context, userId: _userId!);
-  }
-
-  /// 사용자 생성 또는 찾기
-  Future<void> _createOrFindUser() async {
-    try {
-      // 전화번호로 사용자 찾기
-      var user = await _authService.findUserByPhone(widget.phoneNumber);
-
-      User finalUser;
-      if (user == null) {
-        // 사용자가 없으면 생성 (임시 userId 사용)
-        // TODO: 실제로는 인증 완료 시점에 사용자가 생성되어야 함
-        final tempUserId =
-            'user_${widget.phoneNumber.replaceAll(RegExp(r'[^\d]'), '')}';
-        final userService = UserService();
-        finalUser = await userService.createUserFromModel(
-          User(
-            userId: tempUserId,
-            name: '사용자',
-            phoneNumber: widget.phoneNumber,
-            createdAt: TimezoneUtils.getSeoulDateTime(),
-          ),
-        );
-      } else {
-        finalUser = user;
-      }
-
-      setState(() {
-        _userId = finalUser.userId;
-      });
-
-      // 멤버십 구독 시작
-      _startMembershipSubscription();
-
-      // 바텀시트 열기
-      if (mounted) {
-        InvitationRequestBottomSheet.show(
-          context: context,
-          userId: finalUser.userId,
-        );
-      }
-    } catch (e) {
-      // 에러 처리
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('사용자 정보를 불러올 수 없습니다: $e')));
-      }
-    }
   }
 
   /// 관리자 로그인 처리

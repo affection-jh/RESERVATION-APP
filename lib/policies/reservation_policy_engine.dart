@@ -196,9 +196,11 @@ class ReservationPolicyEngine {
         if (s == null) return null;
 
         final weekStart = _startOfWeekMonday(dateOnly);
-        final openWeekStart = weekStart.subtract(
-          Duration(days: 7 * s.weeksAhead),
-        );
+        // weeksAhead 의미(정책 UI와 일치):
+        // - weeksAhead=1: 이번주만 오픈 (해당 주의 releaseDay/releaseTime에 오픈)
+        // - weeksAhead=2: 이번주+다음주 오픈 (다음 주는 이번주의 releaseDay/releaseTime에 오픈)
+        final backWeeks = (s.weeksAhead - 1).clamp(0, 520);
+        final openWeekStart = weekStart.subtract(Duration(days: 7 * backWeeks));
         final parts = s.releaseTime.split(':');
         final h = int.tryParse(parts[0]) ?? 10;
         final m = int.tryParse(parts[1]) ?? 0;

@@ -8,11 +8,13 @@ import '../../providers/reservation_provider.dart';
 import '../../providers/enrollment_provider.dart';
 import '../../providers/place_provider.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/course_provider.dart';
 import '../../services/firestore_service.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/common_dialog.dart';
 import '../../utils/snackbar_util.dart';
 import '../../utils/navigator_key.dart';
+import '../../utils/timezone_utils.dart';
 
 /// 유저 예약 관리 바텀시트 (예약 취소/생성)
 class UserReservationManageBottomSheet extends StatefulWidget {
@@ -52,14 +54,15 @@ class UserReservationManageBottomSheet extends StatefulWidget {
       // 캘린더/리스트 UI에서 "진행 중" 표시로 피드백을 제공한다.
       isDismissible: true,
       enableDrag: true,
-      builder: (context) => UserReservationManageBottomSheet(
-        course: course,
-        session: session,
-        date: date,
-        reservation: reservation,
-        onReservationCancelled: onReservationCancelled,
-        onReservationCreated: onReservationCreated,
-      ),
+      builder:
+          (context) => UserReservationManageBottomSheet(
+            course: course,
+            session: session,
+            date: date,
+            reservation: reservation,
+            onReservationCancelled: onReservationCancelled,
+            onReservationCreated: onReservationCreated,
+          ),
     );
   }
 
@@ -79,6 +82,19 @@ class _UserReservationManageBottomSheetState
   void initState() {
     super.initState();
     _subscribeSessionReservation();
+    _ensurePolicyLoaded();
+  }
+
+  /// 정책이 없으면 로드
+  Future<void> _ensurePolicyLoaded() async {
+    final courseProvider = Provider.of<CourseProvider>(context, listen: false);
+    final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+    final placeId = placeProvider.currentPlace?.id;
+
+    if (placeId != null &&
+        courseProvider.getCoursePolicy(widget.course.id) == null) {
+      await courseProvider.loadCoursePolicy(widget.course.id, placeId);
+    }
   }
 
   @override
@@ -122,6 +138,58 @@ class _UserReservationManageBottomSheetState
     return '';
   }
 
+  /// 취소 가능 여부 체크 (정책 기반)
+  bool _canCancelReservation() {
+    if (widget.reservation == null) return false;
+
+    final courseProvider = Provider.of<CourseProvider>(context, listen: false);
+    final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+    final placeId = placeProvider.currentPlace?.id;
+
+    if (placeId == null) return false;
+
+    // 정책 가져오기 (없으면 기본값 60분 사용)
+    final policy = courseProvider.getCoursePolicy(widget.course.id);
+    final closeBeforeMinutes = policy?.closeBeforeMinutes ?? 60;
+
+    // 세션 시작 시간 계산
+    final now = TimezoneUtils.getSeoulDateTime();
+    final sessionStartTime = TimezoneUtils.combineDateAndTimeSeoul(
+      widget.date,
+      widget.session.startTime,
+    );
+
+    // 세션 시작 N분 전까지 취소 가능
+    final closeAt = sessionStartTime.subtract(
+      Duration(minutes: closeBeforeMinutes),
+    );
+
+    // 현재 시간이 마감 시간 이후면 취소 불가
+    return now.isBefore(closeAt);
+  }
+
+  /// 취소 불가 에러 메시지 생성
+  String _getCancellationErrorMessage() {
+    final courseProvider = Provider.of<CourseProvider>(context, listen: false);
+    final policy = courseProvider.getCoursePolicy(widget.course.id);
+    final closeBeforeMinutes = policy?.closeBeforeMinutes ?? 60;
+
+    // 시간 단위 계산
+    final hours = closeBeforeMinutes ~/ 60;
+    final minutes = closeBeforeMinutes % 60;
+
+    String timeText;
+    if (hours > 0 && minutes > 0) {
+      timeText = '${hours}시간 ${minutes}분';
+    } else if (hours > 0) {
+      timeText = '${hours}시간';
+    } else {
+      timeText = '${minutes}분';
+    }
+
+    return '시작 ${timeText} 전까지만 취소할 수 있어요';
+  }
+
   @override
   Widget build(BuildContext context) {
     final enrollmentProvider = Provider.of<EnrollmentProvider>(context);
@@ -135,6 +203,10 @@ class _UserReservationManageBottomSheetState
         widget.session.getCapacityForDate(widget.date);
     final reservedCount = _sessionReservation?.reservedCount ?? 0;
     final availableSeats = (totalSeats - reservedCount).clamp(0, totalSeats);
+
+    // 취소 가능 여부 체크
+    final canCancel =
+        widget.reservation != null ? _canCancelReservation() : false;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 0),
@@ -313,17 +385,25 @@ class _UserReservationManageBottomSheetState
                         ),
 
                         // 버튼들
-                        if (widget.reservation != null)
+                        if (widget.reservation != null) ...[
                           SizedBox(
                             width: double.infinity,
                             child: ElevatedButton(
-                              onPressed: _isSubmitting
-                                  ? null
-                                  : _cancelReservation,
+                              onPressed:
+                                  _isSubmitting || !canCancel
+                                      ? null
+                                      : _cancelReservation,
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: AppColors.textPrimary
-                                    .withOpacity(0.1),
-                                foregroundColor: AppColors.textPrimary,
+                                backgroundColor:
+                                    canCancel
+                                        ? AppColors.textPrimary.withOpacity(0.1)
+                                        : AppColors.textPrimary.withOpacity(
+                                          0.05,
+                                        ),
+                                foregroundColor:
+                                    canCancel
+                                        ? AppColors.textPrimary
+                                        : AppColors.textSecondary,
                                 padding: const EdgeInsets.symmetric(
                                   vertical: 18,
                                 ),
@@ -332,24 +412,41 @@ class _UserReservationManageBottomSheetState
                                 ),
                                 elevation: 0,
                               ),
-                              child: const Text(
-                                '예약 취소',
+                              child: Text(
+                                canCancel ? '예약 취소' : '취소 불가',
                                 style: TextStyle(
                                   fontSize: 16,
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
                             ),
-                          )
-                        else
+                          ),
+                          if (!canCancel) ...[
+                            const SizedBox(height: 8),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                              ),
+                              child: Text(
+                                _getCancellationErrorMessage(),
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: AppColors.textSecondary,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ] else
                           Row(
                             children: [
                               // 취소 버튼
                               Expanded(
                                 child: ElevatedButton(
-                                  onPressed: _isSubmitting
-                                      ? null
-                                      : () => Navigator.of(context).pop(),
+                                  onPressed:
+                                      _isSubmitting
+                                          ? null
+                                          : () => Navigator.of(context).pop(),
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: AppColors.backgroundWhite,
                                     foregroundColor: AppColors.textPrimary,
@@ -380,31 +477,32 @@ class _UserReservationManageBottomSheetState
                                 child: ElevatedButton(
                                   onPressed:
                                       availableSeats > 0 &&
-                                          remainingReservations > 0
-                                      ? () async {
-                                          if (_isSubmitting) return;
-                                          setState(() {
-                                            _isSubmitting = true;
-                                          });
-                                          final ok = await _createReservation();
-                                          if (!mounted) return;
-                                          if (ok) {
-                                            Navigator.of(context).pop();
-                                          } else {
+                                              remainingReservations > 0
+                                          ? () async {
+                                            if (_isSubmitting) return;
                                             setState(() {
-                                              _isSubmitting = false;
+                                              _isSubmitting = true;
                                             });
+                                            final ok =
+                                                await _createReservation();
+                                            if (!mounted) return;
+                                            if (ok) {
+                                              Navigator.of(context).pop();
+                                            } else {
+                                              setState(() {
+                                                _isSubmitting = false;
+                                              });
+                                            }
                                           }
-                                        }
-                                      : null,
+                                          : null,
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor:
                                         availableSeats > 0 &&
-                                            remainingReservations > 0
-                                        ? AppColors.textPrimary
-                                        : AppColors.textPrimary.withOpacity(
-                                            0.3,
-                                          ),
+                                                remainingReservations > 0
+                                            ? AppColors.textPrimary
+                                            : AppColors.textPrimary.withOpacity(
+                                              0.3,
+                                            ),
                                     foregroundColor: Colors.white,
                                     padding: const EdgeInsets.symmetric(
                                       vertical: 16,
@@ -414,25 +512,26 @@ class _UserReservationManageBottomSheetState
                                     ),
                                     elevation: 0,
                                   ),
-                                  child: _isSubmitting
-                                      ? const SizedBox(
-                                          width: 18,
-                                          height: 18,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                            valueColor:
-                                                AlwaysStoppedAnimation<Color>(
-                                                  AppColors.primaryGreen,
-                                                ),
+                                  child:
+                                      _isSubmitting
+                                          ? const SizedBox(
+                                            width: 18,
+                                            height: 18,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              valueColor:
+                                                  AlwaysStoppedAnimation<Color>(
+                                                    AppColors.primaryGreen,
+                                                  ),
+                                            ),
+                                          )
+                                          : const Text(
+                                            '예약하기',
+                                            style: TextStyle(
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.w600,
+                                            ),
                                           ),
-                                        )
-                                      : const Text(
-                                          '예약하기',
-                                          style: TextStyle(
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
                                 ),
                               ),
                             ],
@@ -523,6 +622,12 @@ class _UserReservationManageBottomSheetState
   Future<void> _cancelReservation() async {
     final reservation = widget.reservation;
     if (reservation == null) return;
+
+    // 취소 가능 여부 재확인
+    if (!_canCancelReservation()) {
+      SnackbarUtil.showError(context, _getCancellationErrorMessage());
+      return;
+    }
 
     final confirmed = await CommonDialog.show(
       context: context,

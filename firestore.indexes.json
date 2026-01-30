@@ -145,6 +145,24 @@
                     "order": "ASCENDING"
                 }
             ]
+        },
+        {
+            "collectionGroup": "dateCapacityOverrides",
+            "queryScope": "COLLECTION",
+            "fields": [
+                {
+                    "fieldPath": "placeId",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "courseId",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "date",
+                    "order": "ASCENDING"
+                }
+            ]
         }
     ],
     "fieldOverrides": []

@@ -41,7 +41,6 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
 
   // 공통
   int _closeBeforeMinutes = 60;
-  bool _allowAdminForceMoveWithinCourse = false;
   final TextEditingController _closeBeforeHoursController =
       TextEditingController();
 
@@ -62,9 +61,8 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
   void initState() {
     super.initState();
     _windowDaysController.text = _windowDays.toString();
-    _closeBeforeHoursController.text = (_closeBeforeMinutes / 60)
-        .round()
-        .toString();
+    _closeBeforeHoursController.text =
+        (_closeBeforeMinutes / 60).round().toString();
     _load();
   }
 
@@ -77,10 +75,8 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
 
   Future<void> _load() async {
     setState(() => _isLoading = true);
-    final placeId = Provider.of<PlaceProvider>(
-      context,
-      listen: false,
-    ).currentPlace?.id;
+    final placeId =
+        Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
     if (placeId == null) {
       setState(() => _isLoading = false);
       return;
@@ -95,10 +91,8 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
 
       _type = policy.openStrategy.type;
       _closeBeforeMinutes = policy.closeBeforeMinutes;
-      _allowAdminForceMoveWithinCourse = policy.allowAdminForceMoveWithinCourse;
-      _closeBeforeHoursController.text = (_closeBeforeMinutes / 60)
-          .round()
-          .toString();
+      _closeBeforeHoursController.text =
+          (_closeBeforeMinutes / 60).round().toString();
 
       _windowDays = policy.openStrategy.rollingWindow?.windowDays ?? 21;
       _windowDaysController.text = _windowDays.toString();
@@ -119,7 +113,6 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
       _type = BookingOpenStrategyType.rollingWindow;
       _closeBeforeMinutes = 60;
       _closeBeforeHoursController.text = '1';
-      _allowAdminForceMoveWithinCourse = false;
       _windowDays = 21;
       _windowDaysController.text = '21';
       _releaseDayOfWeek = 1;
@@ -145,10 +138,6 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
     if (original == null) return true;
     if (_type != original.openStrategy.type) return true;
     if (_closeBeforeMinutes != original.closeBeforeMinutes) return true;
-    if (_allowAdminForceMoveWithinCourse !=
-        original.allowAdminForceMoveWithinCourse) {
-      return true;
-    }
 
     // effectiveFrom 변경 체크 (나중에 적용하기가 켜져있고 실제로 날짜가 변경되었을 때만)
     // 시간은 항상 00:00이므로 날짜만 비교
@@ -232,10 +221,8 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
 
   Future<bool> _savePolicy({required bool popAfterSave}) async {
     if (_isSaving) return false;
-    final placeId = Provider.of<PlaceProvider>(
-      context,
-      listen: false,
-    ).currentPlace?.id;
+    final placeId =
+        Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
     if (placeId == null) return false;
 
     // 유효값 체크 및 값 업데이트
@@ -262,7 +249,8 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
       final original = _original;
       final nextVersion = (original?.version ?? 0) + 1;
 
-      final openStrategy = _type == BookingOpenStrategyType.rollingWindow
+      final openStrategy =
+          _type == BookingOpenStrategyType.rollingWindow
           ? BookingOpenStrategy.rollingWindow(
               RollingWindowOpenStrategy(windowDays: _windowDays),
             )
@@ -279,9 +267,10 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
         placeId: placeId,
         closeBeforeMinutes: _closeBeforeMinutes,
         openStrategy: openStrategy,
-        allowAdminForceMoveWithinCourse: _allowAdminForceMoveWithinCourse,
+        allowAdminForceMoveWithinCourse: true, // 관리자는 항상 활성화
         version: nextVersion,
-        effectiveFrom: _scheduleForFuture
+        effectiveFrom:
+            _scheduleForFuture
             ? _effectiveFrom
             : TimezoneUtils.getSeoulDateTime(),
       );
@@ -406,9 +395,8 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
     final courseProvider = Provider.of<CourseProvider>(context, listen: false);
     final course =
         courseProvider.getCourse(widget.courseId) ?? widget.courseToRegister;
-    final courseColor = course != null
-        ? Color(course.color)
-        : AppColors.primaryGreen;
+    final courseColor =
+        course != null ? Color(course.color) : AppColors.primaryGreen;
 
     return PopScope(
       canPop: true, // 뒤로가기 허용 (시간표나 코스 설정 수정 가능하도록)
@@ -548,7 +536,7 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                         children: [
                           const SizedBox(height: 6),
                           Text(
-                            '매주 정해진 요일과 시간에 특정 주차의 예약을 오픈합니다',
+                            '매주 정해진 요일과 시간에 예약을 오픈합니다',
                             style: TextStyle(
                               fontSize: 14,
                               color: AppColors.textSecondary,
@@ -564,7 +552,8 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                                 '매주',
                                 style: TextStyle(
                                   fontSize: 16,
-                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.textSecondary,
+                                  fontWeight: FontWeight.w500,
                                 ),
                               ),
                               _styledDropdown<int>(
@@ -598,7 +587,8 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                                 '에',
                                 style: TextStyle(
                                   fontSize: 16,
-                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.textSecondary,
+                                  fontWeight: FontWeight.w500,
                                 ),
                               ),
                               _styledDropdown<int>(
@@ -625,7 +615,8 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                                 '까지',
                                 style: TextStyle(
                                   fontSize: 16,
-                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.textSecondary,
+                                  fontWeight: FontWeight.w500,
                                 ),
                               ),
                             ],
@@ -639,7 +630,7 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                   const SizedBox(height: 30),
 
                   Text(
-                    '코스시작 얼마 전까지 예약을 받을까요?',
+                    '시작 얼마 전까지 예약/취소 가능할까요?',
                     style: TextStyle(
                       fontSize: 16,
                       color: AppColors.textSecondary,
@@ -654,10 +645,11 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                         Row(
                           children: [
                             Text(
-                              '세션 시작 전',
+                              '세션 시작',
                               style: TextStyle(
                                 fontSize: 16,
-                                fontWeight: FontWeight.w600,
+                                color: AppColors.textSecondary,
+                                fontWeight: FontWeight.w500,
                               ),
                             ),
                             SizedBox(width: 12),
@@ -679,10 +671,11 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                             ),
                             const SizedBox(width: 8),
                             const Text(
-                              ' 전까지 예약 가능',
+                              ' 전까지 예약/취소 가능',
                               style: TextStyle(
                                 fontSize: 16,
-                                fontWeight: FontWeight.w600,
+                                color: AppColors.textSecondary,
+                                fontWeight: FontWeight.w500,
                               ),
                             ),
                           ],
@@ -697,61 +690,15 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                               '0시간 이상 입력해주세요',
                               style: TextStyle(fontSize: 12, color: Colors.red),
                             ),
-                          ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 30),
-
-                  Text(
-                    '관리자 예약 편집을 활성화 할까요?',
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: AppColors.textSecondary,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  _card(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    '예약 강제 이동 허용',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                      color: AppColors.textPrimary,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            Switch(
-                              value: _allowAdminForceMoveWithinCourse,
-                              activeColor: courseColor,
-                              inactiveThumbColor: Colors.grey[600],
-                              inactiveTrackColor: Colors.grey[100],
-                              onChanged: (v) => setState(
-                                () => _allowAdminForceMoveWithinCourse = v,
-                              ),
-                            ),
-                          ],
                         ),
                       ],
                     ),
                   ),
 
                   // 적용 시점 옵션은 기존 코스 수정 시에만 표시 (새로 등록할 때는 숨김)
+                  // 변경사항이 있을 때만 표시
                   // 맨 아래로 이동
-                  if (!widget.requireSave) ...[
+                  if (!widget.requireSave && _hasChanges) ...[
                     const SizedBox(height: 30),
                     Text(
                       '이 정책을 언제부터 적용할까요?',
@@ -810,7 +757,7 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                               children: [
                                 Expanded(
                                   child: Text(
-                                    '${_effectiveFrom.year}-${_effectiveFrom.month.toString().padLeft(2, '0')}-${_effectiveFrom.day.toString().padLeft(2, '0')} 00:00 부터',
+                                    '${_effectiveFrom.year}-${_effectiveFrom.month.toString().padLeft(2, '0')}-${_effectiveFrom.day.toString().padLeft(2, '0')}부터',
                                     style: TextStyle(
                                       fontSize: 15,
                                       color: AppColors.textSecondary,
@@ -868,7 +815,8 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                 child: SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: (_isLoading || _isSaving || !_isValidInput())
+                    onPressed:
+                        (_isLoading || _isSaving || !_isValidInput())
                         ? null
                         : (widget.requireSave || _hasChanges)
                         ? (widget.requireSave
@@ -886,7 +834,8 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                       ),
                       elevation: 0,
                     ),
-                    child: _isSaving
+                    child:
+                        _isSaving
                         ? const SizedBox(
                             width: 20,
                             height: 20,

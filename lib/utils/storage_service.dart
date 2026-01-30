@@ -25,6 +25,18 @@ class StorageService {
   static const String _keyRequireManualEntrySelection =
       'require_manual_entry_selection';
 
+  // lastSelectedCourse scope
+  static const String scopeAdmin = 'admin';
+  static const String scopeMember = 'member';
+
+  String _lastSelectedCourseKey(String placeId, {String? scope}) {
+    // legacy: last_selected_course_id_{placeId}
+    if (scope == null || scope.isEmpty) {
+      return '${_keyLastSelectedCourseId}_$placeId';
+    }
+    return '${_keyLastSelectedCourseId}_${scope}_$placeId';
+  }
+
   /// 관리자 전화번호 저장
   Future<void> saveAdminPhone(String phoneNumber) async {
     final prefs = await SharedPreferences.getInstance();
@@ -148,21 +160,48 @@ class StorageService {
   }
 
   /// 마지막 선택한 코스 ID 저장 (플레이스별)
-  Future<void> saveLastSelectedCourseId(String placeId, String courseId) async {
+  Future<void> saveLastSelectedCourseId(
+    String placeId,
+    String courseId, {
+    String? scope,
+  }) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('${_keyLastSelectedCourseId}_$placeId', courseId);
+    await prefs.setString(
+      _lastSelectedCourseKey(placeId, scope: scope),
+      courseId,
+    );
   }
 
   /// 마지막 선택한 코스 ID 로드 (플레이스별)
-  Future<String?> getLastSelectedCourseId(String placeId) async {
+  Future<String?> getLastSelectedCourseId(
+    String placeId, {
+    String? scope,
+  }) async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('${_keyLastSelectedCourseId}_$placeId');
+    final scopedKey = _lastSelectedCourseKey(placeId, scope: scope);
+    final scopedValue = prefs.getString(scopedKey);
+    if (scopedValue != null && scopedValue.isNotEmpty) return scopedValue;
+
+    // legacy fallback + migrate
+    final legacyKey = _lastSelectedCourseKey(placeId, scope: null);
+    final legacyValue = prefs.getString(legacyKey);
+    if (legacyValue != null && legacyValue.isNotEmpty) {
+      if (scope != null && scope.isNotEmpty) {
+        await prefs.setString(scopedKey, legacyValue);
+      }
+      return legacyValue;
+    }
+
+    return null;
   }
 
   /// 플레이스별 마지막 선택 코스 ID 삭제
-  Future<void> clearLastSelectedCourseId(String placeId) async {
+  Future<void> clearLastSelectedCourseId(
+    String placeId, {
+    String? scope,
+  }) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('${_keyLastSelectedCourseId}_$placeId');
+    await prefs.remove(_lastSelectedCourseKey(placeId, scope: scope));
   }
 
   /// 전화번호 인증 후 "명시적 진입 선택"이 필요한지 여부

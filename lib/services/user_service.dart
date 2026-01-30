@@ -98,9 +98,8 @@ class UserService {
     await docRef.set({
       ...user.toJson(),
       'createdAt': _dateTimeToTimestamp(user.createdAt),
-      'updatedAt': user.updatedAt != null
-          ? _dateTimeToTimestamp(user.updatedAt!)
-          : null,
+      'updatedAt':
+          user.updatedAt != null ? _dateTimeToTimestamp(user.updatedAt!) : null,
     });
 
     if (_currentUser?.userId == userId) {
@@ -117,9 +116,8 @@ class UserService {
     await docRef.set({
       ...user.toJson(),
       'createdAt': _dateTimeToTimestamp(user.createdAt),
-      'updatedAt': user.updatedAt != null
-          ? _dateTimeToTimestamp(user.updatedAt!)
-          : null,
+      'updatedAt':
+          user.updatedAt != null ? _dateTimeToTimestamp(user.updatedAt!) : null,
     });
     return user;
   }
@@ -149,13 +147,11 @@ class UserService {
 
     final data = doc.data()!;
     // Timestamp를 DateTime으로 변환
-    data['createdAt'] = _timestampToDateTime(
-      data['createdAt'],
-    ).toIso8601String();
+    data['createdAt'] =
+        _timestampToDateTime(data['createdAt']).toIso8601String();
     if (data['updatedAt'] != null) {
-      data['updatedAt'] = _timestampToDateTime(
-        data['updatedAt'],
-      ).toIso8601String();
+      data['updatedAt'] =
+          _timestampToDateTime(data['updatedAt']).toIso8601String();
     }
 
     final user = User.fromJson(data);
@@ -180,20 +176,19 @@ class UserService {
     for (int i = 0; i < userIds.length; i += maxBatchSize) {
       final batch = userIds.skip(i).take(maxBatchSize).toList();
       try {
-        final snapshot = await _firestore
-            .collection('users')
-            .where(FieldPath.documentId, whereIn: batch)
-            .get();
+        final snapshot =
+            await _firestore
+                .collection('users')
+                .where(FieldPath.documentId, whereIn: batch)
+                .get();
 
         for (final doc in snapshot.docs) {
           final data = doc.data();
-          data['createdAt'] = _timestampToDateTime(
-            data['createdAt'],
-          ).toIso8601String();
+          data['createdAt'] =
+              _timestampToDateTime(data['createdAt']).toIso8601String();
           if (data['updatedAt'] != null) {
-            data['updatedAt'] = _timestampToDateTime(
-              data['updatedAt'],
-            ).toIso8601String();
+            data['updatedAt'] =
+                _timestampToDateTime(data['updatedAt']).toIso8601String();
           }
           allUsers.add(User.fromJson(data));
         }
@@ -275,6 +270,21 @@ class UserService {
     );
 
     return await updateUser(updatedUser);
+  }
+
+  /// 현재 플레이스 ID 업데이트 (서버 저장)
+  Future<void> updateCurrentPlaceId(String userId, String? placeId) async {
+    final docRef = _firestore.collection('users').doc(userId);
+    await docRef.update({
+      'currentPlaceId': placeId,
+      'updatedAt': _dateTimeToTimestamp(TimezoneUtils.getSeoulDateTime()),
+    });
+
+    // 현재 로그인한 사용자와 동일한 경우에만 _currentUser 업데이트
+    if (_currentUser?.userId == userId) {
+      _currentUser = _currentUser!.copyWith(currentPlaceId: placeId);
+      _notifyUserUpdate(_currentUser!);
+    }
   }
 
   // ==================== 플레이스 관리 ====================
@@ -562,9 +572,10 @@ class UserService {
     await docRef.set({
       ...admin.toJson(),
       'createdAt': _dateTimeToTimestamp(admin.createdAt),
-      'updatedAt': admin.updatedAt != null
-          ? _dateTimeToTimestamp(admin.updatedAt!)
-          : null,
+      'updatedAt':
+          admin.updatedAt != null
+              ? _dateTimeToTimestamp(admin.updatedAt!)
+              : null,
     });
     return admin;
   }
@@ -575,13 +586,11 @@ class UserService {
     if (!doc.exists) return null;
 
     final data = doc.data()!;
-    data['createdAt'] = _timestampToDateTime(
-      data['createdAt'],
-    ).toIso8601String();
+    data['createdAt'] =
+        _timestampToDateTime(data['createdAt']).toIso8601String();
     if (data['updatedAt'] != null) {
-      data['updatedAt'] = _timestampToDateTime(
-        data['updatedAt'],
-      ).toIso8601String();
+      data['updatedAt'] =
+          _timestampToDateTime(data['updatedAt']).toIso8601String();
     }
 
     return AdminUser.fromJson(data);
@@ -601,13 +610,11 @@ class UserService {
     if (snapshot.docs.isEmpty) return null;
 
     final data = snapshot.docs.first.data();
-    data['createdAt'] = _timestampToDateTime(
-      data['createdAt'],
-    ).toIso8601String();
+    data['createdAt'] =
+        _timestampToDateTime(data['createdAt']).toIso8601String();
     if (data['updatedAt'] != null) {
-      data['updatedAt'] = _timestampToDateTime(
-        data['updatedAt'],
-      ).toIso8601String();
+      data['updatedAt'] =
+          _timestampToDateTime(data['updatedAt']).toIso8601String();
     }
 
     return AdminUser.fromJson(data);
@@ -628,9 +635,10 @@ class UserService {
       'placeIds': admin.placeIds,
       'lastAccessedPlaceId': admin.lastAccessedPlaceId,
       'notificationsEnabled': admin.notificationsEnabled,
-      'updatedAt': admin.updatedAt != null
-          ? _dateTimeToTimestamp(admin.updatedAt!)
-          : FieldValue.serverTimestamp(),
+      'updatedAt':
+          admin.updatedAt != null
+              ? _dateTimeToTimestamp(admin.updatedAt!)
+              : FieldValue.serverTimestamp(),
     };
     await docRef.update(updateData);
     return admin;

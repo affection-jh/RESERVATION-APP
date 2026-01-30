@@ -3,6 +3,8 @@
 /// 특정 세션의 특정 날짜에 대한 수용인원을 기본값과 다르게 설정
 class DateCapacityOverride {
   final String id;
+  final String placeId;
+  final String? courseId; // 쿼리 최적화용 (sessionId에서 유도 가능)
   final String sessionId; // "courseId_dayOfWeek_startTime"
   final String date; // "YYYY-MM-DD"
   final int capacity; // 오버라이드된 수용인원
@@ -11,6 +13,8 @@ class DateCapacityOverride {
 
   DateCapacityOverride({
     required this.id,
+    required this.placeId,
+    this.courseId,
     required this.sessionId,
     required this.date,
     required this.capacity,
@@ -21,6 +25,8 @@ class DateCapacityOverride {
   /// 복사본 생성
   DateCapacityOverride copyWith({
     String? id,
+    String? placeId,
+    String? courseId,
     String? sessionId,
     String? date,
     int? capacity,
@@ -29,6 +35,8 @@ class DateCapacityOverride {
   }) {
     return DateCapacityOverride(
       id: id ?? this.id,
+      placeId: placeId ?? this.placeId,
+      courseId: courseId ?? this.courseId,
       sessionId: sessionId ?? this.sessionId,
       date: date ?? this.date,
       capacity: capacity ?? this.capacity,
@@ -41,6 +49,8 @@ class DateCapacityOverride {
   Map<String, dynamic> toJson() {
     return {
       'id': id,
+      'placeId': placeId,
+      'courseId': courseId,
       'sessionId': sessionId,
       'date': date,
       'capacity': capacity,
@@ -53,19 +63,22 @@ class DateCapacityOverride {
   factory DateCapacityOverride.fromJson(Map<String, dynamic> json) {
     return DateCapacityOverride(
       id: json['id'] as String,
+      placeId: json['placeId'] as String? ?? '',
+      courseId: json['courseId'] as String?,
       sessionId: json['sessionId'] as String,
       date: json['date'] as String,
       capacity: json['capacity'] as int,
       createdAt: DateTime.parse(json['createdAt'] as String),
-      updatedAt: json['updatedAt'] != null
-          ? DateTime.parse(json['updatedAt'] as String)
-          : null,
+      updatedAt:
+          json['updatedAt'] != null
+              ? DateTime.parse(json['updatedAt'] as String)
+              : null,
     );
   }
 
   @override
   String toString() {
-    return 'DateCapacityOverride(sessionId: $sessionId, date: $date, capacity: $capacity)';
+    return 'DateCapacityOverride(placeId: $placeId, sessionId: $sessionId, date: $date, capacity: $capacity)';
   }
 
   @override

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../theme/app_colors.dart';
 import '../widgets/story_card.dart';
@@ -115,37 +116,44 @@ class _HomeScreenState extends State<HomeScreen> {
     List<Reservation> reservations,
     List<Course> courses,
   ) {
-    // 날짜가 빠른 순으로, 같다면 시간이 빠른 순으로 정렬
-    final sortedReservations = List<Reservation>.from(reservations)
-      ..sort((a, b) {
-        // 날짜 비교
-        final dateCompare = a.reservedDate.compareTo(b.reservedDate);
-        if (dateCompare != 0) return dateCompare;
+    // ReservationProvider에서 "임박한 예약 우선" 정렬이 이미 들어오므로 그 순서를 유지한다.
+    // 요구사항:
+    // - 기본은 최대 5개
+    // - 단, "모두 미완료(=예정)" 상태라면 제한 없이 전부 보여준다
+    final now = TimezoneUtils.getSeoulDateTime();
 
-        // 날짜가 같으면 시간 비교
-        final timeCompare = _parseTimeToMinutes(
-          a.startTime,
-        ).compareTo(_parseTimeToMinutes(b.startTime));
-        if (timeCompare != 0) return timeCompare;
+    bool isUpcoming(Reservation r) {
+      final parts = r.startTime.split(':');
+      final h = int.tryParse(parts[0].trim()) ?? 0;
+      final m = (parts.length > 1) ? (int.tryParse(parts[1].trim()) ?? 0) : 0;
+      final start = DateTime(
+        r.reservedDate.year,
+        r.reservedDate.month,
+        r.reservedDate.day,
+        h.clamp(0, 23),
+        m.clamp(0, 59),
+      );
+      return !start.isBefore(now);
+    }
 
-        // 날짜와 시간이 같으면 ID로 정렬 (안정적인 정렬)
-        return a.id.compareTo(b.id);
-      });
-
-    // 최대 5개만 가져오기
-    final recentReservations = sortedReservations.take(5).toList();
+    final hasCompleted = reservations.any((r) => !isUpcoming(r));
+    final recentReservations =
+        hasCompleted
+            ? reservations.take(5).toList()
+            : List<Reservation>.from(reservations);
 
     // 코스 정보와 함께 매핑
     return recentReservations.map((reservation) {
       final course = courses.firstWhere(
         (c) => c.id == reservation.courseId,
-        orElse: () => Course(
-          description: '',
-          id: reservation.courseId,
-          name: '알 수 없는 코스',
-          color: 0xFF087044,
-          sessions: [],
-        ),
+        orElse:
+            () => Course(
+              description: '',
+              id: reservation.courseId,
+              name: '알 수 없는 코스',
+              color: 0xFF087044,
+              sessions: [],
+            ),
       );
       return {'reservation': reservation, 'course': course};
     }).toList();
@@ -185,13 +193,15 @@ class _HomeScreenState extends State<HomeScreen> {
               // 제목 섹션
               _buildTitleSection(placeProvider),
 
-              const SizedBox(height: 20),
+              const SizedBox(height: 30),
+
+              // 최근 이용 섹션
+              if (authProvider.currentUser != null) _buildRecentUsageSection(),
 
               // 탭
+              const SizedBox(height: 52),
               _buildTabs(),
-
               const SizedBox(height: 20),
-
               // 탭에 따른 콘텐츠
               AnimatedSize(
                 duration: const Duration(milliseconds: 300),
@@ -204,16 +214,15 @@ class _HomeScreenState extends State<HomeScreen> {
                     return FadeTransition(
                       opacity: animation,
                       child: SlideTransition(
-                        position:
-                            Tween<Offset>(
-                              begin: const Offset(0.1, 0),
-                              end: Offset.zero,
-                            ).animate(
-                              CurvedAnimation(
-                                parent: animation,
-                                curve: Curves.easeInOut,
-                              ),
-                            ),
+                        position: Tween<Offset>(
+                          begin: const Offset(0.1, 0),
+                          end: Offset.zero,
+                        ).animate(
+                          CurvedAnimation(
+                            parent: animation,
+                            curve: Curves.easeInOut,
+                          ),
+                        ),
                         child: child,
                       ),
                     );
@@ -221,11 +230,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: _buildStoryCards(key: const ValueKey('story')),
                 ),
               ),
-
-              const SizedBox(height: 52),
-
-              // 최근 이용 섹션
-              if (authProvider.currentUser != null) _buildRecentUsageSection(),
 
               const SizedBox(height: 32),
             ],
@@ -244,6 +248,7 @@ class _HomeScreenState extends State<HomeScreen> {
             enabled: false,
             showDescription: false,
             padding: EdgeInsets.zero,
+            heroTagSuffix: 'home',
           ),
         ),
         // 알림 아이콘
@@ -382,8 +387,11 @@ class _HomeScreenState extends State<HomeScreen> {
             onTap: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (_) =>
-                      StoryDetailScreen(story: stories[0], place: currentPlace),
+                  builder:
+                      (_) => StoryDetailScreen(
+                        story: stories[0],
+                        place: currentPlace,
+                      ),
                 ),
               );
             },
@@ -421,10 +429,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 onTap: () {
                   Navigator.of(context).push(
                     MaterialPageRoute(
-                      builder: (_) => StoryDetailScreen(
-                        story: stories[index],
-                        place: currentPlace,
-                      ),
+                      builder:
+                          (_) => StoryDetailScreen(
+                            story: stories[index],
+                            place: currentPlace,
+                          ),
                     ),
                   );
                 },
@@ -456,9 +465,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     width: 10,
                     height: 10,
                     decoration: BoxDecoration(
-                      color: _currentStoryIndex == index
-                          ? AppColors.primaryGreen
-                          : AppColors.primaryGreen.withOpacity(0.3),
+                      color:
+                          _currentStoryIndex == index
+                              ? AppColors.primaryGreen
+                              : AppColors.primaryGreen.withOpacity(0.3),
                       shape: BoxShape.circle,
                     ),
                   ),
@@ -484,15 +494,16 @@ class _HomeScreenState extends State<HomeScreen> {
     final courses = courseProvider.courses;
     final allReservations = _getRecentReservations(reservations, courses);
     final totalCount = allReservations.length;
-    final currentIndex = totalCount > 0
-        ? _currentReservationPage + 1
-        : 0; // 현재 보고 있는 카드 인덱스 (1부터 시작)
+    final currentIndex =
+        totalCount > 0
+            ? _currentReservationPage + 1
+            : 0; // 현재 보고 있는 카드 인덱스 (1부터 시작)
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
+          padding: const EdgeInsets.symmetric(horizontal: 24),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -518,9 +529,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         height: 10,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: index == currentIndex - 1
-                              ? AppColors.primaryGreen
-                              : AppColors.primaryGreen.withOpacity(0.3),
+                          color:
+                              index == currentIndex - 1
+                                  ? AppColors.primaryGreen
+                                  : AppColors.primaryGreen.withOpacity(0.3),
                         ),
                       ),
                     ),
@@ -550,6 +562,32 @@ class _HomeScreenState extends State<HomeScreen> {
     final courses = courseProvider.courses;
 
     final recentReservations = _getRecentReservations(reservations, courses);
+
+    // 리스트가 줄어들 때(취소 직후 등) 현재 페이지 인덱스가 범위를 벗어나면 안정적으로 보정
+    final totalCount = recentReservations.length;
+    if (totalCount == 0) {
+      if (_currentReservationPage != 0) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          setState(() {
+            _currentReservationPage = 0;
+          });
+        });
+      }
+    } else if (_currentReservationPage > totalCount - 1) {
+      final nextIndex = totalCount - 1;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() {
+          _currentReservationPage = nextIndex;
+        });
+        try {
+          _reservationPageController.jumpToPage(nextIndex);
+        } catch (_) {
+          // controller attach 타이밍 이슈는 무시 (다음 프레임에서 자연히 안정화)
+        }
+      });
+    }
 
     if (recentReservations.isEmpty) {
       return SizedBox(
@@ -629,76 +667,79 @@ class _HomeScreenState extends State<HomeScreen> {
             _currentReservationPage = index;
           });
         },
-        children: recentReservations.map((data) {
-          final reservation = data['reservation'] as Reservation;
-          final course = data['course'] as Course;
+        children:
+            recentReservations.map((data) {
+              final reservation = data['reservation'] as Reservation;
+              final course = data['course'] as Course;
 
-          // 오늘 날짜 (시간 제외)
-          final todayDate = TimezoneUtils.getSeoulToday();
-          final reservationDate = TimezoneUtils.getSeoulDateOnly(
-            reservation.reservedDate,
-          );
-
-          // 지난 예약인지 확인
-          final isPast = reservationDate.isBefore(todayDate);
-
-          return GestureDetector(
-            onTap: () {
-              // 마이페이지로 이동하면서 예약 정보 전달 (명시적 클릭)
-              Navigator.of(context).pushNamedAndRemoveUntil(
-                '/main',
-                (route) => false,
-                arguments: {
-                  'initialIndex': 2, // 마이페이지 탭 인덱스
-                  'highlightReservation': {
-                    'reservationId': reservation.id,
-                    'courseId': reservation.courseId,
-                    'dayOfWeek': reservation.dayOfWeek,
-                    'startTime': reservation.startTime,
-                    'reservedDate': reservation.reservedDate,
-                    'shouldShowBottomSheet': true, // 명시적 클릭이므로 바텀시트 표시
-                  },
-                },
+              // 오늘 날짜 (시간 제외)
+              final todayDate = TimezoneUtils.getSeoulToday();
+              final reservationDate = TimezoneUtils.getSeoulDateOnly(
+                reservation.reservedDate,
               );
-            },
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: _spacingMedium),
-              child: Container(
-                padding: const EdgeInsets.all(_spacingMedium),
-                decoration: BoxDecoration(
-                  color: AppColors.backgroundWhite,
-                  borderRadius: BorderRadius.circular(_cardBorderRadius),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(_cardShadowOpacity),
-                      blurRadius: _cardShadowBlur,
-                      offset: Offset(0, _cardElevation),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SizedBox(height: 10),
-                    // 상단: 시간 및 날짜 정보 (크게)
-                    _buildReservationInfo(reservation),
-                    const Spacer(),
-                    // 하단: 코스명 칩 + 상태 칩
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        _buildCourseNameChip(course.name),
-                        const SizedBox(width: _spacingSmall),
-                        _buildStatusChip(isPast),
+
+              // 지난 예약인지 확인
+              final isPast = reservationDate.isBefore(todayDate);
+
+              return GestureDetector(
+                onTap: () {
+                  // 마이페이지로 이동하면서 예약 정보 전달 (명시적 클릭)
+                  Navigator.of(context).pushNamedAndRemoveUntil(
+                    '/main',
+                    (route) => false,
+                    arguments: {
+                      'initialIndex': 2, // 마이페이지 탭 인덱스
+                      'highlightReservation': {
+                        'reservationId': reservation.id,
+                        'courseId': reservation.courseId,
+                        'dayOfWeek': reservation.dayOfWeek,
+                        'startTime': reservation.startTime,
+                        'reservedDate': reservation.reservedDate,
+                        'shouldShowBottomSheet': true, // 명시적 클릭이므로 바텀시트 표시
+                      },
+                    },
+                  );
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: _spacingMedium,
+                  ),
+                  child: Container(
+                    padding: const EdgeInsets.all(_spacingMedium),
+                    decoration: BoxDecoration(
+                      color: AppColors.backgroundWhite,
+                      borderRadius: BorderRadius.circular(_cardBorderRadius),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(_cardShadowOpacity),
+                          blurRadius: _cardShadowBlur,
+                          offset: Offset(0, _cardElevation),
+                        ),
                       ],
                     ),
-                  ],
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(height: 10),
+                        // 상단: 시간 및 날짜 정보 (크게)
+                        _buildReservationInfo(reservation),
+                        const Spacer(),
+                        // 하단: 코스명 칩 + 상태 칩
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            _buildCourseNameChip(course.name),
+                            const SizedBox(width: _spacingSmall),
+                            _buildStatusChip(isPast),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
-            ),
-          );
-        }).toList(),
+              );
+            }).toList(),
       ),
     );
   }
@@ -768,15 +809,13 @@ class _HomeScreenState extends State<HomeScreen> {
         // 시간 (크게)
         Text(
           timeText,
-          style: TextStyle(
-            fontSize: 30,
-            fontWeight: FontWeight.w600,
+          style: GoogleFonts.lato(
+            fontSize: 34,
+            fontWeight: FontWeight.w800,
             color: AppColors.textPrimary,
-            letterSpacing: -0.5,
-            height: 1.1,
           ),
         ),
-        const SizedBox(height: _spacingSmall),
+
         // 날짜 (크게)
         Text(
           dateText,
@@ -784,8 +823,6 @@ class _HomeScreenState extends State<HomeScreen> {
             fontSize: _dateFontSize,
             fontWeight: FontWeight.w500,
             color: AppColors.textSecondary.withOpacity(0.9),
-            letterSpacing: -0.3,
-            height: 1.2,
           ),
         ),
       ],
@@ -813,19 +850,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // 파싱 실패 시 원본 반환
     return cleanedTime;
-  }
-
-  // 시간 문자열을 분 단위로 변환
-  int _parseTimeToMinutes(String time) {
-    final parts = time.split(':');
-    if (parts.length != 2) {
-      // ":"가 없으면 시간만 있는 경우
-      final hour = int.tryParse(time.trim()) ?? 0;
-      return hour * 60;
-    }
-    final hour = int.tryParse(parts[0].trim()) ?? 0;
-    final minute = int.tryParse(parts[1].trim()) ?? 0;
-    return hour * 60 + minute;
   }
 
   // Helper 메서드들

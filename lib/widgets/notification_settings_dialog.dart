@@ -18,8 +18,8 @@ class NotificationSettingsDialog extends StatefulWidget {
     return showDialog<bool>(
       context: context,
       barrierColor: Colors.black.withOpacity(0.7),
-      builder: (context) =>
-          NotificationSettingsDialog(initialValue: initialValue),
+      builder:
+          (context) => NotificationSettingsDialog(initialValue: initialValue),
     );
   }
 
@@ -99,9 +99,8 @@ class _NotificationSettingsDialogState
   Widget build(BuildContext context) {
     // 알림 상태에 따라 배경색 변경
     // 켜져있을 때: 흰색 계열, 꺼져있을 때: 회색조
-    final backgroundColor = _currentValue
-        ? AppColors.backgroundWhite
-        : AppColors.backgroundLight;
+    final backgroundColor =
+        _currentValue ? AppColors.backgroundWhite : AppColors.backgroundLight;
 
     return Dialog(
       backgroundColor: Colors.transparent,
@@ -132,12 +131,13 @@ class _NotificationSettingsDialogState
                 ),
                 Switch(
                   value: _currentValue,
-                  onChanged: _isSaving
-                      ? null
-                      : (value) {
-                          setState(() => _currentValue = value);
-                        },
-                  activeColor: AppColors.primaryGreen,
+                  onChanged:
+                      _isSaving
+                          ? null
+                          : (value) {
+                            setState(() => _currentValue = value);
+                          },
+                  activeColor: const Color.fromARGB(255, 255, 102, 102),
                 ),
               ],
             ),
@@ -194,24 +194,25 @@ class _NotificationSettingsDialogState
                   ),
                   elevation: 0,
                 ),
-                child: _isSaving
-                    ? SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            AppColors.primaryGreen,
+                child:
+                    _isSaving
+                        ? SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              AppColors.primaryGreen,
+                            ),
+                          ),
+                        )
+                        : const Text(
+                          '확인',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
-                      )
-                    : const Text(
-                        '확인',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
               ),
             ),
           ],

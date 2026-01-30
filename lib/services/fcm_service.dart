@@ -13,6 +13,7 @@ import '../providers/place_provider.dart';
 import '../screens/admin/widgets/enrollment_detail_screen.dart';
 import '../models/admin_models.dart';
 import 'dart:async';
+import 'dart:convert';
 
 /// Firebase Cloud Messaging 서비스
 /// FCM 토큰 관리 및 푸시 알림 수신 처리
@@ -23,6 +24,58 @@ class FcmService {
   StreamSubscription<RemoteMessage>? _foregroundMessageSubscription;
   StreamSubscription<RemoteMessage>? _messageOpenedSubscription;
   bool _isInitialized = false;
+
+  static String _safeTruncate(String value, {int max = 80}) {
+    if (value.length <= max) return value;
+    return '${value.substring(0, max)}...(${value.length})';
+  }
+
+  static String _prettyJson(Object? obj) {
+    try {
+      return const JsonEncoder.withIndent('  ').convert(obj);
+    } catch (_) {
+      return obj?.toString() ?? '';
+    }
+  }
+
+  /// FCM 로그를 터미널에서 쉽게 찾기 위한 블록 로그
+  static void logRemoteMessage(RemoteMessage message, {required String event}) {
+    final now = DateTime.now().toIso8601String();
+    final title = message.notification?.title ?? '';
+    final body = message.notification?.body ?? '';
+    final data = message.data;
+    final notificationId = data['notificationId'];
+    final type = data['type'];
+
+    debugPrint('');
+    debugPrint('==================== FCM [$event] ====================');
+    debugPrint('time: $now');
+    debugPrint('messageId: ${message.messageId ?? '-'}');
+    debugPrint('sentTime: ${message.sentTime?.toIso8601String() ?? '-'}');
+    debugPrint('from: ${message.from ?? '-'}');
+    debugPrint('notificationId: ${notificationId ?? '-'}');
+    debugPrint('type: ${type ?? '-'}');
+    debugPrint('title: ${_safeTruncate(title)}');
+    debugPrint('body: ${_safeTruncate(body, max: 160)}');
+    debugPrint('data:\n${_prettyJson(data)}');
+    debugPrint('======================================================');
+    debugPrint('');
+  }
+
+  static void logData(Map<String, dynamic>? data, {required String event}) {
+    final now = DateTime.now().toIso8601String();
+    final notificationId = data?['notificationId'];
+    final type = data?['type'];
+
+    debugPrint('');
+    debugPrint('==================== FCM [$event] ====================');
+    debugPrint('time: $now');
+    debugPrint('notificationId: ${notificationId ?? '-'}');
+    debugPrint('type: ${type ?? '-'}');
+    debugPrint('data:\n${_prettyJson(data ?? const {})}');
+    debugPrint('======================================================');
+    debugPrint('');
+  }
 
   /// FCM 초기화 및 토큰 저장
   /// 사용자와 관리자 모두 동일하게 처리
@@ -50,7 +103,11 @@ class FcmService {
 
       // 토큰 갱신 리스너
       _tokenRefreshSubscription = _messaging.onTokenRefresh.listen((newToken) {
-        debugPrint('[FcmService] FCM 토큰 갱신됨');
+        final masked =
+            newToken.length > 12
+                ? '${newToken.substring(0, 6)}...${newToken.substring(newToken.length - 6)}'
+                : newToken;
+        debugPrint('[FcmService] FCM 토큰 갱신됨: $masked');
         _saveTokenToFirestore(userId, token: newToken);
       });
 
@@ -79,16 +136,13 @@ class FcmService {
     _foregroundMessageSubscription = FirebaseMessaging.onMessage.listen((
       RemoteMessage message,
     ) {
-      debugPrint('[FcmService] 포그라운드 메시지 수신');
-      debugPrint('  - 제목: ${message.notification?.title}');
-      debugPrint('  - 본문: ${message.notification?.body}');
-      debugPrint('  - 데이터: ${message.data}');
+      logRemoteMessage(message, event: 'FOREGROUND_RECEIVED');
 
       try {
+        // NotificationProvider에 새 알림 추가 (먼저 실행하여 빨간 닷 즉시 표시)
+        _addNotificationToProvider(message.data);
         // 포그라운드 알림 UI 표시 (스낵바처럼 상단에)
         _showForegroundNotification(message);
-        // NotificationProvider에 새 알림 추가
-        _addNotificationToProvider(message.data);
       } catch (e) {
         debugPrint('[FcmService] 포그라운드 알림 처리 오류: $e');
       }
@@ -98,7 +152,7 @@ class FcmService {
     _messageOpenedSubscription = FirebaseMessaging.onMessageOpenedApp.listen((
       RemoteMessage message,
     ) {
-      debugPrint('[FcmService] 알림 클릭: ${message.data}');
+      logRemoteMessage(message, event: 'TAP_OPENED_APP');
       try {
         _handleNotificationTap(message.data);
       } catch (e) {
@@ -142,12 +196,18 @@ class FcmService {
         final currentPlace = placeProvider.currentPlace;
         final placeId = currentPlace?.id;
 
-        notificationProvider.addNotificationFromId(
-          notificationId,
-          userId,
-          isAdmin,
-          placeId: placeId,
-        );
+        // 비동기로 실행하되 await하지 않음 (즉시 반환하여 UI가 블로킹되지 않도록)
+        // addNotificationFromId 내부에서 notifyListeners()가 호출되므로 빨간 닷이 즉시 표시됨
+        notificationProvider
+            .addNotificationFromId(
+              notificationId,
+              userId,
+              isAdmin,
+              placeId: placeId,
+            )
+            .catchError((e) {
+              debugPrint('[FcmService] _addNotificationToProvider error: $e');
+            });
       } catch (e) {
         print('[FcmService] _addNotificationToProvider error: $e');
       }
@@ -451,11 +511,12 @@ class FcmService {
       if (context.mounted) {
         await Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (context) => EnrollmentDetailScreen(
-              member: memberData,
-              enrollment: enrollment,
-              course: course,
-            ),
+            builder:
+                (context) => EnrollmentDetailScreen(
+                  member: memberData,
+                  enrollment: enrollment,
+                  course: course,
+                ),
           ),
         );
       }
@@ -470,7 +531,7 @@ class FcmService {
     try {
       final message = await _messaging.getInitialMessage();
       if (message != null) {
-        debugPrint('[FcmService] 앱 종료 상태에서 알림 클릭으로 열림: ${message.data}');
+        logRemoteMessage(message, event: 'TAP_LAUNCH_FROM_TERMINATED');
         _handleNotificationTap(message.data);
       }
     } catch (e) {
@@ -480,10 +541,7 @@ class FcmService {
 
   /// 백그라운드 메시지 핸들러 설정
   static Future<void> backgroundMessageHandler(RemoteMessage message) async {
-    debugPrint('[FcmService] 백그라운드 메시지 수신: ${message.messageId}');
-    debugPrint('  - 제목: ${message.notification?.title}');
-    debugPrint('  - 본문: ${message.notification?.body}');
-    debugPrint('  - 데이터: ${message.data}');
+    logRemoteMessage(message, event: 'BACKGROUND_RECEIVED');
   }
 
   /// 리소스 정리

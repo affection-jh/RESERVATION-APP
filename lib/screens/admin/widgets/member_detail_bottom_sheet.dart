@@ -16,7 +16,6 @@ import '../../../providers/member_provider.dart';
 import '../../../providers/enrollment_provider.dart';
 import '../../../providers/auth_provider.dart';
 import '../../../services/firestore_service.dart';
-import '../../../services/enrollment_service.dart';
 import '../../../services/member_service.dart';
 import '../../../utils/timezone_utils.dart';
 import '../../../utils/date_range_picker_util.dart';
@@ -52,9 +51,7 @@ class MemberDetailBottomSheet extends StatefulWidget {
 
 class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
   bool _isLoading = true;
-  Set<int> _expandedRequestIndices = {};
   List<CourseEnrollment> _enrollments = [];
-  List<CourseEnrollment> _extensionRequests = [];
   Set<String> _processedCourseIds = {}; // 재등록 또는 삭제 처리된 코스 ID들
   StreamSubscription<List<CourseEnrollment>>? _enrollmentSubscription;
   List<String> _allPendingCourseIds = []; // pendingMembers에서 가져온 원본 코스 ID들
@@ -65,10 +62,12 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
   TextEditingController? _nameController;
   bool _isEditingName = false;
   EnrollmentProvider? _enrollmentProvider; // dispose에서 안전하게 사용하기 위한 참조
+  String? _currentMemberName; // 로컬에서 관리하는 이름 (서버 업데이트 후 즉시 반영)
 
   @override
   void initState() {
     super.initState();
+    _currentMemberName = widget.member.name; // 초기값 설정
     _loadUserData();
   }
 
@@ -164,11 +163,6 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
       // 서버에서 이미 필터링된 enrollments 사용
       _enrollments = enrollmentProvider.enrollments;
 
-      // 연장 요청 목록 추출
-      _extensionRequests = _enrollments
-          .where((e) => e.hasPendingExtensionRequest)
-          .toList();
-
       // enrollments 업데이트 시 pendingCourseIds 재계산
       _updatePendingCourseIds();
 
@@ -236,9 +230,10 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
   /// enrollments에 없는 pending 코스만 필터링하여 _pendingCourseIds 업데이트
   void _updatePendingCourseIds() {
     final enrolledCourseIds = _enrollments.map((e) => e.courseId).toSet();
-    _pendingCourseIds = _allPendingCourseIds
-        .where((courseId) => !enrolledCourseIds.contains(courseId))
-        .toList();
+    _pendingCourseIds =
+        _allPendingCourseIds
+            .where((courseId) => !enrolledCourseIds.contains(courseId))
+            .toList();
   }
 
   @override
@@ -298,12 +293,6 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                           ),
                         )
                       else ...[
-                        // 연장 요청 섹션
-                        if (_extensionRequests.isNotEmpty)
-                          _buildExtensionRequestsSection(),
-                        if (_extensionRequests.isNotEmpty)
-                          const SizedBox(height: 24),
-
                         // 등록된 코스 목록
                         _buildEnrollmentsSection(),
                       ],
@@ -324,6 +313,7 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
       children: [
         Expanded(
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               SizedBox(height: 2),
@@ -341,18 +331,23 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                     focusedBorder: InputBorder.none,
                     disabledBorder: InputBorder.none,
                     contentPadding: EdgeInsets.zero,
+                    isDense: true,
                   ),
                   autofocus: true,
+                  maxLines: 1,
+                  textInputAction: TextInputAction.done,
                   onSubmitted: (_) => _saveName(),
+                  scrollPadding: EdgeInsets.zero,
                 )
               else
                 Text(
-                  widget.member.name,
+                  _currentMemberName ?? widget.member.name,
                   style: TextStyle(
                     fontSize: 22,
                     fontWeight: FontWeight.bold,
                     color: AppColors.textPrimary,
                   ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               Text(
                 FormatUtils.formatPhoneNumber(widget.member.phoneNumber),
@@ -439,13 +434,16 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
   void _handleEditName() {
     setState(() {
       _isEditingName = true;
-      _nameController = TextEditingController(text: widget.member.name);
+      _nameController = TextEditingController(
+        text: _currentMemberName ?? widget.member.name,
+      );
     });
   }
 
   Future<void> _saveName() async {
     final newName = _nameController?.text.trim() ?? '';
-    if (newName.isEmpty || newName == widget.member.name) {
+    final currentName = _currentMemberName ?? widget.member.name;
+    if (newName.isEmpty || newName == currentName) {
       setState(() {
         _isEditingName = false;
         _nameController?.dispose();
@@ -455,6 +453,14 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     }
 
     try {
+      // 즉시 로컬 상태 업데이트 (낙관적 업데이트)
+      setState(() {
+        _currentMemberName = newName;
+        _isEditingName = false;
+        _nameController?.dispose();
+        _nameController = null;
+      });
+
       final memberService = MemberService();
       final updatedUser = await memberService.updateMemberName(
         phoneNumber: widget.member.phoneNumber,
@@ -462,11 +468,17 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
       );
 
       if (updatedUser == null) {
-        SnackbarUtil.showError(context, '멤버를 찾을 수 없습니다.');
+        // 실패 시 원래 이름으로 복구
+        if (mounted) {
+          setState(() {
+            _currentMemberName = currentName;
+          });
+          SnackbarUtil.showError(context, '멤버를 찾을 수 없습니다.');
+        }
         return;
       }
 
-      // MemberProvider 새로고침
+      // MemberProvider 새로고침 (백그라운드)
       final memberProvider = Provider.of<MemberProvider>(
         context,
         listen: false,
@@ -474,18 +486,34 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
       final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
       final placeId = placeProvider.currentPlace?.id;
       if (placeId != null) {
-        await memberProvider.loadMembers(placeId);
+        // 비동기로 새로고침 (UI 블로킹 방지)
+        memberProvider.loadMembers(placeId).then((_) {
+          // MemberProvider에서 업데이트된 member 찾기
+          try {
+            final updatedMember = memberProvider.members.firstWhere(
+              (m) => m.phoneNumber == widget.member.phoneNumber,
+            );
+            if (mounted && updatedMember.name != _currentMemberName) {
+              setState(() {
+                _currentMemberName = updatedMember.name;
+              });
+            }
+          } catch (e) {
+            // member를 찾을 수 없으면 무시 (이미 로컬 상태 업데이트됨)
+            debugPrint('업데이트된 member를 찾을 수 없음: $e');
+          }
+        });
       }
-
-      setState(() {
-        _isEditingName = false;
-        _nameController?.dispose();
-        _nameController = null;
-      });
 
       SnackbarUtil.showSuccess(context, '이름이 수정되었습니다.');
     } catch (e) {
-      SnackbarUtil.showError(context, '이름 수정 중 오류가 발생했습니다: $e');
+      // 실패 시 원래 이름으로 복구
+      if (mounted) {
+        setState(() {
+          _currentMemberName = currentName;
+        });
+        SnackbarUtil.showError(context, '이름 수정 중 오류가 발생했습니다: $e');
+      }
     }
   }
 
@@ -586,280 +614,43 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     return false;
   }
 
-  // 사용하지 않는 함수 제거됨: _hasExpiredCourses, _buildReenrollmentAlert, _getExpiredCourses, _buildCourseSelectionList
-
-  Widget _buildExtensionRequestsSection() {
-    if (_extensionRequests.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
-    final courseProvider = Provider.of<CourseProvider>(context, listen: false);
-    final allCourses = courseProvider.courses;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Text(
-              '연장 요청',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: AppColors.textPrimary,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: AppColors.primaryGreen,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Text(
-                '${_extensionRequests.length}',
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        // 연장 요청 목록
-        ..._extensionRequests.asMap().entries.map((entry) {
-          final index = entry.key;
-          final enrollment = entry.value;
-          final course = allCourses.firstWhere(
-            (c) => c.id == enrollment.courseId,
-            orElse: () => allCourses.first,
-          );
-          final isExpanded = _expandedRequestIndices.contains(index);
-          final extensionRequest = enrollment.extensionRequest!;
-
-          return Container(
-            margin: const EdgeInsets.only(bottom: 8),
-            decoration: BoxDecoration(
-              color: AppColors.backgroundLight,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // 기본 정보 (항상 표시)
-                InkWell(
-                  onTap: () {
-                    setState(() {
-                      if (isExpanded) {
-                        _expandedRequestIndices.remove(index);
-                      } else {
-                        _expandedRequestIndices.add(index);
-                      }
-                    });
-                  },
-                  borderRadius: BorderRadius.circular(12),
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              SizedBox(height: 2),
-                              Text(
-                                course.name,
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
-                                  color: AppColors.textPrimary,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Row(
-                                children: [
-                                  Text(
-                                    '${_calculateExtensionDays(enrollment)}일 연장 요청',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      color: AppColors.primaryGreen,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                        AnimatedRotation(
-                          turns: isExpanded ? 0.5 : 0,
-                          duration: const Duration(milliseconds: 300),
-                          child: Icon(
-                            Icons.keyboard_arrow_down,
-                            color: AppColors.textSecondary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                // 확장된 내용
-                AnimatedSize(
-                  duration: const Duration(milliseconds: 300),
-                  curve: Curves.easeInOut,
-                  child: ClipRect(
-                    child: isExpanded
-                        ? Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                ),
-                                child: Divider(
-                                  height: 1,
-                                  color: AppColors.borderLight.withValues(
-                                    alpha: 0.5,
-                                  ),
-                                ),
-                              ),
-                              Padding(
-                                padding: const EdgeInsets.all(12),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      extensionRequest.reason,
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        color: AppColors.textPrimary,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 16),
-                                    // 승인/거절 버튼
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: ElevatedButton(
-                                            onPressed: () {
-                                              _showApprovalDialog(
-                                                enrollment,
-                                                course,
-                                              );
-                                            },
-                                            style: ElevatedButton.styleFrom(
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                    vertical: 12,
-                                                  ),
-                                              backgroundColor:
-                                                  AppColors.primaryGreen,
-                                              shape: RoundedRectangleBorder(
-                                                borderRadius:
-                                                    BorderRadius.circular(14),
-                                              ),
-                                              elevation: 0,
-                                            ),
-                                            child: Text(
-                                              '승인하기',
-                                              style: TextStyle(
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.w600,
-                                                color:
-                                                    AppColors.backgroundWhite,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 5),
-                                        OutlinedButton(
-                                          onPressed: () {
-                                            _showRejectionDialog(
-                                              enrollment,
-                                              course,
-                                            );
-                                          },
-                                          style: OutlinedButton.styleFrom(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 20,
-                                              vertical: 12,
-                                            ),
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(14),
-                                            ),
-                                            side: BorderSide(
-                                              color: AppColors.textSecondary,
-                                            ),
-                                          ),
-                                          child: Text(
-                                            '거절',
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w600,
-                                              color: AppColors.textSecondary,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          )
-                        : const SizedBox.shrink(),
-                  ),
-                ),
-              ],
-            ),
-          );
-        }).toList(),
-      ],
-    );
-  }
-
-  int _calculateExtensionDays(CourseEnrollment enrollment) {
-    // 연장 요청이 있으면 기본 30일로 설정 (실제로는 요청에서 가져와야 함)
-    return 30;
-  }
-
   Widget _buildEnrollmentsSection() {
     final courseProvider = Provider.of<CourseProvider>(context, listen: false);
     final allCourses = courseProvider.courses;
 
     // 만료되었거나 횟수가 0인 enrollments (회색 배경, 앞쪽에 배치)
-    final expiredOrEmptyEnrollments = _enrollments
-        .where(
-          (e) =>
-              !_processedCourseIds.contains(e.courseId) &&
-              (e.isExpired || e.remainingReservations == 0),
-        )
-        .toList();
+    final expiredOrEmptyEnrollments =
+        _enrollments
+            .where(
+              (e) =>
+                  !_processedCourseIds.contains(e.courseId) &&
+                  (e.isExpired || e.remainingReservations == 0),
+            )
+            .toList();
 
     // 유효한 enrollments (만료되지 않고 횟수가 남은 것)
-    final validEnrollments = _enrollments
-        .where(
-          (e) =>
-              !e.isExpired &&
-              e.remainingReservations > 0 &&
-              !_processedCourseIds.contains(e.courseId),
-        )
-        .toList();
+    final validEnrollments =
+        _enrollments
+            .where(
+              (e) =>
+                  !e.isExpired &&
+                  e.remainingReservations > 0 &&
+                  !_processedCourseIds.contains(e.courseId),
+            )
+            .toList();
 
     // pending 상태인 코스들 (enrollments에 없는 것만)
-    final pendingCourses = _pendingCourseIds
-        .where((courseId) => !_processedCourseIds.contains(courseId))
-        .map((courseId) {
-          final course = allCourses.firstWhere(
-            (c) => c.id == courseId,
-            orElse: () => allCourses.first,
-          );
-          return course;
-        })
-        .toList();
+    final pendingCourses =
+        _pendingCourseIds
+            .where((courseId) => !_processedCourseIds.contains(courseId))
+            .map((courseId) {
+              final course = allCourses.firstWhere(
+                (c) => c.id == courseId,
+                orElse: () => allCourses.first,
+              );
+              return course;
+            })
+            .toList();
 
     final totalCourses =
         expiredOrEmptyEnrollments.length +
@@ -908,20 +699,22 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                         enrollment.remainingReservations > 0;
                     final hasPendingExtensionRequest =
                         enrollment.hasPendingExtensionRequest;
-                    final initialTabIndex = hasPendingExtensionRequest
-                        ? 1 // 연장 요청이 있으면 기간 연장 탭으로 이동
-                        : (hasRemainingReservations
-                              ? 2 // 재등록/취소 탭 (기간 연장 탭 포함)
-                              : 1); // 재등록/취소 탭 (기간 연장 탭 없음)
+                    final initialTabIndex =
+                        hasPendingExtensionRequest
+                            ? 1 // 연장 요청이 있으면 기간 연장 탭으로 이동
+                            : (hasRemainingReservations
+                                ? 2 // 재등록/취소 탭 (기간 연장 탭 포함)
+                                : 1); // 재등록/취소 탭 (기간 연장 탭 없음)
 
                     final result = await Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (context) => EnrollmentDetailScreen(
-                          member: widget.member,
-                          enrollment: enrollment,
-                          course: course,
-                          initialTabIndex: initialTabIndex,
-                        ),
+                        builder:
+                            (context) => EnrollmentDetailScreen(
+                              member: widget.member,
+                              enrollment: enrollment,
+                              course: course,
+                              initialTabIndex: initialTabIndex,
+                            ),
                       ),
                     );
                     if (result == true && mounted) {
@@ -964,17 +757,18 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                     // 연장 요청이 있으면 기간 연장 탭이 표시됨 (횟수가 0이어도)
                     final initialTabIndex =
                         enrollment.hasPendingExtensionRequest
-                        ? 1 // 기간 연장 탭
-                        : null; // 기본값 (횟수 조정 탭)
+                            ? 1 // 기간 연장 탭
+                            : null; // 기본값 (횟수 조정 탭)
 
                     final result = await Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (context) => EnrollmentDetailScreen(
-                          member: widget.member,
-                          enrollment: enrollment,
-                          course: course,
-                          initialTabIndex: initialTabIndex,
-                        ),
+                        builder:
+                            (context) => EnrollmentDetailScreen(
+                              member: widget.member,
+                              enrollment: enrollment,
+                              course: course,
+                              initialTabIndex: initialTabIndex,
+                            ),
                       ),
                     );
                     if (result == true && mounted) {
@@ -1039,16 +833,22 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                     if (courseEnrollmentData != null &&
                         courseEnrollmentData.isNotEmpty) {
                       // courseEnrollments에서 가져온 정보 사용
-                      validFrom = courseEnrollmentData['validFrom'] != null
-                          ? DateTime.parse(courseEnrollmentData['validFrom'])
-                          : now;
-                      validUntil = courseEnrollmentData['validUntil'] != null
-                          ? DateTime.parse(courseEnrollmentData['validUntil'])
-                          : now.add(const Duration(days: 365));
+                      validFrom =
+                          courseEnrollmentData['validFrom'] != null
+                              ? DateTime.parse(
+                                courseEnrollmentData['validFrom'],
+                              )
+                              : now;
+                      validUntil =
+                          courseEnrollmentData['validUntil'] != null
+                              ? DateTime.parse(
+                                courseEnrollmentData['validUntil'],
+                              )
+                              : now.add(const Duration(days: 365));
                       totalReservations =
                           courseEnrollmentData['totalReservations'] != null
-                          ? courseEnrollmentData['totalReservations'] as int
-                          : course.defaultTotalReservations;
+                              ? courseEnrollmentData['totalReservations'] as int
+                              : course.defaultTotalReservations;
                       remainingReservations = totalReservations;
                     } else {
                       // 기본값 사용
@@ -1075,12 +875,13 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
 
                     final result = await Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (context) => EnrollmentDetailScreen(
-                          member: widget.member,
-                          enrollment: tempEnrollment,
-                          course: course,
-                          isNewEnrollment: true, // 새 enrollment 생성 모드
-                        ),
+                        builder:
+                            (context) => EnrollmentDetailScreen(
+                              member: widget.member,
+                              enrollment: tempEnrollment,
+                              course: course,
+                              isNewEnrollment: true, // 새 enrollment 생성 모드
+                            ),
                       ),
                     );
                     // 코스 등록이 성공적으로 완료되면 pendingMembers만 갱신
@@ -1128,8 +929,10 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                   onPressed: () async {
                     final result = await Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (context) =>
-                            MemberCourseEnrollmentScreen(member: widget.member),
+                        builder:
+                            (context) => MemberCourseEnrollmentScreen(
+                              member: widget.member,
+                            ),
                       ),
                     );
                     // 코스 등록이 성공적으로 완료되면 pendingMembers만 갱신
@@ -1338,119 +1141,6 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
       ),
     );
   }
-
-  Future<void> _showApprovalDialog(
-    CourseEnrollment enrollment,
-    Course course,
-  ) async {
-    // 바텀시트 먼저 닫기
-    Navigator.of(context).pop();
-
-    // 다이얼로그 띄우기
-    final confirmed = await CommonDialog.show(
-      context: context,
-      title: '연장 요청 승인',
-      message: course.name,
-      secondaryMessage: '연장 요청을 승인하시겠습니까?',
-      cancelText: '취소',
-      confirmText: '승인',
-      confirmButtonColor: AppColors.primaryGreen,
-    );
-
-    // 취소 시 바텀시트 다시 열기 (롤백)
-    if (confirmed != true) {
-      if (mounted) {
-        MemberDetailBottomSheet.show(context: context, member: widget.member);
-      }
-      return;
-    }
-
-    try {
-      final enrollmentService = EnrollmentService();
-      final request = enrollment.extensionRequest!;
-
-      // 연장 승인 (30일 연장)
-      final newValidUntil = enrollment.validUntil.add(const Duration(days: 30));
-      final approvedEnrollment = enrollment.approveExtension(newValidUntil);
-      await enrollmentService.updateEnrollment(approvedEnrollment);
-
-      // 연장 요청 상태 업데이트 (서브컬렉션 + marker 동기화)
-      await enrollmentService.updateExtensionRequestStatusWithEnrollmentMarker(
-        enrollmentId: enrollment.id,
-        requestId: request.id,
-        status: ExtensionRequestStatus.approved,
-      );
-
-      // EnrollmentProvider의 스트림을 통해 자동으로 업데이트됨
-      // 바텀시트는 이미 닫혔으므로 setState 불필요
-      if (mounted) {
-        SnackbarUtil.showSuccess(context, '${course.name} 연장 요청이 승인되었습니다.');
-      }
-    } catch (e) {
-      if (mounted) {
-        SnackbarUtil.showError(context, '연장 승인 중 오류가 발생했습니다: $e');
-        // 에러 발생 시에도 바텀시트 다시 열기
-        MemberDetailBottomSheet.show(context: context, member: widget.member);
-      }
-    }
-  }
-
-  void _showRejectionDialog(CourseEnrollment enrollment, Course course) {
-    // 바텀시트 먼저 닫기
-    Navigator.of(context).pop();
-
-    // 다이얼로그 띄우기
-    CommonDialogWithTextField.show(
-      context: context,
-      title: '연장 요청 거절',
-      message: course.name,
-      secondaryMessage: '연장 요청을 거절하시겠습니까?',
-      hintText: '거절 사유를 입력하세요',
-      cancelText: '취소',
-      confirmText: '거절',
-      confirmButtonColor: AppColors.primaryGreen,
-      onCancel: () {
-        // 취소 시 바텀시트 다시 열기 (롤백)
-        if (mounted) {
-          MemberDetailBottomSheet.show(context: context, member: widget.member);
-        }
-      },
-      onConfirm: (reason) async {
-        try {
-          final enrollmentService = EnrollmentService();
-          final request = enrollment.extensionRequest!;
-
-          // 연장 거절
-          final rejectedEnrollment = enrollment.rejectExtension(reason);
-          await enrollmentService.updateEnrollment(rejectedEnrollment);
-
-          // 연장 요청 상태 업데이트 (서브컬렉션 + marker 동기화)
-          await enrollmentService
-              .updateExtensionRequestStatusWithEnrollmentMarker(
-                enrollmentId: enrollment.id,
-                requestId: request.id,
-                status: ExtensionRequestStatus.rejected,
-                rejectionReason: reason,
-              );
-
-          // EnrollmentProvider의 스트림을 통해 자동으로 업데이트됨
-          // 바텀시트는 이미 닫혔으므로 setState 불필요
-          if (mounted) {
-            SnackbarUtil.showError(context, '${course.name} 연장 요청이 거절되었습니다.');
-          }
-        } catch (e) {
-          if (mounted) {
-            SnackbarUtil.showError(context, '연장 거절 중 오류가 발생했습니다: $e');
-            // 에러 발생 시에도 바텀시트 다시 열기
-            MemberDetailBottomSheet.show(
-              context: context,
-              member: widget.member,
-            );
-          }
-        }
-      },
-    );
-  }
 }
 
 /// 재등록 설정 다이얼로그
@@ -1619,18 +1309,19 @@ class _ReEnrollDialogState extends State<_ReEnrollDialog> {
           ),
         ),
         ElevatedButton(
-          onPressed: _isFormValid()
-              ? () {
-                  final totalReservations = int.parse(
-                    _totalReservationsController.text,
-                  );
-                  Navigator.of(context).pop({
-                    'totalReservations': totalReservations,
-                    'validFrom': _validFrom,
-                    'validUntil': _validUntil,
-                  });
-                }
-              : null,
+          onPressed:
+              _isFormValid()
+                  ? () {
+                    final totalReservations = int.parse(
+                      _totalReservationsController.text,
+                    );
+                    Navigator.of(context).pop({
+                      'totalReservations': totalReservations,
+                      'validFrom': _validFrom,
+                      'validUntil': _validUntil,
+                    });
+                  }
+                  : null,
           style: ElevatedButton.styleFrom(
             backgroundColor: AppColors.primaryGreen,
             foregroundColor: Colors.white,

@@ -636,13 +636,17 @@ class AuthService {
 
   /// 최근 접속한 플레이스 업데이트
   Future<void> updateLastAccessedPlace(String placeId) async {
-    await _storageService.saveLastAccessedPlaceId(placeId);
+    // 서버에 현재 플레이스 ID 저장
+    final savedUserId = await _storageService.getAdminUserId();
+    if (savedUserId != null) {
+      await _userService.updateCurrentPlaceId(savedUserId, placeId);
+    }
+
     // ✅ 관리자 모드로 접속했음을 저장 (자동 로그인 시 모드 복원)
     await _storageService.saveLastEntryMode('admin');
 
     // AdminUser에도 업데이트 (Firestore 연동 시)
     try {
-      final savedUserId = await _storageService.getAdminUserId();
       if (savedUserId != null) {
         final userService = UserService();
         final admin = await userService.getAdmin(savedUserId);
@@ -747,10 +751,11 @@ class AuthService {
     String userId,
   ) async {
     final firestore = _firestoreService.firestore;
-    final snap = await firestore
-        .collection('placeMemberships')
-        .where('userId', isEqualTo: userId)
-        .get();
+    final snap =
+        await firestore
+            .collection('placeMemberships')
+            .where('userId', isEqualTo: userId)
+            .get();
 
     DateTime toDateTime(dynamic v) => _firestoreService.timestampToDateTime(v);
 
@@ -805,9 +810,8 @@ class AuthService {
     }
     for (final m in newlyCreated) {
       final prev = byPlaceId[m.placeId];
-      byPlaceId[m.placeId] = prev == null
-          ? m
-          : _pickPreferredMembership(prev, m);
+      byPlaceId[m.placeId] =
+          prev == null ? m : _pickPreferredMembership(prev, m);
     }
 
     final memberships = byPlaceId.values.toList();
@@ -816,8 +820,16 @@ class AuthService {
     final approvedMemberships = memberships;
     final pendingMemberships = <PlaceMembership>[];
 
-    // 마지막 접속 플레이스 확인
-    final lastPlaceId = await _storageService.getUserLastAccessedPlaceId();
+    // 서버에서 마지막 접속 플레이스 확인 (currentPlaceId)
+    String? lastPlaceId = user.currentPlaceId;
+    // 서버에 없으면 로컬에서 읽어오기 (마이그레이션용)
+    if (lastPlaceId == null) {
+      lastPlaceId = await _storageService.getUserLastAccessedPlaceId();
+      // 로컬에 있으면 서버에도 저장 (마이그레이션)
+      if (lastPlaceId != null) {
+        await _userService.updateCurrentPlaceId(user.userId, lastPlaceId);
+      }
+    }
 
     // 관리자 여부 확인 (역할 정보만, 일반 사용자로도 처리 가능)
     final isAdmin = await _checkIfAdmin(user.userId);
@@ -892,14 +904,16 @@ class AuthService {
     final data = snapshot.docs.first.data();
     // Timestamp 변환 처리
     if (data['createdAt'] != null) {
-      data['createdAt'] = _firestoreService
-          .timestampToDateTime(data['createdAt'])
-          .toIso8601String();
+      data['createdAt'] =
+          _firestoreService
+              .timestampToDateTime(data['createdAt'])
+              .toIso8601String();
     }
     if (data['updatedAt'] != null) {
-      data['updatedAt'] = _firestoreService
-          .timestampToDateTime(data['updatedAt'])
-          .toIso8601String();
+      data['updatedAt'] =
+          _firestoreService
+              .timestampToDateTime(data['updatedAt'])
+              .toIso8601String();
     }
     return models.User.fromJson(data);
   }
@@ -1104,9 +1118,10 @@ class AuthService {
         name: data['name'] as String? ?? name,
         phoneNumber: data['phoneNumber'] as String? ?? normalizedPhone,
         authPin: pin,
-        placeIds: (data['placeIds'] as List<dynamic>? ?? [])
-            .map((e) => e.toString())
-            .toList(),
+        placeIds:
+            (data['placeIds'] as List<dynamic>? ?? [])
+                .map((e) => e.toString())
+                .toList(),
         createdAt: TimezoneUtils.getSeoulDateTime(),
         updatedAt: TimezoneUtils.getSeoulDateTime(),
       );
@@ -1269,14 +1284,14 @@ class AuthService {
   /// 승인된 플레이스 목록 가져오기 (status 제거로 모든 멤버십이 승인된 것으로 처리)
   Future<List<Place>> getApprovedPlaces(String userId) async {
     final firestore = _firestoreService.firestore;
-    final memberships = await firestore
-        .collection('placeMemberships')
-        .where('userId', isEqualTo: userId)
-        .get();
+    final memberships =
+        await firestore
+            .collection('placeMemberships')
+            .where('userId', isEqualTo: userId)
+            .get();
 
-    final placeIds = memberships.docs
-        .map((doc) => doc.data()['placeId'] as String)
-        .toList();
+    final placeIds =
+        memberships.docs.map((doc) => doc.data()['placeId'] as String).toList();
 
     if (placeIds.isEmpty) return [];
 
@@ -1354,19 +1369,22 @@ class AuthService {
     final data = snapshot.docs.first.data();
     // Timestamp 변환
     if (data['requestedAt'] != null) {
-      data['requestedAt'] = _firestoreService
-          .timestampToDateTime(data['requestedAt'])
-          .toIso8601String();
+      data['requestedAt'] =
+          _firestoreService
+              .timestampToDateTime(data['requestedAt'])
+              .toIso8601String();
     }
     if (data['approvedAt'] != null) {
-      data['approvedAt'] = _firestoreService
-          .timestampToDateTime(data['approvedAt'])
-          .toIso8601String();
+      data['approvedAt'] =
+          _firestoreService
+              .timestampToDateTime(data['approvedAt'])
+              .toIso8601String();
     }
     if (data['rejectedAt'] != null) {
-      data['rejectedAt'] = _firestoreService
-          .timestampToDateTime(data['rejectedAt'])
-          .toIso8601String();
+      data['rejectedAt'] =
+          _firestoreService
+              .timestampToDateTime(data['rejectedAt'])
+              .toIso8601String();
     }
     return PlaceMembership.fromJson(data);
   }
@@ -1374,8 +1392,13 @@ class AuthService {
   /// 현재 플레이스 설정
   Future<void> setCurrentPlace(Place place) async {
     _currentPlace = place;
-    // 마지막 접속 플레이스 저장
-    await _storageService.saveUserLastAccessedPlaceId(place.id);
+
+    // 서버에 현재 플레이스 ID 저장
+    final currentUser = _userService.currentUser;
+    if (currentUser != null) {
+      await _userService.updateCurrentPlaceId(currentUser.userId, place.id);
+    }
+
     // ✅ 일반(멤버) 모드로 접속했음을 저장 (자동 로그인 시 모드 복원)
     await _storageService.saveLastEntryMode('member');
   }

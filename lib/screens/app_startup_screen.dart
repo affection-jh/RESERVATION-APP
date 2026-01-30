@@ -274,10 +274,11 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
 
         // 승인된 플레이스 ID 목록 설정 (스플래시에서 한 번만)
         // approvedMemberships + pendingMemberships 모두 포함
-        final allMemberPlaceIds = <String>{
-          ...userResult.approvedMemberships.map((m) => m.placeId),
-          ...userResult.pendingMemberships.map((m) => m.placeId),
-        }.toList();
+        final allMemberPlaceIds =
+            <String>{
+              ...userResult.approvedMemberships.map((m) => m.placeId),
+              ...userResult.pendingMemberships.map((m) => m.placeId),
+            }.toList();
         debugPrint(
           '[AppStartup] 승인된 플레이스 멤버십 개수: ${userResult.approvedMemberships.length}',
         );
@@ -368,12 +369,13 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
         final firestore = firestoreService.firestore;
 
         // placeMemberships 컬렉션에서 userId와 placeId로 멤버십 확인 (status 제거로 모든 멤버십이 승인된 것으로 처리)
-        final membershipQuery = await firestore
-            .collection('placeMemberships')
-            .where('userId', isEqualTo: result.user.userId)
-            .where('placeId', isEqualTo: targetPlaceId)
-            .limit(1)
-            .get();
+        final membershipQuery =
+            await firestore
+                .collection('placeMemberships')
+                .where('userId', isEqualTo: result.user.userId)
+                .where('placeId', isEqualTo: targetPlaceId)
+                .limit(1)
+                .get();
 
         isLastPlaceApproved = membershipQuery.docs.isNotEmpty;
         debugPrint(
@@ -421,7 +423,16 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
       final authService = AuthService();
       final firestoreService = FirestoreService();
 
-      // 플레이스 정보 가져오기
+      // 연관된 모든 플레이스 로드 (병렬 처리)
+      final allPlaceIds = <String>{
+        ...result.approvedMemberships.map((m) => m.placeId),
+        ...result.pendingMemberships.map((m) => m.placeId),
+      };
+      if (allPlaceIds.isNotEmpty) {
+        await placeProvider.loadPlaces(allPlaceIds.toList());
+      }
+
+      // 현재 플레이스 정보 가져오기
       final place = await firestoreService
           .getPlace(targetPlaceId)
           .timeout(const Duration(seconds: 6));
@@ -432,6 +443,7 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
         await authService.setCurrentPlace(place);
 
         final storyProvider = Provider.of<StoryProvider>(
+          // ignore: use_build_context_synchronously
           context,
           listen: false,
         );
@@ -463,16 +475,18 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
 
         // ✅ StoryCard의 CachedNetworkImage와 동일한 캐시 키로 프리캐시
         // 모든 스토리의 모든 이미지(일반 이미지 + 배경 이미지)를 프리캐시
-        final imageUrls = <String>{
-          for (final s in storyProvider.stories) ...s.imageUrls,
-        }.where((u) => u.trim().isNotEmpty).toList();
+        final imageUrls =
+            <String>{
+              for (final s in storyProvider.stories) ...s.imageUrls,
+            }.where((u) => u.trim().isNotEmpty).toList();
 
-        final backgroundImageUrls = <String>{
-          for (final s in storyProvider.stories)
-            if (s.backgroundImageUrl != null &&
-                s.backgroundImageUrl!.isNotEmpty)
-              s.backgroundImageUrl!,
-        }.where((u) => u.trim().isNotEmpty).toList();
+        final backgroundImageUrls =
+            <String>{
+              for (final s in storyProvider.stories)
+                if (s.backgroundImageUrl != null &&
+                    s.backgroundImageUrl!.isNotEmpty)
+                  s.backgroundImageUrl!,
+            }.where((u) => u.trim().isNotEmpty).toList();
 
         final allUrls = [...imageUrls, ...backgroundImageUrls];
 
@@ -571,10 +585,11 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
       final firestore = FirestoreService().firestore;
       // ✅ whereIn은 복합 인덱스 요구/제약으로 인해 예기치 않게 실패하거나 비는 케이스가 있어,
       // 먼저 userId로만 가져온 뒤 status는 클라이언트에서 필터링한다.
-      final snap = await firestore
-          .collection('placeMemberships')
-          .where('userId', isEqualTo: result.admin.userId)
-          .get();
+      final snap =
+          await firestore
+              .collection('placeMemberships')
+              .where('userId', isEqualTo: result.admin.userId)
+              .get();
 
       final memberPlaceIds = <String>{};
       // status 제거로 모든 멤버십이 승인된 것으로 처리
@@ -704,11 +719,11 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
   }
 
   /// 스플래시 숨기기 (페이드 아웃)
-  /// 로딩 완료 후 UI 안정화 시간 0.5초 대기 후 페이드아웃
+  /// 로딩 완료 후 UI 안정화 시간 대기 후 페이드아웃
   void _hideSplash() async {
     if (!mounted) return;
-    // UI 안정화 시간 0.5초 대기
-    await Future.delayed(const Duration(milliseconds: 500));
+    // UI 안정화 시간 대기
+    await Future.delayed(const Duration(milliseconds: 200));
     if (!mounted) return;
     setState(() {
       _showSplash = false;
@@ -727,7 +742,7 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
         // 스플래시 오버레이 (페이드 아웃만, 네비게이션 없음)
         AnimatedOpacity(
           opacity: _showSplash ? 1.0 : 0.0,
-          duration: const Duration(milliseconds: 500),
+          duration: const Duration(milliseconds: 200),
           curve: Curves.easeOut,
           child: IgnorePointer(
             ignoring: !_showSplash,

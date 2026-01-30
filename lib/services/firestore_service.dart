@@ -7,6 +7,7 @@ import '../models/session_reservation.dart';
 import '../models/date_capacity_override.dart';
 import '../models/course.dart';
 import '../models/notification.dart';
+import '../models/course_override.dart';
 import '../providers/story_provider.dart';
 import '../policies/course_policy.dart';
 import '../utils/timezone_utils.dart';
@@ -94,10 +95,11 @@ class FirestoreService {
   ///
   /// Place 문서의 `adminId` 필드를 기준으로 조회합니다.
   Future<List<String>> getManagedPlaceIdsByAdminId(String adminId) async {
-    final snapshot = await _firestore
-        .collection('places')
-        .where('adminId', isEqualTo: adminId)
-        .get();
+    final snapshot =
+        await _firestore
+            .collection('places')
+            .where('adminId', isEqualTo: adminId)
+            .get();
     return snapshot.docs.map((d) => d.id).toList();
   }
 
@@ -210,14 +212,15 @@ class FirestoreService {
 
       // 코스 찾아서 업데이트
       bool courseFound = false;
-      final updatedCourses = coursesData.map((c) {
-        final courseData = c as Map<String, dynamic>;
-        if (courseData['id'] == course.id) {
-          courseFound = true;
-          return course.toJson();
-        }
-        return c;
-      }).toList();
+      final updatedCourses =
+          coursesData.map((c) {
+            final courseData = c as Map<String, dynamic>;
+            if (courseData['id'] == course.id) {
+              courseFound = true;
+              return course.toJson();
+            }
+            return c;
+          }).toList();
 
       // 코스를 찾지 못한 경우 에러 발생
       if (!courseFound) {
@@ -243,16 +246,17 @@ class FirestoreService {
     await callable.call({
       'placeId': placeId,
       'courseId': courseId,
-      'sessions': sessions
-          .map(
-            (s) => {
-              'dayOfWeek': s.dayOfWeek,
-              'startTime': s.startTime,
-              'endTime': s.endTime,
-              'capacity': s.capacity,
-            },
-          )
-          .toList(),
+      'sessions':
+          sessions
+              .map(
+                (s) => {
+                  'dayOfWeek': s.dayOfWeek,
+                  'startTime': s.startTime,
+                  'endTime': s.endTime,
+                  'capacity': s.capacity,
+                },
+              )
+              .toList(),
     });
   }
 
@@ -313,10 +317,11 @@ class FirestoreService {
       final coursesData = (placeData['courses'] as List?) ?? [];
 
       // 코스 제거
-      final updatedCourses = coursesData.where((c) {
-        final courseData = c as Map<String, dynamic>;
-        return courseData['id'] != courseId;
-      }).toList();
+      final updatedCourses =
+          coursesData.where((c) {
+            final courseData = c as Map<String, dynamic>;
+            return courseData['id'] != courseId;
+          }).toList();
 
       transaction.update(placeRef, {'courses': updatedCourses});
     });
@@ -430,9 +435,10 @@ class FirestoreService {
     // ⚠️ 주의: merge: true를 사용하므로 기존 필드는 유지됨
     // - 즉시 적용 시: active만 업데이트, scheduled는 그대로 (미래 적용 예정이면 유지)
     // - 미래 적용 시: scheduled만 업데이트, active는 그대로 (현재 적용 중이면 유지)
-    final dataToSave = isFuture
-        ? {'placeId': policy.placeId, 'scheduled': policy.toJson()}
-        : {'placeId': policy.placeId, 'active': policy.toJson()};
+    final dataToSave =
+        isFuture
+            ? {'placeId': policy.placeId, 'scheduled': policy.toJson()}
+            : {'placeId': policy.placeId, 'active': policy.toJson()};
 
     assert(() {
       debugPrint('  저장할 데이터: $dataToSave');
@@ -444,12 +450,13 @@ class FirestoreService {
 
   /// 코스에 예약이 존재하는지(= sessionReservations reservedCount > 0이 하나라도 있는지) 확인
   Future<bool> hasAnyReservationsForCourse(String courseId) async {
-    final snapshot = await _firestore
-        .collection('sessionReservations')
-        .where('courseId', isEqualTo: courseId)
-        .where('reservedCount', isGreaterThan: 0)
-        .limit(1)
-        .get();
+    final snapshot =
+        await _firestore
+            .collection('sessionReservations')
+            .where('courseId', isEqualTo: courseId)
+            .where('reservedCount', isGreaterThan: 0)
+            .limit(1)
+            .get();
     return snapshot.docs.isNotEmpty;
   }
 
@@ -567,12 +574,10 @@ class FirestoreService {
         .map((snapshot) {
           return snapshot.docs.map((doc) {
             final data = doc.data();
-            data['reservedAt'] = _timestampToDateTime(
-              data['reservedAt'],
-            ).toIso8601String();
-            data['reservedDate'] = _timestampToDateTime(
-              data['reservedDate'],
-            ).toIso8601String();
+            data['reservedAt'] =
+                _timestampToDateTime(data['reservedAt']).toIso8601String();
+            data['reservedDate'] =
+                _timestampToDateTime(data['reservedDate']).toIso8601String();
             return Reservation.fromJson(data);
           }).toList();
         });
@@ -599,12 +604,10 @@ class FirestoreService {
         .map((snapshot) {
           return snapshot.docs.map((doc) {
             final data = doc.data();
-            data['reservedAt'] = _timestampToDateTime(
-              data['reservedAt'],
-            ).toIso8601String();
-            data['reservedDate'] = _timestampToDateTime(
-              data['reservedDate'],
-            ).toIso8601String();
+            data['reservedAt'] =
+                _timestampToDateTime(data['reservedAt']).toIso8601String();
+            data['reservedDate'] =
+                _timestampToDateTime(data['reservedDate']).toIso8601String();
             return Reservation.fromJson(data);
           }).toList();
         });
@@ -626,12 +629,10 @@ class FirestoreService {
         .map((snapshot) {
           return snapshot.docs.map((doc) {
             final data = doc.data();
-            data['reservedAt'] = _timestampToDateTime(
-              data['reservedAt'],
-            ).toIso8601String();
-            data['reservedDate'] = _timestampToDateTime(
-              data['reservedDate'],
-            ).toIso8601String();
+            data['reservedAt'] =
+                _timestampToDateTime(data['reservedAt']).toIso8601String();
+            data['reservedDate'] =
+                _timestampToDateTime(data['reservedDate']).toIso8601String();
             return Reservation.fromJson(data);
           }).toList();
         });
@@ -666,13 +667,11 @@ class FirestoreService {
     final data = doc.data();
     // 문서 ID 추가 (서버에서 id 필드를 저장하지 않을 수 있으므로)
     data['id'] = doc.id;
-    data['lastUpdated'] = _timestampToDateTime(
-      data['lastUpdated'],
-    ).toIso8601String();
+    data['lastUpdated'] =
+        _timestampToDateTime(data['lastUpdated']).toIso8601String();
     if (data['createdAt'] != null) {
-      data['createdAt'] = _timestampToDateTime(
-        data['createdAt'],
-      ).toIso8601String();
+      data['createdAt'] =
+          _timestampToDateTime(data['createdAt']).toIso8601String();
     }
 
     return SessionReservation.fromJson(data);
@@ -705,13 +704,11 @@ class FirestoreService {
           final data = doc.data();
           // 문서 ID 추가 (서버에서 id 필드를 저장하지 않을 수 있으므로)
           data['id'] = doc.id;
-          data['lastUpdated'] = _timestampToDateTime(
-            data['lastUpdated'],
-          ).toIso8601String();
+          data['lastUpdated'] =
+              _timestampToDateTime(data['lastUpdated']).toIso8601String();
           if (data['createdAt'] != null) {
-            data['createdAt'] = _timestampToDateTime(
-              data['createdAt'],
-            ).toIso8601String();
+            data['createdAt'] =
+                _timestampToDateTime(data['createdAt']).toIso8601String();
           }
 
           return SessionReservation.fromJson(data);
@@ -745,13 +742,11 @@ class FirestoreService {
         final data = doc.data();
         // 문서 ID 추가 (서버에서 id 필드를 저장하지 않을 수 있으므로)
         data['id'] = doc.id;
-        data['lastUpdated'] = _timestampToDateTime(
-          data['lastUpdated'],
-        ).toIso8601String();
+        data['lastUpdated'] =
+            _timestampToDateTime(data['lastUpdated']).toIso8601String();
         if (data['createdAt'] != null) {
-          data['createdAt'] = _timestampToDateTime(
-            data['createdAt'],
-          ).toIso8601String();
+          data['createdAt'] =
+              _timestampToDateTime(data['createdAt']).toIso8601String();
         }
         return SessionReservation.fromJson(data);
       }).toList();
@@ -761,17 +756,31 @@ class FirestoreService {
   /// 코스 전체에서 "예약이 존재하는(sessionReservations.reservedCount > 0)" 세션ID 목록 구독
   ///
   /// - 주차(weekOffset)와 무관하게, 해당 코스에서 예약이 한 번이라도 잡힌 세션 템플릿(sessionId)을 찾을 때 사용
-  Stream<Set<String>> watchReservedSessionIdsForCourse(String courseId) {
+  Stream<Set<String>> watchReservedSessionIdsForCourse(
+    String courseId, {
+    DateTime? startDate,
+  }) {
+    // 과거(완료된) 세션까지 전부 스트리밍하면 문서 수가 무한히 누적되어 비용이 커질 수 있음.
+    // "앞으로 예약이 잡힌 세션 템플릿"을 파악하는 목적이 대부분이라,
+    // 기본은 오늘 이후(date >= today)만 대상으로 좁힌다.
+    final sd = startDate ?? TimezoneUtils.getSeoulToday();
+    final startDateString = _formatDate(sd);
+
+    // NOTE:
+    // reservedCount > 0 + date 범위(inequality) 조합은 인덱스/쿼리 제약에 걸릴 수 있어
+    // 서버 필터는 date만 적용하고, reservedCount는 클라이언트에서 필터링한다.
     return _firestore
         .collection('sessionReservations')
         .where('courseId', isEqualTo: courseId)
-        .where('reservedCount', isGreaterThan: 0)
+        .where('date', isGreaterThanOrEqualTo: startDateString)
         .snapshots()
         .map((snapshot) {
           final ids = <String>{};
           for (final doc in snapshot.docs) {
             final data = doc.data();
             final sessionId = data['sessionId'] as String?;
+            final reservedCount = (data['reservedCount'] as num?)?.toInt() ?? 0;
+            if (reservedCount <= 0) continue;
             if (sessionId != null && sessionId.isNotEmpty) {
               ids.add(sessionId);
             }
@@ -782,13 +791,14 @@ class FirestoreService {
 
   /// 특정 sessionId에 대해 예약이 존재하는 날짜 중 "가장 이른 날짜"를 찾음 (관리자 UX: 잠긴 세션 클릭 시 해당 날짜로 이동)
   Future<DateTime?> findFirstReservedDateForSession(String sessionId) async {
-    final snapshot = await _firestore
-        .collection('sessionReservations')
-        .where('sessionId', isEqualTo: sessionId)
-        .where('reservedCount', isGreaterThan: 0)
-        .orderBy('date')
-        .limit(1)
-        .get();
+    final snapshot =
+        await _firestore
+            .collection('sessionReservations')
+            .where('sessionId', isEqualTo: sessionId)
+            .where('reservedCount', isGreaterThan: 0)
+            .orderBy('date')
+            .limit(1)
+            .get();
 
     if (snapshot.docs.isEmpty) return null;
     final data = snapshot.docs.first.data();
@@ -802,11 +812,13 @@ class FirestoreService {
 
   /// 날짜별 수용인원 오버라이드 조회
   Future<DateCapacityOverride?> getCapacityOverride(
+    String placeId,
     String sessionId,
     String date,
   ) async {
     final query = _firestore
         .collection('dateCapacityOverrides')
+        .where('placeId', isEqualTo: placeId)
         .where('sessionId', isEqualTo: sessionId)
         .where('date', isEqualTo: date)
         .limit(1);
@@ -815,13 +827,11 @@ class FirestoreService {
     if (snapshot.docs.isEmpty) return null;
 
     final data = snapshot.docs.first.data();
-    data['createdAt'] = _timestampToDateTime(
-      data['createdAt'],
-    ).toIso8601String();
+    data['createdAt'] =
+        _timestampToDateTime(data['createdAt']).toIso8601String();
     if (data['updatedAt'] != null) {
-      data['updatedAt'] = _timestampToDateTime(
-        data['updatedAt'],
-      ).toIso8601String();
+      data['updatedAt'] =
+          _timestampToDateTime(data['updatedAt']).toIso8601String();
     }
 
     return DateCapacityOverride.fromJson(data);
@@ -829,12 +839,19 @@ class FirestoreService {
 
   /// 날짜별 수용인원 오버라이드 설정
   Future<DateCapacityOverride> setCapacityOverride({
+    required String placeId,
     required String sessionId,
     required String date,
     required int capacity,
   }) async {
+    // sessionId = "${courseId}_${dayOfWeek}_${startTime}"
+    // courseId는 "_"를 포함할 수 있으므로(예: course_123...), 뒤에서 2개 토큰을 제외하고 합친다.
+    final parts = sessionId.split('_');
+    final derivedCourseId =
+        parts.length >= 3 ? parts.sublist(0, parts.length - 2).join('_') : '';
+
     // 기존 오버라이드 확인
-    final existing = await getCapacityOverride(sessionId, date);
+    final existing = await getCapacityOverride(placeId, sessionId, date);
 
     if (existing != null) {
       // 업데이트
@@ -842,6 +859,8 @@ class FirestoreService {
           .collection('dateCapacityOverrides')
           .doc(existing.id);
       await docRef.update({
+        'placeId': placeId,
+        'courseId': derivedCourseId,
         'capacity': capacity,
         'updatedAt': _dateTimeToTimestamp(DateTime.now()),
       });
@@ -851,6 +870,8 @@ class FirestoreService {
       final docRef = _firestore.collection('dateCapacityOverrides').doc();
       final override = DateCapacityOverride(
         id: docRef.id,
+        placeId: placeId,
+        courseId: derivedCourseId,
         sessionId: sessionId,
         date: date,
         capacity: capacity,
@@ -865,9 +886,14 @@ class FirestoreService {
   }
 
   /// 날짜별 수용인원 오버라이드 삭제
-  Future<void> deleteCapacityOverride(String sessionId, String date) async {
+  Future<void> deleteCapacityOverride({
+    required String placeId,
+    required String sessionId,
+    required String date,
+  }) async {
     final query = _firestore
         .collection('dateCapacityOverrides')
+        .where('placeId', isEqualTo: placeId)
         .where('sessionId', isEqualTo: sessionId)
         .where('date', isEqualTo: date)
         .limit(1);
@@ -876,6 +902,47 @@ class FirestoreService {
     if (snapshot.docs.isNotEmpty) {
       await snapshot.docs.first.reference.delete();
     }
+  }
+
+  /// 날짜별 수용인원 오버라이드 구독 (특정 코스의 특정 날짜 범위)
+  ///
+  /// ✅ 최적화: courseId 필드로 서버 사이드 필터링하여 읽기 비용 절감
+  Stream<Map<String, int>> watchDateCapacityOverrides({
+    required String placeId,
+    required String courseId,
+    required DateTime startDate,
+    required DateTime endDate,
+  }) {
+    final startDateString = _formatDate(startDate);
+    final endDateString = _formatDate(endDate);
+
+    return _firestore
+        .collection('dateCapacityOverrides')
+        .where('placeId', isEqualTo: placeId)
+        .where('courseId', isEqualTo: courseId)
+        .where('date', isGreaterThanOrEqualTo: startDateString)
+        .where('date', isLessThanOrEqualTo: endDateString)
+        .orderBy('date')
+        .snapshots()
+        .map((snapshot) {
+          final overrides = <String, int>{};
+          for (final doc in snapshot.docs) {
+            final data = doc.data();
+            final sessionId = data['sessionId'] as String?;
+            final date = data['date'] as String?;
+            final dynamic capRaw = data['capacity'];
+            final int? capacity =
+                capRaw is int
+                    ? capRaw
+                    : (capRaw is num
+                        ? capRaw.toInt()
+                        : int.tryParse('$capRaw'));
+            if (sessionId != null && date != null && capacity != null) {
+              overrides['${sessionId}_$date'] = capacity;
+            }
+          }
+          return overrides;
+        });
   }
 
   // ==================== Stories ====================
@@ -888,25 +955,26 @@ class FirestoreService {
     );
 
     try {
-      final snapshot = await _firestore
-          .collection('stories')
-          .where('placeId', isEqualTo: placeId)
-          .get();
+      final snapshot =
+          await _firestore
+              .collection('stories')
+              .where('placeId', isEqualTo: placeId)
+              .get();
 
       debugPrint(
         '[FirestoreService.getStoriesByPlace] 쿼리 결과 - 문서 개수: ${snapshot.docs.length}',
       );
 
-      final stories = snapshot.docs.map((doc) {
-        final data = doc.data();
-        debugPrint(
-          '[FirestoreService.getStoriesByPlace] 문서 ID: ${doc.id}, placeId: ${data['placeId']}, title: ${data['title']}',
-        );
-        data['createdAt'] = _timestampToDateTime(
-          data['createdAt'],
-        ).toIso8601String();
-        return Story.fromJson(data);
-      }).toList();
+      final stories =
+          snapshot.docs.map((doc) {
+            final data = doc.data();
+            debugPrint(
+              '[FirestoreService.getStoriesByPlace] 문서 ID: ${doc.id}, placeId: ${data['placeId']}, title: ${data['title']}',
+            );
+            data['createdAt'] =
+                _timestampToDateTime(data['createdAt']).toIso8601String();
+            return Story.fromJson(data);
+          }).toList();
 
       // 클라이언트에서 createdAt 기준 내림차순 정렬 후 최대 5개만 반환
       stories.sort((a, b) => b.createdAt.compareTo(a.createdAt));
@@ -955,12 +1023,13 @@ class FirestoreService {
     String userId, {
     bool isAdmin = false,
   }) async {
-    final snapshot = await _firestore
-        .collection('notifications')
-        .where('userId', isEqualTo: userId)
-        .where('isAdminNotification', isEqualTo: isAdmin)
-        .orderBy('createdAt', descending: true)
-        .get();
+    final snapshot =
+        await _firestore
+            .collection('notifications')
+            .where('userId', isEqualTo: userId)
+            .where('isAdminNotification', isEqualTo: isAdmin)
+            .orderBy('createdAt', descending: true)
+            .get();
 
     return snapshot.docs.map((doc) {
       final data = doc.data();
@@ -1000,10 +1069,11 @@ class FirestoreService {
   /// 알림 ID로 단일 알림 조회
   Future<AppNotification?> getNotificationById(String notificationId) async {
     try {
-      final doc = await _firestore
-          .collection('notifications')
-          .doc(notificationId)
-          .get();
+      final doc =
+          await _firestore
+              .collection('notifications')
+              .doc(notificationId)
+              .get();
       if (!doc.exists) {
         return null;
       }
@@ -1099,5 +1169,207 @@ class FirestoreService {
     });
 
     return result.data as Map<String, dynamic>;
+  }
+
+  // ==================== Course Overrides (비정기 일정) ====================
+
+  /// 특정 주의 비정기 일정 조회
+  ///
+  /// [weekStartDate] 해당 주의 시작 날짜 (월요일) "YYYY-MM-DD" 형식
+  Future<List<CourseOverride>> getCourseOverrides({
+    required String placeId,
+    String? courseId,
+    required String weekStartDate,
+  }) async {
+    try {
+      Query query = _firestore
+          .collection('courseOverrides')
+          .where('placeId', isEqualTo: placeId)
+          .where('weekStartDate', isEqualTo: weekStartDate);
+
+      if (courseId != null) {
+        query = query.where('courseId', isEqualTo: courseId);
+      }
+
+      final snapshot = await query.get();
+      return snapshot.docs.map((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        data['id'] = doc.id;
+        return CourseOverride.fromJson(data);
+      }).toList();
+    } catch (e) {
+      debugPrint('[FirestoreService] getCourseOverrides error: $e');
+      return [];
+    }
+  }
+
+  /// 비정기 일정 생성/수정/삭제 (Functions 사용)
+  Future<Map<String, dynamic>> upsertCourseOverride({
+    required String placeId,
+    required String courseId,
+    required String date,
+    required int dayOfWeek,
+    required String weekStartDate,
+    String? startTime,
+    String? endTime,
+    int? capacity,
+    bool isCancelled = false,
+    String action = 'create', // 'create' | 'update' | 'delete'
+    String? overrideId,
+    bool sendNotification = true,
+  }) async {
+    try {
+      final callable = FirebaseFunctions.instance.httpsCallable(
+        'upsertCourseOverride',
+      );
+      final result = await callable.call({
+        'placeId': placeId,
+        'courseId': courseId,
+        'date': date,
+        'dayOfWeek': dayOfWeek,
+        'startTime': startTime,
+        'endTime': endTime,
+        'capacity': capacity,
+        'isCancelled': isCancelled,
+        'weekStartDate': weekStartDate,
+        'action': action,
+        'overrideId': overrideId,
+        'sendNotification': sendNotification,
+      });
+
+      return {
+        'success': result.data['success'] == true,
+        'overrideId': result.data['overrideId'],
+      };
+    } catch (e) {
+      debugPrint('[FirestoreService] upsertCourseOverride error: $e');
+      rethrow;
+    }
+  }
+
+  /// 비정기 일정 생성 (로컬, Functions 미사용 - 구독용)
+  Future<CourseOverride> createCourseOverride(CourseOverride override) async {
+    final docRef = _firestore.collection('courseOverrides').doc(override.id);
+    await docRef.set(override.toJson());
+    return override;
+  }
+
+  /// 비정기 일정 업데이트 (로컬, Functions 미사용)
+  Future<void> updateCourseOverride(CourseOverride override) async {
+    final docRef = _firestore.collection('courseOverrides').doc(override.id);
+    await docRef.update({
+      ...override.toJson(),
+      'updatedAt': _dateTimeToTimestamp(DateTime.now()),
+    });
+  }
+
+  /// 비정기 일정 삭제 (로컬, Functions 미사용)
+  Future<void> deleteCourseOverride(String overrideId) async {
+    await _firestore.collection('courseOverrides').doc(overrideId).delete();
+  }
+
+  /// 특정 날짜의 비정기 일정 조회
+  Future<List<CourseOverride>> getCourseOverridesByDate({
+    required String placeId,
+    required String date, // "YYYY-MM-DD"
+  }) async {
+    try {
+      final snapshot =
+          await _firestore
+              .collection('courseOverrides')
+              .where('placeId', isEqualTo: placeId)
+              .where('date', isEqualTo: date)
+              .get();
+
+      return snapshot.docs.map((doc) {
+        final data = doc.data();
+        data['id'] = doc.id;
+        return CourseOverride.fromJson(data);
+      }).toList();
+    } catch (e) {
+      debugPrint('[FirestoreService] getCourseOverridesByDate error: $e');
+      return [];
+    }
+  }
+
+  /// 비정기 일정 구독 (실시간 반영)
+  Stream<List<CourseOverride>> streamCourseOverrides({
+    required String placeId,
+    String? courseId,
+    required String weekStartDate,
+  }) {
+    Query query = _firestore
+        .collection('courseOverrides')
+        .where('placeId', isEqualTo: placeId)
+        .where('weekStartDate', isEqualTo: weekStartDate);
+
+    if (courseId != null) {
+      query = query.where('courseId', isEqualTo: courseId);
+    }
+
+    return query.snapshots().map((snapshot) {
+      return snapshot.docs.map((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        data['id'] = doc.id;
+        return CourseOverride.fromJson(data);
+      }).toList();
+    });
+  }
+
+  // ==================== Booking Week Opens ====================
+
+  /// 관리자 미리 예약 열기: 특정 주차를 정책과 상관없이 오픈
+  Future<void> setBookingWeekOpened({
+    required String placeId,
+    required String courseId,
+    required String weekStartDate, // "YYYY-MM-DD" (주차 시작 월요일)
+  }) async {
+    try {
+      final docId = '${placeId}_${courseId}_$weekStartDate';
+      await _firestore.collection('bookingWeekOpens').doc(docId).set({
+        'placeId': placeId,
+        'courseId': courseId,
+        'weekStartDate': weekStartDate,
+        'openedAt': _dateTimeToTimestamp(TimezoneUtils.getSeoulDateTime()),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint('[FirestoreService] setBookingWeekOpened error: $e');
+      rethrow;
+    }
+  }
+
+  /// 특정 주차가 미리 열렸는지 확인
+  Future<bool> isBookingWeekOpened({
+    required String placeId,
+    required String courseId,
+    required String weekStartDate,
+  }) async {
+    try {
+      final docId = '${placeId}_${courseId}_$weekStartDate';
+      final doc =
+          await _firestore.collection('bookingWeekOpens').doc(docId).get();
+      return doc.exists;
+    } catch (e) {
+      debugPrint('[FirestoreService] isBookingWeekOpened error: $e');
+      return false;
+    }
+  }
+
+  /// 코스의 미리 열린 주차 목록 구독
+  Stream<Set<String>> streamBookingWeekOpens({
+    required String placeId,
+    required String courseId,
+  }) {
+    return _firestore
+        .collection('bookingWeekOpens')
+        .where('placeId', isEqualTo: placeId)
+        .where('courseId', isEqualTo: courseId)
+        .snapshots()
+        .map((snapshot) {
+          return snapshot.docs
+              .map((doc) => doc.data()['weekStartDate'] as String? ?? '')
+              .where((date) => date.isNotEmpty)
+              .toSet();
+        });
   }
 }

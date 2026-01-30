@@ -3,9 +3,11 @@ import 'package:provider/provider.dart';
 import 'package:reservation/utils/text_field_decoration_util.dart';
 import '../../../models/course.dart';
 import '../../../models/user.dart';
+import '../../../models/course_enrollment.dart';
 import '../../../theme/app_colors.dart';
 import '../../../providers/member_provider.dart';
 import '../../../providers/auth_provider.dart';
+import '../../../utils/format_utils.dart';
 
 /// 멤버 선택 바텀시트
 class MemberSelectionSidePanel extends StatefulWidget {
@@ -39,13 +41,14 @@ class MemberSelectionSidePanel extends StatefulWidget {
       barrierColor: Colors.black.withOpacity(0.7),
       isDismissible: true,
       enableDrag: true,
-      builder: (context) => MemberSelectionSidePanel(
-        course: course,
-        totalCapacity: totalCapacity,
-        reservedCount: reservedCount,
-        existingReservationUserIds: existingReservationUserIds,
-        onMembersSelected: onMembersSelected,
-      ),
+      builder:
+          (context) => MemberSelectionSidePanel(
+            course: course,
+            totalCapacity: totalCapacity,
+            reservedCount: reservedCount,
+            existingReservationUserIds: existingReservationUserIds,
+            onMembersSelected: onMembersSelected,
+          ),
     );
   }
 
@@ -95,20 +98,122 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
           final placeId = admin.lastAccessedPlaceId ?? admin.placeIds.first;
           await memberProvider.loadMembers(placeId);
 
-          // 필터링: 해당 코스에 등록한 멤버만, 이미 예약한 멤버는 제외
+          // 전체 멤버 표시 (members + pendingMembers)
           final allMembers = memberProvider.members;
-          final filteredMembers = allMembers.where((user) {
-            // 1. 해당 코스에 등록되어 있는지 확인
-            final isEnrolled = user.isEnrolledInCourse(widget.course.id);
-            if (!isEnrolled) return false;
 
-            // 2. 이미 예약한 멤버는 제외
-            final isAlreadyReserved = widget.existingReservationUserIds
-                .contains(user.userId);
-            if (isAlreadyReserved) return false;
+          // pendingMembers를 User로 변환
+          final pendingMembers = memberProvider.pendingMembers;
+          final pendingAsUsers =
+              pendingMembers.map((pm) {
+                // courseEnrollments를 CourseEnrollment 리스트로 변환
+                final enrollments = <CourseEnrollment>[];
+                if (pm.courseEnrollments != null &&
+                    pm.courseEnrollments!.isNotEmpty) {
+                  for (final enrollmentData in pm.courseEnrollments!) {
+                    try {
+                      final courseId = enrollmentData['courseId']?.toString();
+                      if (courseId == null || courseId.isEmpty) continue;
 
-            return true;
-          }).toList();
+                      final totalReservations =
+                          enrollmentData['totalReservations'] as int? ?? 10;
+                      final remainingReservations =
+                          enrollmentData['remainingReservations'] as int? ??
+                          totalReservations;
+
+                      DateTime validFrom;
+                      if (enrollmentData['validFrom'] != null) {
+                        if (enrollmentData['validFrom'] is String) {
+                          validFrom = DateTime.parse(
+                            enrollmentData['validFrom'] as String,
+                          );
+                        } else {
+                          validFrom = pm.createdAt;
+                        }
+                      } else {
+                        validFrom = pm.createdAt;
+                      }
+
+                      DateTime validUntil;
+                      if (enrollmentData['validUntil'] != null) {
+                        if (enrollmentData['validUntil'] is String) {
+                          validUntil = DateTime.parse(
+                            enrollmentData['validUntil'] as String,
+                          );
+                        } else {
+                          validUntil = pm.createdAt.add(
+                            const Duration(days: 365),
+                          );
+                        }
+                      } else {
+                        validUntil = pm.createdAt.add(
+                          const Duration(days: 365),
+                        );
+                      }
+
+                      enrollments.add(
+                        CourseEnrollment(
+                          id: 'pending_${pm.id}_$courseId',
+                          userId: 'pending_${pm.id}',
+                          courseId: courseId,
+                          placeId: pm.placeId,
+                          enrolledAt: pm.createdAt,
+                          validFrom: validFrom,
+                          validUntil: validUntil,
+                          totalReservations: totalReservations,
+                          remainingReservations: remainingReservations,
+                        ),
+                      );
+                    } catch (e) {
+                      // 변환 실패 시 스킵
+                      debugPrint('Failed to convert courseEnrollment: $e');
+                    }
+                  }
+                } else {
+                  // courseEnrollments가 없으면 derivedCourseIds 사용 (하위 호환)
+                  final courseIds = pm.derivedCourseIds;
+                  for (final courseId in courseIds) {
+                    enrollments.add(
+                      CourseEnrollment(
+                        id: 'pending_${pm.id}_$courseId',
+                        userId: 'pending_${pm.id}',
+                        courseId: courseId,
+                        placeId: pm.placeId,
+                        enrolledAt: pm.createdAt,
+                        validFrom: pm.createdAt,
+                        validUntil: pm.createdAt.add(const Duration(days: 365)),
+                        totalReservations: 10,
+                        remainingReservations: 10,
+                      ),
+                    );
+                  }
+                }
+
+                return User(
+                  userId: 'pending_${pm.id}',
+                  name: pm.name ?? '이름 없음',
+                  phoneNumber: pm.phoneNumber,
+                  placeIds: [pm.placeId],
+                  enrollments: enrollments,
+                  reservations: const [],
+                  notificationsEnabled: false,
+                  createdAt: pm.createdAt,
+                  updatedAt: null,
+                );
+              }).toList();
+
+          // members + pendingMembers 합치기
+          final combinedMembers = [...allMembers, ...pendingAsUsers];
+
+          // 이미 예약한 멤버는 제외
+          final filteredMembers =
+              combinedMembers
+                  .where(
+                    (user) =>
+                        !widget.existingReservationUserIds.contains(
+                          user.userId,
+                        ),
+                  )
+                  .toList();
 
           setState(() {
             _allMembers = filteredMembers;
@@ -136,26 +241,18 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
     }
     final query = _searchQuery.toLowerCase();
     return _allMembers.where((user) {
+      // 이름과 전화번호 둘 다 검색 지원 (관리자가 생성한 이름)
       final name = user.name.toLowerCase();
       final phone = user.phoneNumber.toLowerCase();
       return name.contains(query) || phone.contains(query);
     }).toList();
   }
 
-  bool get _isCapacityFull {
-    return widget.reservedCount >= widget.totalCapacity;
-  }
-
-  bool get _isExceedingCapacity {
-    final remainingCapacity = widget.totalCapacity - widget.reservedCount;
-    return _selectedUserIds.length > remainingCapacity;
-  }
-
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
     final screenHeight = MediaQuery.of(context).size.height;
-    final maxHeight = screenHeight * 0.9;
+    final maxHeight = screenHeight * 0.7;
 
     return Container(
       padding: EdgeInsets.only(bottom: bottomInset),
@@ -189,92 +286,95 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
                       padding: const EdgeInsets.symmetric(horizontal: 20),
                       child: TextField(
                         controller: _searchController,
-                        decoration:
-                            TextFieldDecorationUtil.standardDecoration(
-                              hintText: '검색해서 추가하기',
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 10,
-                              ),
-                            ).copyWith(
-                              prefixIcon: Icon(
-                                Icons.search,
-                                color: AppColors.textSecondary,
-                                size: 20,
-                              ),
-                              suffixIcon: IconButton(
-                                icon: Icon(
-                                  Icons.close,
-                                  color: AppColors.textSecondary,
-                                  size: 20,
-                                ),
-                                onPressed: () {
-                                  if (_searchQuery.isNotEmpty) {
-                                    // 검색어가 있으면 검색어 지우기
-                                    _searchController.clear();
-                                  } else {
-                                    // 검색어가 없으면 바텀시트 닫기
-                                    Navigator.of(context).pop();
-                                  }
-                                },
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(),
-                              ),
+                        decoration: TextFieldDecorationUtil.standardDecoration(
+                          hintText: '검색해서 추가하기',
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
+                        ).copyWith(
+                          prefixIcon: Icon(
+                            Icons.search,
+                            color: AppColors.textSecondary,
+                            size: 20,
+                          ),
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              Icons.close,
+                              color: AppColors.textSecondary,
+                              size: 20,
                             ),
+                            onPressed: () {
+                              if (_searchQuery.isNotEmpty) {
+                                // 검색어가 있으면 검색어 지우기
+                                _searchController.clear();
+                              } else {
+                                // 검색어가 없으면 바텀시트 닫기
+                                Navigator.of(context).pop();
+                              }
+                            },
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                          ),
+                        ),
                       ),
                     ),
                     const SizedBox(height: 16),
-                    // 멤버 리스트
-                    Flexible(
-                      child: _isLoading
-                          ? Center(
-                              child: SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 3,
-                                  color: AppColors.primaryGreen,
+                    // 멤버 리스트 (고정 높이로 요동 방지)
+                    Expanded(
+                      child:
+                          _isLoading
+                              ? Center(
+                                child: SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 3,
+                                    color: AppColors.primaryGreen,
+                                  ),
                                 ),
-                              ),
-                            )
-                          : _filteredMembers.isEmpty
-                          ? Center(
-                              child: Padding(
-                                padding: const EdgeInsets.all(40),
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Text(
-                                      _searchQuery.isEmpty
-                                          ? '추가할 수 있는 멤버가 없어요'
-                                          : '검색 결과가 없습니다',
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        color: AppColors.textSecondary,
+                              )
+                              : _filteredMembers.isEmpty
+                              ? Center(
+                                child: Padding(
+                                  padding: const EdgeInsets.all(40),
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Text(
+                                        _searchQuery.isEmpty
+                                            ? '추가 할 수 있는 멤버가 없어요'
+                                            : '검색 결과가 없습니다',
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          color: AppColors.textSecondary,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              )
+                              : ListView.separated(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 20,
+                                ),
+                                shrinkWrap: false,
+                                itemCount: _filteredMembers.length,
+                                separatorBuilder:
+                                    (context, index) => Divider(
+                                      height: 1,
+                                      color: AppColors.borderLight.withOpacity(
+                                        0.5,
                                       ),
                                     ),
-                                  ],
-                                ),
+                                itemBuilder: (context, index) {
+                                  final user = _filteredMembers[index];
+                                  return _buildMemberItem(user);
+                                },
                               ),
-                            )
-                          : ListView.separated(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 20,
-                              ),
-                              shrinkWrap: true,
-                              itemCount: _filteredMembers.length,
-                              separatorBuilder: (context, index) => Divider(
-                                height: 1,
-                                color: AppColors.borderLight.withOpacity(0.5),
-                              ),
-                              itemBuilder: (context, index) {
-                                final user = _filteredMembers[index];
-                                return _buildMemberItem(user);
-                              },
-                            ),
                     ),
-                    // 하단 버튼 영역
-                    if (!_isLoading && _filteredMembers.isNotEmpty)
+                    // 하단 버튼 영역 (항상 표시하여 높이 고정)
+                    if (!_isLoading)
                       Container(
                         padding: EdgeInsets.only(
                           left: 20,
@@ -295,51 +395,27 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // 설명 텍스트
-                            Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  _selectedUserIds.isEmpty
-                                      ? '멤버를 선택해주세요'
-                                      : '${_selectedUserIds.length}명 선택됨',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    color: AppColors.textSecondary,
-                                  ),
-                                ),
-                                if (_selectedUserIds.isNotEmpty &&
-                                    _isExceedingCapacity)
-                                  Padding(
-                                    padding: const EdgeInsets.only(top: 4),
-                                    child: Text(
-                                      '수용인원을 초과합니다',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.red,
-                                      ),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
+                            const SizedBox(height: 0),
                             // 추가하기 버튼
                             SizedBox(
                               width: double.infinity,
                               child: ElevatedButton(
-                                onPressed: _selectedUserIds.isEmpty
-                                    ? null
-                                    : () {
-                                        final selectedUsers = _allMembers
-                                            .where(
-                                              (user) => _selectedUserIds
-                                                  .contains(user.userId),
-                                            )
-                                            .toList();
-                                        widget.onMembersSelected(selectedUsers);
-                                        Navigator.of(context).pop();
-                                      },
+                                onPressed:
+                                    _selectedUserIds.isEmpty
+                                        ? null
+                                        : () {
+                                          final selectedUsers =
+                                              _allMembers
+                                                  .where(
+                                                    (user) => _selectedUserIds
+                                                        .contains(user.userId),
+                                                  )
+                                                  .toList();
+                                          widget.onMembersSelected(
+                                            selectedUsers,
+                                          );
+                                          Navigator.of(context).pop();
+                                        },
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: AppColors.primaryGreen,
                                   foregroundColor: Colors.white,
@@ -356,7 +432,7 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
                                   elevation: 0,
                                 ),
                                 child: Text(
-                                  _isCapacityFull ? '관리자 권한으로 추가' : '추가하기',
+                                  '추가하기',
                                   style: TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.w600,
@@ -379,23 +455,23 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
 
   Widget _buildMemberItem(User user) {
     final isSelected = _selectedUserIds.contains(user.userId);
-    final canReserve = user.canReserveCourse(widget.course.id);
+    final isEnrolled = user.isEnrolledInCourse(widget.course.id);
     final remaining = user.getRemainingReservations(widget.course.id);
 
+    // 관리자 권한으로 모든 멤버 선택 가능 (등록 여부와 관계없이)
     return InkWell(
-      onTap: canReserve
-          ? () {
-              setState(() {
-                if (isSelected) {
-                  _selectedUserIds.remove(user.userId);
-                } else {
-                  _selectedUserIds.add(user.userId);
-                }
-              });
-            }
-          : null,
-      child: Padding(
+      onTap: () {
+        setState(() {
+          if (isSelected) {
+            _selectedUserIds.remove(user.userId);
+          } else {
+            _selectedUserIds.add(user.userId);
+          }
+        });
+      },
+      child: Container(
         padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(borderRadius: BorderRadius.circular(8)),
         child: Row(
           children: [
             // 원형 체크박스
@@ -405,18 +481,18 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: isSelected
-                      ? AppColors.primaryGreen
-                      : (canReserve
-                            ? AppColors.borderLight
-                            : AppColors.borderLight.withOpacity(0.5)),
+                  color:
+                      isSelected
+                          ? AppColors.primaryGreen
+                          : AppColors.borderLight,
                   width: 2,
                 ),
                 color: isSelected ? AppColors.primaryGreen : Colors.transparent,
               ),
-              child: isSelected
-                  ? Icon(Icons.check, size: 16, color: Colors.white)
-                  : null,
+              child:
+                  isSelected
+                      ? Icon(Icons.check, size: 16, color: Colors.white)
+                      : null,
             ),
             const SizedBox(width: 12),
             // 멤버 정보
@@ -424,19 +500,42 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    user.name,
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                      color: canReserve
-                          ? AppColors.textPrimary
-                          : AppColors.textSecondary,
-                    ),
+                  Row(
+                    children: [
+                      Text(
+                        user.name,
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      if (isEnrolled) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppColors.primaryGreen,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            '등록됨',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    user.phoneNumber,
+                    FormatUtils.formatPhoneNumber(user.phoneNumber),
                     style: TextStyle(
                       fontSize: 14,
                       color: AppColors.textSecondary,
@@ -444,10 +543,10 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    canReserve ? '남은 횟수: $remaining' : '남은 횟수가 없어 추가할 수 없음',
+                    isEnrolled ? '남은 횟수: $remaining' : '이 코스에 등록되지 않음',
                     style: TextStyle(
                       fontSize: 12,
-                      color: canReserve ? AppColors.textSecondary : Colors.red,
+                      color: AppColors.textSecondary.withOpacity(0.6),
                       fontWeight: FontWeight.w600,
                     ),
                   ),

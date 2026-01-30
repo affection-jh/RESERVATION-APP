@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import '../../models/course.dart';
 import '../../models/course_enrollment.dart';
 import '../../theme/app_colors.dart';
-import 'extension_request_bottom_sheet.dart';
 
 /// 등록 상세 정보 바텀시트
 class EnrollmentDetailBottomSheet extends StatefulWidget {
@@ -33,7 +32,7 @@ class _EnrollmentDetailBottomSheetState
   double get _progress {
     return widget.enrollment.totalReservations > 0
         ? widget.enrollment.remainingReservations /
-              widget.enrollment.totalReservations
+            widget.enrollment.totalReservations
         : 0.0;
   }
 
@@ -69,7 +68,7 @@ class _EnrollmentDetailBottomSheetState
                       top: Radius.circular(20),
                     ),
                   ),
-                  padding: const EdgeInsets.only(left: 24, right: 24, top: 0),
+                  padding: const EdgeInsets.only(left: 24, right: 12, top: 0),
                   child: SingleChildScrollView(
                     child: Padding(
                       padding: EdgeInsets.only(
@@ -81,7 +80,7 @@ class _EnrollmentDetailBottomSheetState
                         children: [
                           // 제목
                           Padding(
-                            padding: const EdgeInsets.only(top: 28),
+                            padding: const EdgeInsets.only(top: 16),
                             child: Row(
                               children: [
                                 Text(
@@ -93,36 +92,7 @@ class _EnrollmentDetailBottomSheetState
                                   ),
                                 ),
                                 Spacer(),
-                                // 연장 요청 아이콘 (send 아이콘)
-                                if (widget.enrollment.id.isNotEmpty &&
-                                    widget.enrollment.remainingReservations >
-                                        0 &&
-                                    !widget.enrollment.isExpired &&
-                                    !widget
-                                        .enrollment
-                                        .hasPendingExtensionRequest)
-                                  IconButton(
-                                    onPressed: () {
-                                      // 이전 바텀시트 닫기
-                                      Navigator.of(context).pop();
-                                      // 새로운 바텀시트 열기
-                                      ExtensionRequestBottomSheet.show(
-                                        context: context,
-                                        enrollmentId: widget.enrollment.id,
-                                        enrollment: widget.enrollment,
-                                        course: widget.course,
-                                        onRequestSubmitted: () {
-                                          widget.onExtensionRequested?.call();
-                                        },
-                                      );
-                                    },
-                                    icon: Icon(
-                                      Icons.send,
-                                      color: AppColors.primaryGreen,
-                                      size: 24,
-                                    ),
-                                    tooltip: '연장 요청',
-                                  ),
+
                                 IconButton(
                                   onPressed: () => Navigator.of(context).pop(),
                                   icon: Icon(
@@ -135,7 +105,6 @@ class _EnrollmentDetailBottomSheetState
                             ),
                           ),
                           const SizedBox(height: 24),
-
                           // 남은 횟수 게이지
                           Padding(
                             padding: const EdgeInsets.only(right: 16),
@@ -151,14 +120,14 @@ class _EnrollmentDetailBottomSheetState
                                       style: TextStyle(
                                         fontSize: 16,
                                         color: AppColors.textSecondary,
-                                        fontWeight: FontWeight.w500,
+                                        fontWeight: FontWeight.w600,
                                       ),
                                     ),
                                     Text(
                                       '${widget.enrollment.remainingReservations} / ${widget.enrollment.totalReservations}',
                                       style: TextStyle(
                                         fontSize: 16,
-                                        color: AppColors.textPrimary,
+                                        color: AppColors.textSecondary,
                                         fontWeight: FontWeight.w600,
                                       ),
                                     ),
@@ -185,12 +154,13 @@ class _EnrollmentDetailBottomSheetState
                                       // 진행 바
                                       FractionallySizedBox(
                                         alignment: Alignment.centerLeft,
-                                        widthFactor: _progress > 0
-                                            ? _progress
-                                            : 0.02, // 최소 2% 너비로 보이게
+                                        widthFactor:
+                                            _progress > 0
+                                                ? _progress
+                                                : 0.02, // 최소 2% 너비로 보이게
                                         child: Container(
                                           decoration: BoxDecoration(
-                                            color: widget.course.colorValue,
+                                            color: AppColors.primaryGreen,
                                             borderRadius: BorderRadius.circular(
                                               12,
                                             ),
@@ -203,7 +173,7 @@ class _EnrollmentDetailBottomSheetState
                               ],
                             ),
                           ),
-                          const SizedBox(height: 28),
+                          const SizedBox(height: 48),
 
                           // 정보 칩들
                           Column(

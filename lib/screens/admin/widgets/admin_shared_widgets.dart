@@ -217,20 +217,21 @@ class IconPicker extends StatelessWidget {
         labelText: '아이콘',
         border: OutlineInputBorder(),
       ),
-      items: icons
-          .map(
-            (i) => DropdownMenuItem(
-              value: i,
-              child: Row(
-                children: [
-                  Icon(i, size: 18),
-                  const SizedBox(width: 8),
-                  Text(i.toString().split('.').last),
-                ],
-              ),
-            ),
-          )
-          .toList(),
+      items:
+          icons
+              .map(
+                (i) => DropdownMenuItem(
+                  value: i,
+                  child: Row(
+                    children: [
+                      Icon(i, size: 18),
+                      const SizedBox(width: 8),
+                      Text(i.toString().split('.').last),
+                    ],
+                  ),
+                ),
+              )
+              .toList(),
       onChanged: (v) {
         if (v == null) return;
         onChanged(v);
@@ -274,15 +275,17 @@ class ColorPicker extends StatelessWidget {
                     color: c ?? Colors.transparent,
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
-                      color: value == c
-                          ? AppColors.primaryGreen
-                          : AppColors.borderLight,
+                      color:
+                          value == c
+                              ? AppColors.primaryGreen
+                              : AppColors.borderLight,
                       width: value == c ? 2 : 1,
                     ),
                   ),
-                  child: c == null
-                      ? Icon(Icons.block, color: AppColors.textSecondary)
-                      : null,
+                  child:
+                      c == null
+                          ? Icon(Icons.block, color: AppColors.textSecondary)
+                          : null,
                 ),
               ),
           ],
@@ -327,9 +330,10 @@ class IntColorPicker extends StatelessWidget {
                     color: Color(c),
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
-                      color: value == c
-                          ? AppColors.primaryGreen
-                          : AppColors.borderLight,
+                      color:
+                          value == c
+                              ? AppColors.primaryGreen
+                              : AppColors.borderLight,
                       width: value == c ? 2 : 1,
                     ),
                   ),
@@ -541,16 +545,17 @@ class _MemberCardState extends State<MemberCard> {
     final isDeleting = memberProvider.isDeletingMember(widget.member.userId);
 
     return GestureDetector(
-      onTap: isDeleting
-          ? null // 삭제 중일 때는 탭 비활성화
-          : () {
-              // 최근 본 멤버 추가 콜백 호출
-              widget.onMemberTapped?.call();
-              MemberDetailBottomSheet.show(
-                context: context,
-                member: widget.member,
-              );
-            },
+      onTap:
+          isDeleting
+              ? null // 삭제 중일 때는 탭 비활성화
+              : () {
+                // 최근 본 멤버 추가 콜백 호출
+                widget.onMemberTapped?.call();
+                MemberDetailBottomSheet.show(
+                  context: context,
+                  member: widget.member,
+                );
+              },
       child: Stack(
         children: [
           Opacity(
@@ -635,83 +640,16 @@ class _MemberCardState extends State<MemberCard> {
                                   _isCopied ? Icons.check : Icons.copy,
                                   key: ValueKey(_isCopied),
                                   size: 16,
-                                  color: _isCopied
-                                      ? AppColors.primaryGreen
-                                      : AppColors.textSecondary,
+                                  color:
+                                      _isCopied
+                                          ? AppColors.primaryGreen
+                                          : AppColors.textSecondary,
                                 ),
                               ),
                             ),
                           ],
                         ),
                         const SizedBox(height: 8),
-                        // 연장 요청 정보 표시
-                        if (widget.extensionRequestInfo != null)
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: AppColors.primaryGreen.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.schedule,
-                                  size: 14,
-                                  color: AppColors.primaryGreen,
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  '기간 연장 요청',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    color: AppColors.primaryGreen,
-                                  ),
-                                ),
-                                if (widget.extensionRequestInfo!.count > 1) ...[
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    '(${widget.extensionRequestInfo!.count})',
-                                    style: TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                      color: AppColors.primaryGreen,
-                                    ),
-                                  ),
-                                ],
-                                if (widget
-                                    .extensionRequestInfo!
-                                    .courseNames
-                                    .isNotEmpty) ...[
-                                  const SizedBox(width: 6),
-                                  Flexible(
-                                    child: Text(
-                                      widget
-                                                  .extensionRequestInfo!
-                                                  .courseNames
-                                                  .length ==
-                                              1
-                                          ? widget
-                                                .extensionRequestInfo!
-                                                .courseNames
-                                                .first
-                                          : '${widget.extensionRequestInfo!.courseNames.first} 외 ${widget.extensionRequestInfo!.courseNames.length - 1}개',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: AppColors.textSecondary,
-                                      ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
                       ],
                     ),
                   ),
@@ -793,20 +731,21 @@ Future<void> confirmDelete(
 }) async {
   final ok = await showDialog<bool>(
     context: context,
-    builder: (context) => AlertDialog(
-      title: Text(title),
-      content: Text(message),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(false),
-          child: const Text('취소'),
+    builder:
+        (context) => AlertDialog(
+          title: Text(title),
+          content: Text(message),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('삭제'),
+            ),
+          ],
         ),
-        FilledButton(
-          onPressed: () => Navigator.of(context).pop(true),
-          child: const Text('삭제'),
-        ),
-      ],
-    ),
   );
   if (ok == true) onConfirm();
 }
@@ -922,13 +861,14 @@ class _AdminPlaceSelectorState extends State<AdminPlaceSelector> {
             children: [
               // 플레이스 정보 (클릭 가능)
               InkWell(
-                onTap: hasMultiplePlaces
-                    ? () {
-                        setState(() {
-                          _isPlaceListExpanded = !_isPlaceListExpanded;
-                        });
-                      }
-                    : null,
+                onTap:
+                    hasMultiplePlaces
+                        ? () {
+                          setState(() {
+                            _isPlaceListExpanded = !_isPlaceListExpanded;
+                          });
+                        }
+                        : null,
                 borderRadius: BorderRadius.circular(16),
                 child: Row(
                   children: [
@@ -980,11 +920,11 @@ class _AdminPlaceSelectorState extends State<AdminPlaceSelector> {
                       const SizedBox(width: 16),
                       widget.onTrailingTap != null
                           ? IconButton(
-                              color: AppColors.textSecondary,
-                              iconSize: 24,
-                              onPressed: widget.onTrailingTap,
-                              icon: widget.trailing!,
-                            )
+                            color: AppColors.textSecondary,
+                            iconSize: 24,
+                            onPressed: widget.onTrailingTap,
+                            icon: widget.trailing!,
+                          )
                           : widget.trailing!,
                     ],
                   ],
@@ -995,57 +935,66 @@ class _AdminPlaceSelectorState extends State<AdminPlaceSelector> {
               if (_isPlaceListExpanded && hasMultiplePlaces) ...[
                 const SizedBox(height: 12),
                 Column(
-                  children: places.map((place) {
-                    final isCurrentPlace = place.id == currentPlaceId;
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: InkWell(
-                        onTap: isCurrentPlace
-                            ? null
-                            : () => _switchPlace(context, place),
-                        borderRadius: BorderRadius.circular(12),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 12,
-                          ),
-                          decoration: BoxDecoration(
-                            color: isCurrentPlace
-                                ? AppColors.primaryGreen.withOpacity(0.1)
-                                : AppColors.backgroundWhite,
+                  children:
+                      places.map((place) {
+                        final isCurrentPlace = place.id == currentPlaceId;
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: InkWell(
+                            onTap:
+                                isCurrentPlace
+                                    ? null
+                                    : () => _switchPlace(context, place),
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: isCurrentPlace
-                                  ? AppColors.primaryGreen
-                                  : AppColors.textSecondary.withOpacity(0.2),
-                            ),
-                          ),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  place.name,
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w500,
-                                    color: isCurrentPlace
-                                        ? AppColors.primaryGreen
-                                        : AppColors.textPrimary,
-                                  ),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 12,
+                              ),
+                              decoration: BoxDecoration(
+                                color:
+                                    isCurrentPlace
+                                        ? AppColors.primaryGreen.withOpacity(
+                                          0.1,
+                                        )
+                                        : AppColors.backgroundWhite,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color:
+                                      isCurrentPlace
+                                          ? AppColors.primaryGreen
+                                          : AppColors.textSecondary.withOpacity(
+                                            0.2,
+                                          ),
                                 ),
                               ),
-                              if (isCurrentPlace)
-                                Icon(
-                                  Icons.check_circle,
-                                  color: AppColors.primaryGreen,
-                                  size: 20,
-                                ),
-                            ],
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      place.name,
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w500,
+                                        color:
+                                            isCurrentPlace
+                                                ? AppColors.primaryGreen
+                                                : AppColors.textPrimary,
+                                      ),
+                                    ),
+                                  ),
+                                  if (isCurrentPlace)
+                                    Icon(
+                                      Icons.check_circle,
+                                      color: AppColors.primaryGreen,
+                                      size: 20,
+                                    ),
+                                ],
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
-                    );
-                  }).toList(),
+                        );
+                      }).toList(),
                 ),
               ],
             ],

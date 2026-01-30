@@ -1,15 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:reservation/screens/admin/widgets/admin_place_registration_screen.dart';
 import 'package:reservation/screens/admin/widgets/admin_shared_widgets.dart'
     show SectionHeader, ReservationCourseCard;
+import 'package:reservation/screens/admin/widgets/course_add_flow.dart';
 import 'package:reservation/screens/admin/widgets/course_detail_screen.dart';
 import '../../theme/app_colors.dart';
 import '../../services/auth_service.dart';
 import '../../widgets/profile_settings_widget.dart'
     show UserProfileInfoSection, SettingsItemsBuilder;
 import '../../widgets/notification_settings_dialog.dart';
-import '../../widgets/profile_edit_bottom_sheet.dart';
 import '../../widgets/place_switch_widget.dart';
 import '../../providers/place_provider.dart';
 import '../../providers/auth_provider.dart';
@@ -60,20 +59,10 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
                     headerTitle: '관리자 계정',
                     profileName: admin?.name ?? '관리자',
                     profilePhoneNumber: admin?.phoneNumber ?? '',
-                    onProfileTap: () {
-                      if (admin != null) {
-                        ProfileEditBottomSheet.show(
-                          context: context,
-                          currentName: admin.name,
-                        ).then((result) {
-                          if (result == true && context.mounted) {
-                            // 정보 변경 후 화면 새로고침
-                            setState(() {});
-                          }
-                        });
-                      }
-                    },
-                    profileBottomWidget: const PlaceSwitchWidget(),
+                    onProfileTap: () {},
+                    profileBottomWidget: const PlaceSwitchWidget(
+                      heroTagSuffix: 'admin_my_page_profile',
+                    ),
                     settingsItems: SettingsItemsBuilder.buildSettingsItems(
                       context: context,
                       isNotificationEnabled: isNotificationEnabled,
@@ -160,6 +149,7 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
                 enabled: true,
                 showDescription: true,
                 padding: EdgeInsets.zero,
+                heroTagSuffix: 'admin_my_page',
               ),
             ),
 
@@ -168,8 +158,9 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
                 Navigator.of(context)
                     .push(
                       MaterialPageRoute(
-                        builder: (context) =>
-                            AdminPlaceEditScreen(place: currentPlace),
+                        builder:
+                            (context) =>
+                                AdminPlaceEditScreen(place: currentPlace),
                       ),
                     )
                     .then((_) {
@@ -215,8 +206,25 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
             SizedBox(height: 22),
             SectionHeader(
               title: '개설한 코스',
-              onIconTap: () {},
-              icon: null,
+              onIconTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder:
+                        (context) => CourseAddFlow(
+                          onComplete: (course) {
+                            if (context.mounted) {
+                              setState(() {});
+                            }
+                          },
+                        ),
+                  ),
+                );
+              },
+              icon: Icon(
+                Icons.add_circle,
+                size: 30,
+                color: AppColors.primaryGreen,
+              ),
               horizontalPadding: 20,
               fontSize: 20,
             ),
@@ -224,22 +232,24 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Column(
-                children: courses.map((course) {
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: ReservationCourseCard(
-                      course: course,
-                      onTap: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (context) =>
-                                CourseDetailScreen(course: course),
-                          ),
-                        );
-                      },
-                    ),
-                  );
-                }).toList(),
+                children:
+                    courses.map((course) {
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: ReservationCourseCard(
+                          course: course,
+                          onTap: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder:
+                                    (context) =>
+                                        CourseDetailScreen(course: course),
+                              ),
+                            );
+                          },
+                        ),
+                      );
+                    }).toList(),
               ),
             ),
           ],

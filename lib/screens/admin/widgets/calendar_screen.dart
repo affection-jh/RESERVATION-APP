@@ -6,6 +6,7 @@ import '../../../models/course.dart';
 import '../../../models/reservation.dart';
 import '../../../models/session_reservation.dart';
 import '../../../models/course_enrollment.dart';
+import '../../../models/course_override.dart';
 import '../../../policies/course_policy.dart';
 import '../../../policies/reservation_policy_engine.dart';
 import '../../../providers/auth_provider.dart';
@@ -42,8 +43,16 @@ class _CalendarScreenState extends State<CalendarScreen> {
   CoursePolicy? _coursePolicy;
   StreamSubscription<List<SessionReservation>>? _sessionReservationSub;
   final Map<String, SessionReservation> _sessionReservationsByKey = {};
+  StreamSubscription<List<CourseOverride>>? _courseOverridesSub;
+  final Map<String, List<CourseOverride>> _courseOverridesByDate = {};
+  StreamSubscription<Map<String, int>>? _capacityOverridesSub;
+  Map<String, int> _capacityOverridesByKey = {}; // "sessionId_date" -> capacity
+  bool _sessionReservationsLoaded = false;
+  bool _courseOverridesLoaded = false;
   StreamSubscription<ReservationOperationEvent>? _reservationOpSub;
   String? _lastShownCompleteReservationId;
+  StreamSubscription<Set<String>>? _bookingWeekOpensSub;
+  Set<String> _openedWeekStartDates = {}; // 미리 열린 주차의 weekStartDate 집합
 
   // 구독 파라미터 추적 (중복 구독 방지)
   String? _lastSubscribedCourseId;
@@ -51,6 +60,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
   int? _lastSubscribedWeekOffset;
   DateTime? _lastSubscribedStartDate;
   DateTime? _lastSubscribedEndDate;
+  String? _lastSubscribedOverridesWeekStartDate;
 
   // 정책 기반 주차 범위
   List<int> _availableWeekOffsets = [0, 1, 2]; // 기본값
@@ -94,6 +104,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
       _ensureUserDataLoaded();
       _subscribeWeekSessionReservations();
       _subscribeReservationOperationEvents();
+      _subscribeBookingWeekOpens();
     });
   }
 
@@ -125,6 +136,12 @@ class _CalendarScreenState extends State<CalendarScreen> {
     } else {
       debugPrint('[CalendarScreen] dispose: 취소할 구독이 없음');
     }
+    _courseOverridesSub?.cancel();
+    _courseOverridesSub = null;
+    _capacityOverridesSub?.cancel();
+    _capacityOverridesSub = null;
+    _bookingWeekOpensSub?.cancel();
+    _bookingWeekOpensSub = null;
     _reservationOpSub?.cancel();
     _scrollController.dispose();
     // 구독 파라미터 초기화
@@ -133,8 +150,91 @@ class _CalendarScreenState extends State<CalendarScreen> {
     _lastSubscribedWeekOffset = null;
     _lastSubscribedStartDate = null;
     _lastSubscribedEndDate = null;
+    _lastSubscribedOverridesWeekStartDate = null;
     debugPrint('[CalendarScreen] dispose: 모든 리소스 해제 완료');
     super.dispose();
+  }
+
+  void _recomputeLoading() {
+    final nextLoading = !(_sessionReservationsLoaded && _courseOverridesLoaded);
+    if (!mounted) return;
+    if (_isLoading != nextLoading) {
+      setState(() {
+        _isLoading = nextLoading;
+      });
+    }
+  }
+
+  List<CourseSession> _effectiveSessionsForDate(DateTime date) {
+    final dateStr = _formatDate(date);
+    final overrides =
+        _courseOverridesByDate[dateStr] ?? const <CourseOverride>[];
+    final regular = course.getSessionsByDay(date.weekday);
+
+    // 취소: startTime이 있으면 해당 세션만, 없으면 해당 요일 전체(정기 세션 전체) 취소로 처리
+    final cancelled = overrides.where((o) => o.isCancelled == true).toList();
+    final cancelAllForDay = cancelled.any((o) {
+      final st = o.startTime;
+      return st == null || st.isEmpty;
+    });
+    final cancelledStartTimes =
+        cancelled.map((o) => o.startTime).whereType<String>().toSet();
+
+    final filteredRegular =
+        cancelAllForDay
+            ? <CourseSession>[]
+            : regular
+                .where((s) => !cancelledStartTimes.contains(s.startTime))
+                .toList();
+
+    // 추가/변경: startTime/endTime이 있는 override는 세션으로 간주
+    // 동일 startTime이 있으면 정기 세션을 대체(override 우선)
+    final addedOrModified =
+        overrides
+            .where(
+              (o) =>
+                  o.isCancelled != true &&
+                  o.startTime != null &&
+                  o.endTime != null,
+            )
+            .map(
+              (o) => CourseSession(
+                dayOfWeek: o.dayOfWeek,
+                startTime: o.startTime!,
+                endTime: o.endTime!,
+                capacity: o.capacity ?? 0,
+              ),
+            )
+            .toList();
+
+    final overrideStartTimes = addedOrModified.map((s) => s.startTime).toSet();
+    final base =
+        filteredRegular
+            .where((s) => !overrideStartTimes.contains(s.startTime))
+            .toList();
+    final all = <CourseSession>[...base, ...addedOrModified]..sort(
+      (a, b) => _parseTimeToMinutes(
+        a.startTime,
+      ).compareTo(_parseTimeToMinutes(b.startTime)),
+    );
+    return all;
+  }
+
+  bool _hasAddedOverrideSessionsForDate(DateTime date) {
+    final dateStr = _formatDate(date);
+    final overrides = _courseOverridesByDate[dateStr];
+    if (overrides == null || overrides.isEmpty) return false;
+    return overrides.any(
+      (o) => o.isCancelled != true && o.startTime != null && o.endTime != null,
+    );
+  }
+
+  List<CourseSession> _effectiveSessionsForDates(List<DateTime> dates) {
+    final out = <CourseSession>[];
+    for (final d in dates) {
+      out.addAll(_effectiveSessionsForDate(d));
+    }
+    return out;
   }
 
   void _subscribeReservationOperationEvents() {
@@ -225,7 +325,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
             listen: false,
           ).loadUserReservations(userId: r.userId, placeId: r.placeId);
         } catch (_) {}
-        SnackbarUtil.showSuccess(context, '예약이 변경되었습니다.');
+        SnackbarUtil.showSuccess(context, '예약을 변경했습니다.');
         if (!mounted) return;
         setState(() {});
       }
@@ -245,12 +345,81 @@ class _CalendarScreenState extends State<CalendarScreen> {
     });
   }
 
+  /// 미리 열린 주차 구독
+  void _subscribeBookingWeekOpens() {
+    _bookingWeekOpensSub?.cancel();
+
+    final placeId =
+        Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
+    if (placeId == null) return;
+
+    try {
+      _bookingWeekOpensSub = _firestoreService
+          .streamBookingWeekOpens(placeId: placeId, courseId: course.id)
+          .listen(
+            (openedWeekStartDates) {
+              if (!mounted) return;
+              setState(() {
+                _openedWeekStartDates = openedWeekStartDates;
+              });
+              // 정책이 로드되어 있으면 주차 범위 업데이트
+              if (_coursePolicy != null) {
+                _updateAvailableWeekOffsets(_coursePolicy!);
+              }
+            },
+            onError: (e) {
+              debugPrint('[CalendarScreen] bookingWeekOpens stream error: $e');
+            },
+          );
+    } catch (e) {
+      debugPrint('[CalendarScreen] bookingWeekOpens subscribe error: $e');
+    }
+  }
+
+  /// 정책 기반 주차 범위 계산 (미리 열린 주차 포함)
+  void _updateAvailableWeekOffsets(CoursePolicy policy) {
+    // 정책 기반 기본 주차 범위
+    final baseOffsets = WeekRangeCalculator.getAvailableWeekOffsets(policy);
+    final now = TimezoneUtils.getSeoulDateTime();
+    final thisWeekMonday = _startOfWeekMonday(now);
+
+    // 미리 열린 주차의 weekOffset 계산
+    final openedOffsets = <int>{};
+    for (final weekStartDateStr in _openedWeekStartDates) {
+      try {
+        final parts = weekStartDateStr.split('-');
+        final weekStartDate = DateTime(
+          int.parse(parts[0]),
+          int.parse(parts[1]),
+          int.parse(parts[2]),
+        );
+        final diffDays = weekStartDate.difference(thisWeekMonday).inDays;
+        final weekOffset = (diffDays / 7).round();
+        if (weekOffset >= 0) {
+          openedOffsets.add(weekOffset);
+        }
+      } catch (_) {
+        // 날짜 파싱 실패 시 스킵
+      }
+    }
+
+    // 정책 기반 주차 + 미리 열린 주차 합치기
+    final allOffsets = <int>{...baseOffsets, ...openedOffsets};
+    final sortedOffsets = allOffsets.toList()..sort();
+
+    setState(() {
+      _availableWeekOffsets = sortedOffsets;
+      // 선택된 주차가 범위를 벗어나면 조정
+      if (_weekOffset >= _availableWeekOffsets.length) {
+        _weekOffset = _availableWeekOffsets.length - 1;
+      }
+    });
+  }
+
   void _ensureUserDataLoaded() {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final placeId = Provider.of<PlaceProvider>(
-      context,
-      listen: false,
-    ).currentPlace?.id;
+    final placeId =
+        Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
     final userId = authProvider.currentUser?.userId;
     if (userId == null) return;
 
@@ -281,10 +450,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
   }
 
   Future<void> _loadCoursePolicy() async {
-    final placeId = Provider.of<PlaceProvider>(
-      context,
-      listen: false,
-    ).currentPlace?.id;
+    final placeId =
+        Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
     if (placeId == null) return;
     try {
       final policy = await _firestoreService.getCoursePolicy(
@@ -294,10 +461,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
       if (!mounted) return;
       setState(() {
         _coursePolicy = policy;
-        // 정책 기반 주차 범위 계산
-        _availableWeekOffsets = WeekRangeCalculator.getAvailableWeekOffsets(
-          policy,
-        );
+        // 정책 기반 주차 범위 계산 (미리 열린 주차 포함)
+        _updateAvailableWeekOffsets(policy);
         // 선택된 주차가 범위를 벗어나면 조정
         if (_weekOffset >= _availableWeekOffsets.length) {
           _weekOffset = _availableWeekOffsets.length - 1;
@@ -311,9 +476,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
       );
       setState(() {
         _coursePolicy = defaultPolicy;
-        _availableWeekOffsets = WeekRangeCalculator.getAvailableWeekOffsets(
-          defaultPolicy,
-        );
+        // 정책 기반 주차 범위 계산 (미리 열린 주차 포함)
+        _updateAvailableWeekOffsets(defaultPolicy);
         if (_weekOffset >= _availableWeekOffsets.length) {
           _weekOffset = _availableWeekOffsets.length - 1;
         }
@@ -324,10 +488,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
   void _subscribeWeekSessionReservations() {
     debugPrint('[CalendarScreen] _subscribeWeekSessionReservations: 구독 시작');
 
-    final placeId = Provider.of<PlaceProvider>(
-      context,
-      listen: false,
-    ).currentPlace?.id;
+    final placeId =
+        Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
 
     final now = TimezoneUtils.getSeoulDateTime();
     // 정책 기반 주차 범위 내에서만 선택 가능
@@ -340,6 +502,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
     ).add(Duration(days: 7 * weekOffset));
     final startDate = DateTime(weekStart.year, weekStart.month, weekStart.day);
     final endDate = startDate.add(const Duration(days: 6));
+    final weekStartDateString = TimezoneUtils.formatDateToSeoul(weekStart);
 
     // 구독 파라미터가 변경되지 않았으면 재구독하지 않음
     if (_sessionReservationSub != null &&
@@ -353,7 +516,9 @@ class _CalendarScreenState extends State<CalendarScreen> {
         _lastSubscribedStartDate!.day == startDate.day &&
         _lastSubscribedEndDate!.year == endDate.year &&
         _lastSubscribedEndDate!.month == endDate.month &&
-        _lastSubscribedEndDate!.day == endDate.day) {
+        _lastSubscribedEndDate!.day == endDate.day &&
+        _courseOverridesSub != null &&
+        _lastSubscribedOverridesWeekStartDate == weekStartDateString) {
       debugPrint(
         '[CalendarScreen] _subscribeWeekSessionReservations: 동일한 파라미터로 이미 구독 중, 재구독 스킵',
       );
@@ -371,8 +536,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
         '[CalendarScreen] _subscribeWeekSessionReservations: 기존 구독 취소 완료',
       );
     }
+    _courseOverridesSub?.cancel();
+    _courseOverridesSub = null;
 
     _sessionReservationsByKey.clear();
+    _courseOverridesByDate.clear();
 
     // 구독 파라미터 저장
     _lastSubscribedCourseId = course.id;
@@ -380,6 +548,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
     _lastSubscribedWeekOffset = weekOffset;
     _lastSubscribedStartDate = startDate;
     _lastSubscribedEndDate = endDate;
+    _lastSubscribedOverridesWeekStartDate = weekStartDateString;
 
     debugPrint('[CalendarScreen] _subscribeWeekSessionReservations: 쿼리 파라미터');
     debugPrint('  - courseId: ${course.id}');
@@ -387,15 +556,108 @@ class _CalendarScreenState extends State<CalendarScreen> {
     debugPrint('  - weekOffset: $weekOffset');
     debugPrint('  - startDate: $startDate');
     debugPrint('  - endDate: $endDate');
+    debugPrint('  - overrides.weekStartDate: $weekStartDateString');
 
     _loadCoursePolicy();
 
     // 초기 로딩 상태 설정
     setState(() {
       _isLoading = true;
+      _sessionReservationsLoaded = false;
+      _courseOverridesLoaded = false;
       _errorMessage = null;
       _errorType = null;
     });
+
+    // 비정기 일정 구독 (실시간)
+    try {
+      if (placeId != null) {
+        _courseOverridesSub = _firestoreService
+            .streamCourseOverrides(
+              placeId: placeId,
+              courseId: course.id,
+              weekStartDate: weekStartDateString,
+            )
+            .listen(
+              (items) {
+                final nextByDate = <String, List<CourseOverride>>{};
+                for (final o in items) {
+                  nextByDate
+                      .putIfAbsent(o.date, () => <CourseOverride>[])
+                      .add(o);
+                }
+                if (!mounted) return;
+                setState(() {
+                  _courseOverridesByDate
+                    ..clear()
+                    ..addAll(nextByDate);
+                  _courseOverridesLoaded = true;
+                });
+                _recomputeLoading();
+              },
+              onError: (e) {
+                debugPrint(
+                  '[CalendarScreen] ⚠️ courseOverrides stream error: $e',
+                );
+                if (!mounted) return;
+                setState(() {
+                  _courseOverridesByDate.clear();
+                  _courseOverridesLoaded = true; // 로딩 무한 방지
+                });
+                _recomputeLoading();
+              },
+            );
+      } else {
+        // placeId가 없으면 overrides는 비움 처리
+        _courseOverridesLoaded = true;
+        _recomputeLoading();
+      }
+    } catch (e) {
+      debugPrint('[CalendarScreen] ❌ courseOverrides subscribe error: $e');
+      _courseOverridesLoaded = true;
+      _recomputeLoading();
+    }
+
+    // dateCapacityOverrides 구독
+    _capacityOverridesSub?.cancel();
+    if (placeId == null || placeId.isEmpty) return;
+    _capacityOverridesSub = _firestoreService
+        .watchDateCapacityOverrides(
+          placeId: placeId,
+          courseId: course.id,
+          startDate: startDate,
+          endDate: endDate,
+        )
+        .listen(
+          (overrides) {
+            if (!mounted) return;
+            setState(() {
+              // ✅ 스트림이 source of truth (다른 화면에서의 변경도 즉시 반영)
+              _capacityOverridesByKey = {
+                ..._capacityOverridesByKey,
+                ...overrides,
+              };
+              // 기존 SessionReservation들의 capacity 업데이트
+              for (final key in _sessionReservationsByKey.keys) {
+                final overrideCapacity = _capacityOverridesByKey[key];
+                if (overrideCapacity != null) {
+                  final sr = _sessionReservationsByKey[key];
+                  if (sr != null) {
+                    _sessionReservationsByKey[key] = sr.copyWith(
+                      capacity: overrideCapacity,
+                    );
+                  }
+                }
+              }
+            });
+          },
+          onError: (e) {
+            debugPrint(
+              '[CalendarScreen] dateCapacityOverrides stream error: $e',
+            );
+            // 에러는 조용히 로그만 남김 (인덱스는 이미 정의되어 있으므로)
+          },
+        );
 
     try {
       debugPrint(
@@ -433,9 +695,15 @@ class _CalendarScreenState extends State<CalendarScreen> {
               final next = <String, SessionReservation>{};
               for (final sr in list) {
                 final key = '${sr.sessionId}_${sr.date}';
-                next[key] = sr;
+                // dateCapacityOverrides가 있으면 capacity를 오버라이드
+                final overrideCapacity = _capacityOverridesByKey[key];
+                final updatedSr =
+                    overrideCapacity != null
+                        ? sr.copyWith(capacity: overrideCapacity)
+                        : sr;
+                next[key] = updatedSr;
                 debugPrint(
-                  '[CalendarScreen]   - $key: reservedCount=${sr.reservedCount}/${sr.capacity}, id=${sr.id}',
+                  '[CalendarScreen]   - $key: reservedCount=${updatedSr.reservedCount}/${updatedSr.capacity}, id=${updatedSr.id}',
                 );
               }
               if (!mounted) {
@@ -448,8 +716,9 @@ class _CalendarScreenState extends State<CalendarScreen> {
                   ..addAll(next);
                 _errorMessage = null;
                 _errorType = null;
-                _isLoading = false;
+                _sessionReservationsLoaded = true;
               });
+              _recomputeLoading();
               debugPrint(
                 '[CalendarScreen] ✅ 구독 데이터 업데이트 완료: 총 ${_sessionReservationsByKey.length}개 항목',
               );
@@ -465,10 +734,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
               }
               setState(() {
                 _sessionReservationsByKey.clear();
-                _isLoading = false;
+                _sessionReservationsLoaded = true; // 로딩 무한 방지
                 _errorMessage = _getErrorMessage(error);
                 _errorType = _getErrorType(error);
               });
+              _recomputeLoading();
               debugPrint(
                 '[CalendarScreen] onError: 에러 UI 표시 완료 - $_errorMessage',
               );
@@ -488,10 +758,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
         return;
       }
       setState(() {
-        _isLoading = false;
+        _sessionReservationsLoaded = true; // 로딩 무한 방지
         _errorMessage = _getErrorMessage(e);
         _errorType = _getErrorType(e);
       });
+      _recomputeLoading();
       debugPrint('[CalendarScreen] catch: 에러 UI 표시 완료 - $_errorMessage');
     }
   }
@@ -544,7 +815,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
     // ReservationProvider를 listen하여 예약 변경사항 자동 반영
     Provider.of<ReservationProvider>(context);
 
-    // 해당 코스의 세션이 있는 요일들만 가져오기
+    // 해당 코스의 세션이 있는 요일들만 가져오기 (정기)
     final availableDays = course.availableDays;
 
     // 현재 주의 날짜들 계산 (주간 오프셋 적용, 이번주~다다음주만 / 월요일 기준)
@@ -562,10 +833,12 @@ class _CalendarScreenState extends State<CalendarScreen> {
       (index) => weekStart.add(Duration(days: index)),
     );
 
-    // 세션이 있는 날짜만 필터링
-    final sessionDates = weekDates.where((date) {
-      return availableDays.contains(date.weekday);
-    }).toList();
+    // 세션이 있는 날짜만 필터링 (정기 요일 + 비정기 추가 세션이 있는 날짜)
+    final sessionDates =
+        weekDates.where((date) {
+          return availableDays.contains(date.weekday) ||
+              _hasAddedOverrideSessionsForDate(date);
+        }).toList();
 
     return Scaffold(
       backgroundColor: AppColors.backgroundWhite,
@@ -605,55 +878,56 @@ class _CalendarScreenState extends State<CalendarScreen> {
         children: [
           const SizedBox(height: 6),
           Expanded(
-            child: (_errorMessage != null || _errorType != null)
-                ? _buildErrorWidget()
-                : GestureDetector(
-                    onHorizontalDragEnd: (details) {
-                      // 스와이프 방향에 따라 주간 이동
-                      final currentIndex = _availableWeekOffsets.indexOf(
-                        _weekOffset,
-                      );
-                      if (details.primaryVelocity! > 0) {
-                        // 오른쪽으로 스와이프 (저번주로)
-                        if (currentIndex > 0) {
-                          setState(() {
-                            _weekOffset =
-                                _availableWeekOffsets[currentIndex - 1];
-                            _didInitialJump = false;
-                          });
-                          _subscribeWeekSessionReservations();
+            child:
+                (_errorMessage != null || _errorType != null)
+                    ? _buildErrorWidget()
+                    : GestureDetector(
+                      onHorizontalDragEnd: (details) {
+                        // 스와이프 방향에 따라 주간 이동
+                        final currentIndex = _availableWeekOffsets.indexOf(
+                          _weekOffset,
+                        );
+                        if (details.primaryVelocity! > 0) {
+                          // 오른쪽으로 스와이프 (저번주로)
+                          if (currentIndex > 0) {
+                            setState(() {
+                              _weekOffset =
+                                  _availableWeekOffsets[currentIndex - 1];
+                              _didInitialJump = false;
+                            });
+                            _subscribeWeekSessionReservations();
+                          }
+                        } else if (details.primaryVelocity! < 0) {
+                          // 왼쪽으로 스와이프 (다음주로)
+                          if (currentIndex < _availableWeekOffsets.length - 1) {
+                            setState(() {
+                              _weekOffset =
+                                  _availableWeekOffsets[currentIndex + 1];
+                              _didInitialJump = false;
+                            });
+                            _subscribeWeekSessionReservations();
+                          }
                         }
-                      } else if (details.primaryVelocity! < 0) {
-                        // 왼쪽으로 스와이프 (다음주로)
-                        if (currentIndex < _availableWeekOffsets.length - 1) {
-                          setState(() {
-                            _weekOffset =
-                                _availableWeekOffsets[currentIndex + 1];
-                            _didInitialJump = false;
-                          });
-                          _subscribeWeekSessionReservations();
-                        }
-                      }
-                    },
-                    child: Column(
-                      children: [
-                        // 요일 헤더
-                        _buildDayHeaders(sessionDates),
+                      },
+                      child: Column(
+                        children: [
+                          // 요일 헤더
+                          _buildDayHeaders(sessionDates),
 
-                        // 캘린더 그리드
-                        Expanded(
-                          child: LayoutBuilder(
-                            builder: (context, constraints) {
-                              return _buildCalendarGrid(
-                                sessionDates,
-                                viewportHeight: constraints.maxHeight,
-                              );
-                            },
+                          // 캘린더 그리드
+                          Expanded(
+                            child: LayoutBuilder(
+                              builder: (context, constraints) {
+                                return _buildCalendarGrid(
+                                  sessionDates,
+                                  viewportHeight: constraints.maxHeight,
+                                );
+                              },
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
           ),
         ],
       ),
@@ -713,11 +987,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
     required List<DateTime> dates,
     required double viewportHeight,
   }) {
-    // 해당 컬럼(날짜들)에서 보이는 요일들의 세션만 대상으로 범위 계산
-    final weekdays = dates.map((d) => d.weekday).toSet();
-    final sessions = course.sessions.where(
-      (s) => weekdays.contains(s.dayOfWeek),
-    );
+    // 해당 컬럼(날짜들)에서 실제로 표시될 세션(정기+비정기) 기준으로 범위 계산
+    final sessions = _effectiveSessionsForDates(dates);
 
     if (sessions.isEmpty) {
       return _SmartRange(
@@ -753,12 +1024,13 @@ class _CalendarScreenState extends State<CalendarScreen> {
     // 예: 1시간 세션 = 60분 * 10.5px/분 = 630px → 630px/h → 10.5px/h
     // 예: 2시간 세션 = 120분 * 10.5px/분 = 1260px → 1260px/h → 21px/h
     // 계산: maxSessionDuration(분) * _optimalPxPerMinute(px/분) / 60(분/h) = px/h
-    final optimalHourSlotHeight = maxSessionDuration > 0
-        ? (maxSessionDuration * _optimalPxPerMinute / 60.0).clamp(
-            _minHourSlotHeight,
-            double.infinity,
-          )
-        : _minHourSlotHeight;
+    final optimalHourSlotHeight =
+        maxSessionDuration > 0
+            ? (maxSessionDuration * _optimalPxPerMinute / 60.0).clamp(
+              _minHourSlotHeight,
+              double.infinity,
+            )
+            : _minHourSlotHeight;
 
     // 디버그: 계산된 높이 확인
     debugPrint(
@@ -841,11 +1113,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
     final rangeStartMinutes = smart.rangeStartMinutes;
     final rangeEndMinutes = smart.rangeEndMinutes;
 
-    // 표시되는 요일들에 해당하는 세션들을 모아 "활성 시간대"를 계산
-    final weekdays = dates.map((d) => d.weekday).toSet();
-    final sessions = course.sessions.where(
-      (s) => weekdays.contains(s.dayOfWeek),
-    );
+    // 표시되는 날짜들에 해당하는 세션(정기+비정기)을 모아 "활성 시간대"를 계산
+    final sessions = _effectiveSessionsForDates(dates);
 
     // 시간 슬롯(시간 단위)별로 active 여부 계산 (어느 요일이든 해당 시간대에 세션이 있으면 active)
     final active = List<bool>.filled(timeSlots.length, false);
@@ -854,9 +1123,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
       final start = _parseTimeToMinutes(s.startTime);
       final end = _parseTimeToMinutes(s.endTime);
       if (end <= start) continue;
-      minSessionStart = minSessionStart == null
-          ? start
-          : (start < minSessionStart ? start : minSessionStart);
+      minSessionStart =
+          minSessionStart == null
+              ? start
+              : (start < minSessionStart ? start : minSessionStart);
 
       for (int i = 0; i < timeSlots.length; i++) {
         final slotStart = rangeStartMinutes + (i * 60);
@@ -913,12 +1183,13 @@ class _CalendarScreenState extends State<CalendarScreen> {
     }
 
     // 초기 점프 위치: 첫 세션 시작 - 2시간 (없으면 rangeStart)
-    final initialJumpMinute = minSessionStart == null
-        ? rangeStartMinutes
-        : (minSessionStart - _basePaddingMinutes).clamp(
-            rangeStartMinutes,
-            rangeEndMinutes,
-          );
+    final initialJumpMinute =
+        minSessionStart == null
+            ? rangeStartMinutes
+            : (minSessionStart - _basePaddingMinutes).clamp(
+              rangeStartMinutes,
+              rangeEndMinutes,
+            );
 
     return _SlotLayout(
       timeSlots: timeSlots,
@@ -973,33 +1244,38 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 width: _timeColumnWidth,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
-                  children: layout.timeSlots.asMap().entries.map((entry) {
-                    final idx = entry.key;
-                    final time = entry.value;
-                    final hour = time.split(':')[0]; // "17:00" -> "17"
-                    final isActiveSlot = layout.isActive[idx];
-                    return Container(
-                      height: layout.slotHeights[idx],
-                      alignment: Alignment.topRight,
-                      padding: EdgeInsets.only(
-                        right: _timeTextPaddingRight,
-                        top: 0,
-                      ),
-                      child: Text(
-                        hour,
-                        style: TextStyle(
-                          fontSize: isActiveSlot ? 16 : 13,
-                          fontWeight: isActiveSlot
-                              ? FontWeight.w600
-                              : FontWeight.w400,
-                          color: isActiveSlot
-                              ? AppColors.textSecondary
-                              : AppColors.textSecondary.withOpacity(0.4),
-                          height: 1.0,
-                        ),
-                      ),
-                    );
-                  }).toList(),
+                  children:
+                      layout.timeSlots.asMap().entries.map((entry) {
+                        final idx = entry.key;
+                        final time = entry.value;
+                        final hour = time.split(':')[0]; // "17:00" -> "17"
+                        final isActiveSlot = layout.isActive[idx];
+                        return Container(
+                          height: layout.slotHeights[idx],
+                          alignment: Alignment.topRight,
+                          padding: EdgeInsets.only(
+                            right: _timeTextPaddingRight,
+                            top: 0,
+                          ),
+                          child: Text(
+                            hour,
+                            style: TextStyle(
+                              fontSize: isActiveSlot ? 16 : 13,
+                              fontWeight:
+                                  isActiveSlot
+                                      ? FontWeight.w600
+                                      : FontWeight.w400,
+                              color:
+                                  isActiveSlot
+                                      ? AppColors.textSecondary
+                                      : AppColors.textSecondary.withOpacity(
+                                        0.4,
+                                      ),
+                              height: 1.0,
+                            ),
+                          ),
+                        );
+                      }).toList(),
                 ),
               ),
               // 각 날짜 컬럼
@@ -1040,7 +1316,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
     required double Function(int minute) yForMinute,
     required List<bool> isActive,
   }) {
-    final daySessions = course.getSessionsByDay(date.weekday);
+    final daySessions = _effectiveSessionsForDate(date);
 
     // 세션이 시작하는 시간대만 찾기 (연속 세션은 하나의 위젯으로 그리기 위해)
     final sessionStartSlots = <String, CourseSession>{};
@@ -1087,9 +1363,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
               right: 0,
               child: Container(
                 height: 0.5,
-                color: isActiveSlot
-                    ? AppColors.borderLight
-                    : AppColors.borderLight.withOpacity(0.2),
+                color:
+                    isActiveSlot
+                        ? AppColors.borderLight
+                        : AppColors.borderLight.withOpacity(0.2),
               ),
             );
           }).toList(),
@@ -1152,17 +1429,13 @@ class _CalendarScreenState extends State<CalendarScreen> {
 
     // 비선형(공백 압축) 포함한 위치/높이
     final topPosition = yForMinute(sessionStartMinutes) + _lineOffset;
-    final sessionHeightPx =
-        (yForMinute(sessionEndMinutes) - yForMinute(sessionStartMinutes)).clamp(
-          0.0,
-          double.infinity,
-        );
+    final sessionHeightPx = (yForMinute(sessionEndMinutes) -
+            yForMinute(sessionStartMinutes))
+        .clamp(0.0, double.infinity);
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final placeId = Provider.of<PlaceProvider>(
-      context,
-      listen: false,
-    ).currentPlace?.id;
+    final placeId =
+        Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
     final userId = authProvider.currentUser?.userId;
 
     final reservationProvider = Provider.of<ReservationProvider>(
@@ -1197,7 +1470,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
     );
     final lookupKey = '${generatedSessionId}_$dateString';
     final sr = _sessionReservationsByKey[lookupKey];
-    final totalSeats = sr?.capacity ?? session.getCapacityForDate(date);
+    final dateCapacityOverride = _capacityOverridesByKey[lookupKey];
+    final totalSeats =
+        dateCapacityOverride ??
+        sr?.capacity ??
+        session.getCapacityForDate(date);
     final reservedCount = sr?.reservedCount ?? 0;
     final remainingSeats = (totalSeats - reservedCount).clamp(0, 1 << 30);
 
@@ -1216,42 +1493,63 @@ class _CalendarScreenState extends State<CalendarScreen> {
       enrollmentCanReserve: enrollmentCanReserve,
     );
 
-    final isLocked = !eligibility.canReserve || !isEnrolled || userId == null;
+    // ✅ 관리자가 미리 예약 열기를 한 경우 잠금 해제
+    bool isBookingWeekOpened = false;
+    if (eligibility.reason == ReservationLockReason.notOpenedYet) {
+      final weekStart = _startOfWeekMonday(date);
+      final weekStartDateString =
+          '${weekStart.year}-${weekStart.month.toString().padLeft(2, '0')}-${weekStart.day.toString().padLeft(2, '0')}';
+      isBookingWeekOpened = _openedWeekStartDates.contains(weekStartDateString);
+    }
+
+    // 미리 열린 주차인 경우 잠금 해제
+    final effectiveCanReserve =
+        eligibility.canReserve ||
+        (isBookingWeekOpened &&
+            eligibility.reason == ReservationLockReason.notOpenedYet);
+
+    final isLocked = !effectiveCanReserve || !isEnrolled || userId == null;
     final isMyReserved = hasUserReservation;
     final canReserve = !isLocked && !isMyReserved;
 
     // ✅ 이미 예약된 세션은 "연하게(비활성 느낌)" 보이되,
     // 잠김(정책/권한/만석 등)과는 구분해서 표시한다.
     final String? pidForKey = placeId;
-    final processingKey = pidForKey == null
-        ? null
-        : reservationProvider.operationKeyFromParts(
-            placeId: pidForKey,
-            courseId: course.id,
-            dayOfWeek: session.dayOfWeek,
-            startTime: session.startTime,
-            date: date,
-          );
+    final processingKey =
+        pidForKey == null
+            ? null
+            : reservationProvider.operationKeyFromParts(
+              placeId: pidForKey,
+              courseId: course.id,
+              dayOfWeek: session.dayOfWeek,
+              startTime: session.startTime,
+              date: date,
+            );
     final isProcessing =
         processingKey != null &&
         reservationProvider.isOperationInFlightByKey(processingKey);
-    final operationType = processingKey != null
-        ? reservationProvider.getOperationTypeByKey(processingKey)
-        : null;
+    final operationType =
+        processingKey != null
+            ? reservationProvider.getOperationTypeByKey(processingKey)
+            : null;
 
     // 배경색: 이미 예약된 경우 옅은 코스 컬러 우선, 그 다음 잠김 상태는 회색
-    final baseBlockColor = isMyReserved
-        ? course
-              .colorValue // 이미 예약된 경우 코스 컬러 사용 (회색보다 우선)
-        : (isLocked
-              ? AppColors
+    final baseBlockColor =
+        isMyReserved
+            ? course
+                .colorValue // 이미 예약된 경우 코스 컬러 사용 (회색보다 우선)
+            : (isLocked
+                ? AppColors
                     .reservedGrey // 잠긴 경우 회색
-              : course.colorValue); // 예약 가능한 경우 코스 컬러
-    final blockColor = isProcessing
-        ? (isMyReserved
-              ? baseBlockColor.withOpacity(0.35)
-              : baseBlockColor.withOpacity(0.45))
-        : (isMyReserved ? baseBlockColor.withOpacity(0.55) : baseBlockColor);
+                : course.colorValue); // 예약 가능한 경우 코스 컬러
+    final blockColor =
+        isProcessing
+            ? (isMyReserved
+                ? baseBlockColor.withOpacity(0.35)
+                : baseBlockColor.withOpacity(0.45))
+            : (isMyReserved
+                ? baseBlockColor.withOpacity(0.55)
+                : baseBlockColor);
 
     // 배경색 밝기에 따라 텍스트 색상 자동 결정
     // opacity가 적용된 색상의 실제 밝기를 계산하기 위해
@@ -1261,14 +1559,16 @@ class _CalendarScreenState extends State<CalendarScreen> {
     final luminance = blendedColor.computeLuminance();
 
     // 예약 완료 또는 잠김 상태는 회색 텍스트 유지
-    final textColor = (isMyReserved || isLocked)
-        ? AppColors.reservedTextGrey
-        : (luminance > 0.5 ? AppColors.textPrimary : Colors.white);
-    final iconColor = (isMyReserved || isLocked)
-        ? AppColors.reservedTextGrey
-        : (luminance > 0.5
-              ? AppColors.textPrimary.withOpacity(0.9)
-              : Colors.white.withOpacity(0.9));
+    final textColor =
+        (isMyReserved || isLocked)
+            ? AppColors.reservedTextGrey
+            : (luminance > 0.5 ? AppColors.textPrimary : Colors.white);
+    final iconColor =
+        (isMyReserved || isLocked)
+            ? AppColors.reservedTextGrey
+            : (luminance > 0.5
+                ? AppColors.textPrimary.withOpacity(0.9)
+                : Colors.white.withOpacity(0.9));
 
     return Positioned(
       top: topPosition,
@@ -1291,6 +1591,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
               date: date,
               reservation: userReservation,
               onReservationCancelled: () {
+                if (!mounted) return;
                 setState(() {});
               },
             );
@@ -1363,16 +1664,16 @@ class _CalendarScreenState extends State<CalendarScreen> {
           debugPrint('eligibility.reason: ${eligibility.reason}');
           switch (eligibility.reason) {
             case ReservationLockReason.pastDate:
-              SnackbarUtil.showError(context, '과거 날짜는 예약할 수 없습니다.');
+              SnackbarUtil.showInfo(context, '지나간 세션은 예약할 수 없습니다.');
               return;
             case ReservationLockReason.closedBeforeStart:
-              SnackbarUtil.showError(
+              SnackbarUtil.showInfo(
                 context,
                 '세션 시작 ${policy.closeBeforeMinutes}분 전까지만 예약 가능합니다.',
               );
               return;
             case ReservationLockReason.full:
-              SnackbarUtil.showError(context, '예약 가능한 인원이 없습니다.');
+              SnackbarUtil.showError(context, '예약 가능한 자리가 없습니다.');
               return;
             case ReservationLockReason.noCreditsOrExpired:
               SnackbarUtil.showError(context, '예약 가능한 횟수가 없습니다.');
@@ -1392,15 +1693,16 @@ class _CalendarScreenState extends State<CalendarScreen> {
           decoration: BoxDecoration(
             color: blockColor,
             borderRadius: BorderRadius.circular(8),
-            boxShadow: isMyReserved
-                ? const []
-                : [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.1),
-                      blurRadius: 4,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
+            boxShadow:
+                isMyReserved
+                    ? const []
+                    : [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 4,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
           ),
           child: Stack(
             children: [
@@ -1416,9 +1718,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
                       course.name,
                       style: TextStyle(
                         color: textColor,
-                        fontSize: sessionHeightPx >= 60
-                            ? 16
-                            : (sessionHeightPx >= 40 ? 14 : 12),
+                        fontSize:
+                            sessionHeightPx >= 60
+                                ? 16
+                                : (sessionHeightPx >= 40 ? 14 : 12),
                         fontWeight: FontWeight.bold,
                       ),
                       maxLines: 1,
@@ -1440,11 +1743,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
                       ),
                     ],
 
-                    // 남은 자리 (높이가 충분할 때만 표시)
+                    // 예약 현황 (높이가 충분할 때만 표시)
                     if (sessionHeightPx >= 90) ...[
                       SizedBox(height: sessionHeightPx >= 100 ? 3 : 2),
                       Text(
-                        '$remainingSeats / $totalSeats',
+                        '$reservedCount / $totalSeats',
                         style: TextStyle(
                           color: iconColor,
                           fontSize: sessionHeightPx >= 110 ? 14 : 12,
@@ -1483,7 +1786,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                             operationType == ReservationOperationType.create
                                 ? '예약중'
                                 : operationType ==
-                                      ReservationOperationType.cancel
+                                    ReservationOperationType.cancel
                                 ? '취소중'
                                 : '변경중',
                             style: TextStyle(
@@ -1497,7 +1800,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                     ),
                   ),
                 ),
-              if (!hasUserReservation && isLocked)
+              if (!hasUserReservation && isLocked && !isBookingWeekOpened)
                 Positioned(
                   top: 0,
                   right: 0,
@@ -1509,6 +1812,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 ),
               if (!hasUserReservation &&
                   isLocked &&
+                  !isBookingWeekOpened &&
                   eligibility.reason == ReservationLockReason.notOpenedYet &&
                   eligibility.openAt != null &&
                   sessionHeightPx >= 70)
@@ -1593,19 +1897,20 @@ class _CalendarScreenState extends State<CalendarScreen> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: _isLoading
-                    ? null
-                    : () async {
-                        setState(() {
-                          _errorMessage = null;
-                          _errorType = null;
-                          _isLoading = true;
-                        });
-                        // 1초 대기 후 재시도
-                        await Future.delayed(const Duration(seconds: 1));
-                        if (!mounted) return;
-                        _subscribeWeekSessionReservations();
-                      },
+                onPressed:
+                    _isLoading
+                        ? null
+                        : () async {
+                          setState(() {
+                            _errorMessage = null;
+                            _errorType = null;
+                            _isLoading = true;
+                          });
+                          // 1초 대기 후 재시도
+                          await Future.delayed(const Duration(seconds: 1));
+                          if (!mounted) return;
+                          _subscribeWeekSessionReservations();
+                        },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.textPrimary,
                   foregroundColor: Colors.white,
@@ -1615,24 +1920,25 @@ class _CalendarScreenState extends State<CalendarScreen> {
                   ),
                   elevation: 0,
                 ),
-                child: _isLoading
-                    ? SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            AppColors.primaryGreen,
+                child:
+                    _isLoading
+                        ? SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              AppColors.primaryGreen,
+                            ),
+                          ),
+                        )
+                        : const Text(
+                          '다시 시도',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
-                      )
-                    : const Text(
-                        '다시 시도',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
               ),
             ),
           ],

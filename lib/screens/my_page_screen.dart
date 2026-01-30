@@ -7,7 +7,6 @@ import '../models/reservation.dart';
 import '../models/course_enrollment.dart';
 import '../widgets/user_reservation_manage_bottom_sheet.dart';
 import '../widgets/enrollment_detail_bottom_sheet.dart';
-import '../widgets/profile_edit_bottom_sheet.dart';
 import '../widgets/place_switch_widget.dart';
 import '../widgets/profile_settings_widget.dart'
     show UserProfileInfoSection, SettingsItemsBuilder;
@@ -45,6 +44,9 @@ class _MyPageScreenState extends State<MyPageScreen> {
   int _selectedWeekTab = 0;
 
   List<int> _computeAvailableWeekOffsets(List<Reservation> reservations) {
+    // 현재 주차는 항상 포함 (예약이 없어도)
+    final Set<int> weekOffsets = {0};
+
     if (reservations.isEmpty) {
       return [0]; // 예약이 없으면 현재 주차만 표시
     }
@@ -56,8 +58,8 @@ class _MyPageScreenState extends State<MyPageScreen> {
       now.day,
     ).subtract(Duration(days: now.weekday - DateTime.monday));
 
-    // 예약이 있는 주차만 추출
-    final Set<int> weekOffsets = {};
+    // 예약이 있는 주차 추출
+    int maxWeekOffset = 0;
     for (final r in reservations) {
       final d = DateTime(
         r.reservedDate.year,
@@ -69,14 +71,51 @@ class _MyPageScreenState extends State<MyPageScreen> {
       if (w >= 0) {
         // 현재 주차 이후의 예약만 포함
         weekOffsets.add(w);
+        if (w > maxWeekOffset) {
+          maxWeekOffset = w;
+        }
       }
     }
 
-    // 현재 주차는 항상 포함 (예약이 없어도)
-    weekOffsets.add(0);
+    // 현재 주차부터 가장 먼 예약 주차까지 모든 주차 포함
+    // 예: 예약이 3주 후에만 있으면 [0, 1, 2, 3] 모두 포함
+    for (int i = 0; i <= maxWeekOffset; i++) {
+      weekOffsets.add(i);
+    }
 
     final sortedOffsets = weekOffsets.toList()..sort();
     return sortedOffsets;
+  }
+
+  bool _hasReservationsInWeekOffset(
+    List<Reservation> reservations,
+    int weekOffset,
+  ) {
+    if (reservations.isEmpty) return false;
+
+    final now = TimezoneUtils.getSeoulDateTime();
+    final thisWeekMonday = DateTime(
+      now.year,
+      now.month,
+      now.day,
+    ).subtract(Duration(days: now.weekday - DateTime.monday));
+
+    final weekStart = thisWeekMonday.add(Duration(days: 7 * weekOffset));
+    final weekStartOnly = DateTime(
+      weekStart.year,
+      weekStart.month,
+      weekStart.day,
+    );
+    final weekEndOnly = weekStartOnly.add(const Duration(days: 6));
+
+    for (final r in reservations) {
+      final d = TimezoneUtils.getSeoulDateOnly(r.reservedDate);
+      final inRange =
+          (d.isAtSameMomentAs(weekStartOnly) || d.isAfter(weekStartOnly)) &&
+          (d.isAtSameMomentAs(weekEndOnly) || d.isBefore(weekEndOnly));
+      if (inRange) return true;
+    }
+    return false;
   }
 
   @override
@@ -85,6 +124,8 @@ class _MyPageScreenState extends State<MyPageScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _init();
       _subscribeReservationOperationEvents();
+      // 초기 로드 시 현재 선택된 주차의 비정기 세션 정보 로드
+      _loadOverridesForWeek(0);
     });
   }
 
@@ -202,9 +243,36 @@ class _MyPageScreenState extends State<MyPageScreen> {
         userId: authProvider.currentUser!.userId,
         placeId: currentPlace.id,
       );
+
+      // 비정기 세션 정보는 탭 변경 시 동적으로 로드 (성능 최적화)
+      // 초기 로드 시에는 현재 선택된 주차만 로드
     } catch (e) {
       // 에러 발생 시에도 계속 진행
     }
+  }
+
+  /// 특정 주차의 비정기 세션 정보 로드
+  void _loadOverridesForWeek(int weekOffset) {
+    if (!mounted) return;
+
+    final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+    final courseProvider = Provider.of<CourseProvider>(context, listen: false);
+    final currentPlace = placeProvider.currentPlace;
+
+    if (currentPlace == null) return;
+
+    final now = TimezoneUtils.getSeoulDateTime();
+    final thisWeekMonday = DateTime(
+      now.year,
+      now.month,
+      now.day,
+    ).subtract(Duration(days: now.weekday - DateTime.monday));
+
+    final weekStart = thisWeekMonday.add(Duration(days: 7 * weekOffset));
+    final weekStartDate = TimezoneUtils.formatDateToSeoul(weekStart);
+
+    // 해당 주차의 비정기 세션 정보 구독 (이미 구독 중이면 재구독하지 않음)
+    courseProvider.subscribeToOverrides(currentPlace.id, [weekStartDate]);
   }
 
   /// 예약 날짜로부터 주차 오프셋 계산
@@ -279,7 +347,8 @@ class _MyPageScreenState extends State<MyPageScreen> {
     }
 
     // 탭 이동 후 약간의 지연을 두고 애니메이션 실행
-    Future.delayed(const Duration(milliseconds: 300), () {
+    // 위젯이 완전히 빌드된 후에 애니메이션을 시작하도록 충분한 지연
+    Future.delayed(const Duration(milliseconds: 500), () {
       if (mounted) {
         _processHighlightReservation(
           shouldShowBottomSheet: shouldShowBottomSheet,
@@ -332,31 +401,35 @@ class _MyPageScreenState extends State<MyPageScreen> {
               (reservationInfo['reservedDate'] as DateTime).month &&
           r.reservedDate.day ==
               (reservationInfo['reservedDate'] as DateTime).day,
-      orElse: () => userReservations.isNotEmpty
-          ? userReservations.first
-          : Reservation(
-              id: '',
-              userId: '',
-              courseId: '',
-              placeId: '',
-              dayOfWeek: 0,
-              startTime: '',
-              reservedAt: DateTime.now(),
-              reservedDate: DateTime.now(),
-            ),
+      orElse:
+          () =>
+              userReservations.isNotEmpty
+                  ? userReservations.first
+                  : Reservation(
+                    id: '',
+                    userId: '',
+                    courseId: '',
+                    placeId: '',
+                    dayOfWeek: 0,
+                    startTime: '',
+                    reservedAt: DateTime.now(),
+                    reservedDate: DateTime.now(),
+                  ),
     );
 
     final course = courses.firstWhere(
       (c) => c.id == reservation.courseId,
-      orElse: () => courses.isNotEmpty
-          ? courses.first
-          : Course(
-              description: '',
-              id: reservation.courseId,
-              name: '',
-              color: 0xFF087044,
-              sessions: [],
-            ),
+      orElse:
+          () =>
+              courses.isNotEmpty
+                  ? courses.first
+                  : Course(
+                    description: '',
+                    id: reservation.courseId,
+                    name: '',
+                    color: 0xFF087044,
+                    sessions: [],
+                  ),
     );
 
     final session = course.findSession(
@@ -364,13 +437,44 @@ class _MyPageScreenState extends State<MyPageScreen> {
       reservation.startTime,
     );
 
-    if (session == null) return;
+    CourseSession? effectiveSession = session;
+
+    // 정기 세션이 없는 경우(비정기/override 세션) override에서 찾아서 세션 구성
+    if (effectiveSession == null) {
+      final reservationDateOnly = TimezoneUtils.getSeoulDateOnly(
+        reservation.reservedDate,
+      );
+      final monday = reservationDateOnly.subtract(
+        Duration(days: reservationDateOnly.weekday - DateTime.monday),
+      );
+      final weekStartDateString = TimezoneUtils.formatDateToSeoul(monday);
+      final overrides = courseProvider.getOverridesForWeek(weekStartDateString);
+      final dateString = TimezoneUtils.formatDateToSeoul(reservationDateOnly);
+
+      for (final o in overrides) {
+        if (o.courseId != reservation.courseId) continue;
+        if (o.date != dateString) continue;
+        if (o.dayOfWeek != reservation.dayOfWeek) continue;
+        if (o.startTime != reservation.startTime) continue;
+        if (o.isCancelled == true) continue;
+        if (o.startTime == null || o.endTime == null) continue;
+        effectiveSession = CourseSession(
+          dayOfWeek: o.dayOfWeek,
+          startTime: o.startTime!,
+          endTime: o.endTime!,
+          capacity: o.capacity ?? 0,
+        );
+        break;
+      }
+    }
+
+    if (effectiveSession == null) return;
 
     setState(() {
       _shouldHighlightReservation = true;
       _highlightedReservation = reservation;
       _highlightedCourse = course;
-      _highlightedSession = session;
+      _highlightedSession = effectiveSession;
       _highlightedDate = reservation.reservedDate;
     });
 
@@ -448,16 +552,16 @@ class _MyPageScreenState extends State<MyPageScreen> {
       date: date,
       reservation:
           userReservations.any(
-            (r) =>
-                r.courseId == course.id &&
-                r.dayOfWeek == session.dayOfWeek &&
-                r.startTime == session.startTime &&
-                r.reservedDate.year == date.year &&
-                r.reservedDate.month == date.month &&
-                r.reservedDate.day == date.day,
-          )
-          ? reservation
-          : null,
+                (r) =>
+                    r.courseId == course.id &&
+                    r.dayOfWeek == session.dayOfWeek &&
+                    r.startTime == session.startTime &&
+                    r.reservedDate.year == date.year &&
+                    r.reservedDate.month == date.month &&
+                    r.reservedDate.day == date.day,
+              )
+              ? reservation
+              : null,
       onReservationCancelled: () {
         setState(() {});
       },
@@ -478,6 +582,23 @@ class _MyPageScreenState extends State<MyPageScreen> {
       userReservations,
       courseProvider.courses,
     );
+
+    final selectedWeekOffset =
+        availableWeekOffsets.isNotEmpty
+            ? availableWeekOffsets[_selectedWeekTab]
+            : 0;
+    final hasAnyReservationInSelectedWeek = _hasReservationsInWeekOffset(
+      userReservations,
+      selectedWeekOffset,
+    );
+
+    // 현재 선택된 주차의 비정기 세션 정보 로드 (build 시마다 확인)
+    if (availableWeekOffsets.isNotEmpty) {
+      final currentWeekOffset = availableWeekOffsets[_selectedWeekTab];
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _loadOverridesForWeek(currentWeekOffset);
+      });
+    }
 
     return Scaffold(
       backgroundColor: AppColors.backgroundLight,
@@ -503,6 +624,8 @@ class _MyPageScreenState extends State<MyPageScreen> {
                           setState(() {
                             _selectedWeekTab = index;
                           });
+                          // 탭 변경 시 해당 주차의 비정기 세션 정보 로드
+                          _loadOverridesForWeek(availableWeekOffsets[index]);
                         },
                         availableWeekOffsets: availableWeekOffsets,
                         showDot: true,
@@ -510,63 +633,33 @@ class _MyPageScreenState extends State<MyPageScreen> {
                       const SizedBox(height: 12),
                     ],
 
-                    // 예약이 없을 때
-                    if (userReservations.isEmpty)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
-                        child: Container(
-                          padding: const EdgeInsets.all(40),
-                          width: double.infinity,
-                          decoration: BoxDecoration(
-                            color: AppColors.backgroundWhite,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Column(
-                            children: [
-                              const SizedBox(height: 8),
-
-                              Text(
-                                '예약 내역이 없어요',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  color: AppColors.textSecondary.withOpacity(
-                                    0.6,
-                                  ),
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                            ],
-                          ),
+                    // 캘린더 위젯 (일정보기 모드) - 카드 스타일
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: AppColors.backgroundWhite,
+                          borderRadius: BorderRadius.circular(16),
                         ),
-                      )
-                    else
-                      // 캘린더 위젯 (일정보기 모드) - 카드 스타일
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: AppColors.backgroundWhite,
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          clipBehavior: Clip.antiAlias,
-                          child: CompactCalendarWidget(
-                            courses: userCourses,
-                            usage:
-                                CompactCalendarUsage.userWeeklyReservationsView,
-                            weekOffset: availableWeekOffsets[_selectedWeekTab],
-                            height: 500, // 마이페이지에서는 더 큰 높이
-                            onSessionTap: _onSessionTap,
-                            hideCourseSelector: true, // 일정보기 모드에서는 드롭다운 숨김
-                            weeklyViewMode: true, // 일정보기 모드 활성화
-                            userReservations: userReservations, // 사용자 예약 리스트 전달
-                            highlightReservation:
-                                _shouldHighlightReservation &&
-                                    _highlightedReservation != null &&
-                                    _highlightedCourse != null &&
-                                    _highlightedSession != null &&
-                                    _highlightedDate != null
-                                ? {
+                        clipBehavior: Clip.antiAlias,
+                        child: CompactCalendarWidget(
+                          courses: userCourses,
+                          usage:
+                              CompactCalendarUsage.userWeeklyReservationsView,
+                          weekOffset: selectedWeekOffset,
+                          // ✅ 선택된 주차에 예약이 없으면 100px로 축소
+                          height: hasAnyReservationInSelectedWeek ? 500 : 100,
+                          onSessionTap: _onSessionTap,
+                          hideCourseSelector: true, // 일정보기 모드에서는 드롭다운 숨김
+                          weeklyViewMode: true, // 일정보기 모드 활성화
+                          userReservations: userReservations, // 사용자 예약 리스트 전달
+                          highlightReservation:
+                              _shouldHighlightReservation &&
+                                      _highlightedReservation != null &&
+                                      _highlightedCourse != null &&
+                                      _highlightedSession != null &&
+                                      _highlightedDate != null
+                                  ? {
                                     'reservationId':
                                         _highlightedReservation!.id,
                                     'courseId': _highlightedCourse!.id,
@@ -574,10 +667,10 @@ class _MyPageScreenState extends State<MyPageScreen> {
                                     'startTime': _highlightedSession!.startTime,
                                     'reservedDate': _highlightedDate!,
                                   }
-                                : null,
-                          ),
+                                  : null,
                         ),
                       ),
+                    ),
 
                     const SizedBox(height: 32),
 
@@ -598,20 +691,10 @@ class _MyPageScreenState extends State<MyPageScreen> {
                           headerTitle: '마이프로필',
                           profileName: user?.name ?? '사용자',
                           profilePhoneNumber: user?.phoneNumber ?? '',
-                          onProfileTap: () {
-                            if (user != null) {
-                              ProfileEditBottomSheet.show(
-                                context: context,
-                                currentName: user.name,
-                              ).then((result) {
-                                if (result == true && context.mounted) {
-                                  // 정보 변경 후 화면 새로고침
-                                  setState(() {});
-                                }
-                              });
-                            }
-                          },
-                          profileBottomWidget: const PlaceSwitchWidget(),
+                          onProfileTap: () {},
+                          profileBottomWidget: const PlaceSwitchWidget(
+                            heroTagSuffix: 'my_page_profile',
+                          ),
                           settingsItems: SettingsItemsBuilder.buildSettingsItems(
                             context: context,
                             isNotificationEnabled: isNotificationEnabled,
@@ -695,7 +778,11 @@ class _MyPageScreenState extends State<MyPageScreen> {
 
   // 플레이스 정보 섹션
   Widget _buildPlaceInfoSection() {
-    return const PlaceSwitchWidget(enabled: true, showDescription: true);
+    return const PlaceSwitchWidget(
+      enabled: true,
+      showDescription: true,
+      heroTagSuffix: 'my_page',
+    );
   }
 
   // 수강 중인 코스 섹션
@@ -751,13 +838,14 @@ class _MyPageScreenState extends State<MyPageScreen> {
             // 코스 정보 찾기 (데이터 정합성 보장)
             final course = courses.firstWhere(
               (c) => c.id == enrollment.courseId,
-              orElse: () => Course(
-                id: enrollment.courseId,
-                name: '알 수 없는 코스',
-                description: '',
-                color: 0xFF087044,
-                sessions: [],
-              ),
+              orElse:
+                  () => Course(
+                    id: enrollment.courseId,
+                    name: '알 수 없는 코스',
+                    description: '',
+                    color: 0xFF087044,
+                    sessions: [],
+                  ),
             );
             return _buildEnrolledCourseCard(course, enrollment);
           }).toList(),
@@ -880,13 +968,14 @@ class _MyPageScreenState extends State<MyPageScreen> {
       barrierColor: Colors.black.withOpacity(0.7),
       isDismissible: true,
       enableDrag: true,
-      builder: (context) => EnrollmentDetailBottomSheet(
-        course: course,
-        enrollment: enrollment,
-        onExtensionRequested: () {
-          setState(() {});
-        },
-      ),
+      builder:
+          (context) => EnrollmentDetailBottomSheet(
+            course: course,
+            enrollment: enrollment,
+            onExtensionRequested: () {
+              setState(() {});
+            },
+          ),
     );
   }
 }

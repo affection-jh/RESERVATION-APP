@@ -47,9 +47,10 @@ class NotificationProvider with ChangeNotifier {
 
       // 현재 플레이스에 맞는 알림만 필터링
       if (placeId != null) {
-        _notifications = allNotifications
-            .where((n) => n.placeId == null || n.placeId == placeId)
-            .toList();
+        _notifications =
+            allNotifications
+                .where((n) => n.placeId == null || n.placeId == placeId)
+                .toList();
       } else {
         _notifications = allNotifications;
       }
@@ -87,9 +88,8 @@ class NotificationProvider with ChangeNotifier {
   /// 모든 알림 읽음 처리
   Future<void> markAllAsRead() async {
     try {
-      final unreadNotifications = _notifications
-          .where((n) => !n.isRead)
-          .toList();
+      final unreadNotifications =
+          _notifications.where((n) => !n.isRead).toList();
       if (unreadNotifications.isEmpty) return;
 
       await _firestoreService.markAllNotificationsAsRead(
@@ -108,9 +108,8 @@ class NotificationProvider with ChangeNotifier {
   Future<void> deleteNotification(String notificationId) async {
     try {
       await _firestoreService.deleteNotification(notificationId);
-      _notifications = _notifications
-          .where((n) => n.id != notificationId)
-          .toList();
+      _notifications =
+          _notifications.where((n) => n.id != notificationId).toList();
       notifyListeners();
     } catch (e) {
       debugPrint('[NotificationProvider] deleteNotification 오류: $e');
@@ -174,6 +173,7 @@ class NotificationProvider with ChangeNotifier {
         if (_notifications.length > 100) {
           _notifications = _notifications.take(100).toList();
         }
+        // 즉시 notifyListeners() 호출하여 빨간 닷 표시
         notifyListeners();
       }
     } catch (e) {

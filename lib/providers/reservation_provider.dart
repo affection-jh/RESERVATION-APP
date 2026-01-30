@@ -178,9 +178,8 @@ class ReservationProvider with ChangeNotifier {
       );
 
       final results = result['results'] as List<dynamic>? ?? [];
-      final failedResults = results
-          .where((r) => (r as Map)['success'] != true)
-          .toList();
+      final failedResults =
+          results.where((r) => (r as Map)['success'] != true).toList();
       if (failedResults.isNotEmpty) {
         final error =
             (failedResults.first as Map)['error'] as String? ??
@@ -429,9 +428,8 @@ class ReservationProvider with ChangeNotifier {
       );
 
       final results = result['results'] as List<dynamic>? ?? [];
-      final failedResults = results
-          .where((r) => (r as Map)['success'] != true)
-          .toList();
+      final failedResults =
+          results.where((r) => (r as Map)['success'] != true).toList();
       if (failedResults.isNotEmpty) {
         final error =
             (failedResults.first as Map)['error'] as String? ??
@@ -440,6 +438,15 @@ class ReservationProvider with ChangeNotifier {
       }
 
       debugPrint('[ReservationProvider] cancelReservation 성공');
+
+      // ✅ 낙관적 업데이트: 스트림이 늦게 오더라도 UI에 즉시 반영 (홈/마이페이지 등)
+      final before = _reservations.length;
+      _reservations =
+          _reservations.where((r) => r.id != reservation.id).toList();
+      if (_reservations.length != before) {
+        notifyListeners();
+      }
+
       if (!_opController.isClosed) {
         _opController.add(
           ReservationOperationEvent(

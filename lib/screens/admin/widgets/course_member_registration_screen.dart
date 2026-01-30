@@ -198,9 +198,8 @@ class _CourseMemberRegistrationScreenState
     final totalReservations = useUniform ? uniformTotal : 0;
     final periodType = useUniform ? uniformPeriodType : PeriodType.weeks;
     final periodValue = useUniform ? uniformPeriodValue : 1;
-    final validUntil = useUniform
-        ? now.add(duration)
-        : now.add(const Duration(days: 7));
+    final validUntil =
+        useUniform ? now.add(duration) : now.add(const Duration(days: 7));
 
     setState(() {
       _currentConfig = CourseEnrollmentConfig(
@@ -213,9 +212,8 @@ class _CourseMemberRegistrationScreenState
         validPeriodMode: ValidPeriodMode.period,
       );
       _currentValidPeriodMode = ValidPeriodMode.period;
-      _currentTotalReservationsCtrl.text = totalReservations == 0
-          ? ''
-          : totalReservations.toString();
+      _currentTotalReservationsCtrl.text =
+          totalReservations == 0 ? '' : totalReservations.toString();
     });
   }
 
@@ -316,7 +314,8 @@ class _CourseMemberRegistrationScreenState
 
   void _onTabChanged(int index) {
     setState(() {
-      _mode = index == 0
+      _mode =
+          index == 0
           ? CourseMemberRegistrationMode.inputNew
           : CourseMemberRegistrationMode.selectExisting;
       // 탭 변경 시 선택된 멤버 초기화
@@ -629,9 +628,8 @@ class _CourseMemberRegistrationScreenState
                               RegExp(r'[^\d]'),
                               '',
                             );
-                            String formatted = digitsOnly.isEmpty
-                                ? '010'
-                                : digitsOnly;
+                            String formatted =
+                                digitsOnly.isEmpty ? '010' : digitsOnly;
 
                             String result = '';
                             if (formatted.length <= 3) {
@@ -696,14 +694,16 @@ class _CourseMemberRegistrationScreenState
           child: SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              onPressed: canAdd
+              onPressed:
+                  canAdd
                   ? () => _addAndSaveMember(name: name, phoneNumber: phone)
                   : null,
               icon: Icon(
                 Icons.add,
                 color: canAdd ? Colors.white : AppColors.textSecondary,
               ),
-              label: _isSaving
+              label:
+                  _isSaving
                   ? const SizedBox(
                       width: 20,
                       height: 20,
@@ -722,7 +722,8 @@ class _CourseMemberRegistrationScreenState
                       ),
                     ),
               style: ElevatedButton.styleFrom(
-                backgroundColor: canAdd
+                backgroundColor:
+                    canAdd
                     ? AppColors.primaryGreen
                     : AppColors.textSecondary.withOpacity(0.3),
                 foregroundColor: Colors.white,
@@ -768,7 +769,8 @@ class _CourseMemberRegistrationScreenState
                   selectedIndex: _modeIndex,
                   onTabChanged: (index) {
                     setState(() {
-                      _mode = index == 0
+                      _mode =
+                          index == 0
                           ? CourseMemberRegistrationMode.inputNew
                           : CourseMemberRegistrationMode.selectExisting;
                       // 탭 변경 시 선택된 멤버 초기화
@@ -853,11 +855,14 @@ class _CourseMemberRegistrationScreenState
 
                           // pendingMembers도 "전체 멤버"로 포함 (AdminMemberScreen과 동일한 방식)
                           final now = TimezoneUtils.getSeoulDateTime();
-                          final pendingAsUsers = memberProvider.pendingMembers
-                              .map((PendingMember pm) {
+                          final pendingAsUsers =
+                              memberProvider.pendingMembers.map((
+                                PendingMember pm,
+                              ) {
                                 // ⚠️ courseIds 제거: courseEnrollments에서 유도
                                 final courseIds = pm.derivedCourseIds;
-                                final enrollments = courseIds.map((courseId) {
+                                final enrollments =
+                                    courseIds.map((courseId) {
                                   return CourseEnrollment(
                                     id: 'pending_${pm.id}_$courseId',
                                     userId: 'pending_${pm.id}',
@@ -877,7 +882,8 @@ class _CourseMemberRegistrationScreenState
 
                                 return User(
                                   userId: 'pending_${pm.id}',
-                                  name: (pm.name ?? '이름 없음').trim().isEmpty
+                                  name:
+                                      (pm.name ?? '이름 없음').trim().isEmpty
                                       ? '이름 없음'
                                       : (pm.name ?? '이름 없음').trim(),
                                   phoneNumber: pm.phoneNumber,
@@ -888,15 +894,15 @@ class _CourseMemberRegistrationScreenState
                                   createdAt: pm.createdAt,
                                   updatedAt: null,
                                 );
-                              })
-                              .toList();
+                              }).toList();
 
                           final allMembers = <User>[
                             ...memberProvider.members,
                             ...pendingAsUsers,
                           ];
 
-                          final users = allMembers.where((u) {
+                          final users =
+                              allMembers.where((u) {
                             if (u.isEnrolledInCourse(widget.courseId))
                               return false;
                             return matches(u.name, u.phoneNumber);
@@ -994,7 +1000,8 @@ class _CourseMemberRegistrationScreenState
             child: SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: canAdd
+                onPressed:
+                    canAdd
                     ? () => _addAndSaveMember(
                         name: _selectedMemberName!,
                         phoneNumber: _selectedMemberPhone!,
@@ -1004,7 +1011,8 @@ class _CourseMemberRegistrationScreenState
                   Icons.add,
                   color: canAdd ? Colors.white : AppColors.textSecondary,
                 ),
-                label: _isSaving
+                label:
+                    _isSaving
                     ? const SizedBox(
                         width: 20,
                         height: 20,
@@ -1023,7 +1031,8 @@ class _CourseMemberRegistrationScreenState
                         ),
                       ),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: canAdd
+                  backgroundColor:
+                      canAdd
                       ? AppColors.primaryGreen
                       : AppColors.textSecondary.withOpacity(0.3),
                   foregroundColor: Colors.white,

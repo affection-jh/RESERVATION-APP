@@ -112,9 +112,8 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         widget.enrollment.remainingReservations > 0;
     final hasPendingExtensionRequest =
         widget.enrollment.hasPendingExtensionRequest;
-    final tabCount = (hasRemainingReservations || hasPendingExtensionRequest)
-        ? 3
-        : 2;
+    final tabCount =
+        (hasRemainingReservations || hasPendingExtensionRequest) ? 3 : 2;
     final initialIndex = widget.initialTabIndex?.clamp(0, tabCount - 1) ?? 0;
     _tabController = TabController(
       length: tabCount,
@@ -178,8 +177,8 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
     final useUniform = widget.course.useUniformSettings;
     final initialTotalReservations =
         useUniform && widget.course.uniformTotalReservations != null
-        ? widget.course.uniformTotalReservations!
-        : widget.enrollment.totalReservations;
+            ? widget.course.uniformTotalReservations!
+            : widget.enrollment.totalReservations;
 
     _reEnrollTotalReservationsController = TextEditingController(
       text: initialTotalReservations.toString(),
@@ -229,9 +228,10 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
             EnrollmentValidUntilUtil.toSeoulDateOnly(
               widget.enrollment.validUntil,
             );
-        final originalDurationDays = originalValidUntilDateOnly
-            .difference(originalValidFromDateOnly)
-            .inDays;
+        final originalDurationDays =
+            originalValidUntilDateOnly
+                .difference(originalValidFromDateOnly)
+                .inDays;
 
         initialValidUntil = seoulToday.add(
           Duration(days: originalDurationDays.clamp(1, 36500)),
@@ -426,9 +426,10 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
             actionType: AdminActionType.adjustCount,
             performedAt: TimezoneUtils.getSeoulDateTime(),
             performedBy: 'admin', // TODO: 실제 admin ID로 변경
-            details: newTotal != currentTotal
-                ? '남은 횟수를 $_originalRemainingReservations회에서 ${remaining}회로 조정 (총 횟수: ${currentTotal}회 → ${newTotal}회)'
-                : '남은 횟수를 $_originalRemainingReservations회에서 ${remaining}회로 조정',
+            details:
+                newTotal != currentTotal
+                    ? '남은 횟수를 $_originalRemainingReservations회에서 ${remaining}회로 조정 (총 횟수: ${currentTotal}회 → ${newTotal}회)'
+                    : '남은 횟수를 $_originalRemainingReservations회에서 ${remaining}회로 조정',
             oldValue: {
               'remainingReservations': _originalRemainingReservations,
               'totalReservations': currentTotal,
@@ -651,9 +652,10 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         );
 
         // 연장 요청이 있으면 자동으로 승인
-        final pendingRequest = widget.enrollment.hasPendingExtensionRequest
-            ? widget.enrollment.extensionRequest
-            : null;
+        final pendingRequest =
+            widget.enrollment.hasPendingExtensionRequest
+                ? widget.enrollment.extensionRequest
+                : null;
         ExtensionRequestUpdate? extensionRequestUpdate;
         if (pendingRequest != null) {
           updatedEnrollment = updatedEnrollment.approveExtension(
@@ -673,9 +675,10 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
             actionType: AdminActionType.extendPeriod,
             performedAt: TimezoneUtils.getSeoulDateTime(),
             performedBy: 'admin', // TODO: 실제 admin ID로 변경
-            details: pendingRequest != null
-                ? '유효기간을 ${TimezoneUtils.formatDateToSeoul(_originalValidUntil)}에서 ${TimezoneUtils.formatDateToSeoul(_extendedValidUntil)}로 연장 (연장 요청 자동 승인)'
-                : '유효기간을 ${TimezoneUtils.formatDateToSeoul(_originalValidUntil)}에서 ${TimezoneUtils.formatDateToSeoul(_extendedValidUntil)}로 연장',
+            details:
+                pendingRequest != null
+                    ? '유효기간을 ${TimezoneUtils.formatDateToSeoul(_originalValidUntil)}에서 ${TimezoneUtils.formatDateToSeoul(_extendedValidUntil)}로 연장 (연장 요청 자동 승인)'
+                    : '유효기간을 ${TimezoneUtils.formatDateToSeoul(_originalValidUntil)}에서 ${TimezoneUtils.formatDateToSeoul(_extendedValidUntil)}로 연장',
             oldValue: {'validUntil': _originalValidUntil.toIso8601String()},
             newValue: {'validUntil': _extendedValidUntil.toIso8601String()},
           ),
@@ -979,9 +982,10 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         );
 
         // 재등록 시 기존 연장 요청 자동 거부
-        final pendingRequest = widget.enrollment.hasPendingExtensionRequest
-            ? widget.enrollment.extensionRequest
-            : null;
+        final pendingRequest =
+            widget.enrollment.hasPendingExtensionRequest
+                ? widget.enrollment.extensionRequest
+                : null;
         ExtensionRequestUpdate? extensionRequestUpdate;
         if (pendingRequest != null) {
           updatedEnrollment = updatedEnrollment.rejectExtension(
@@ -1157,9 +1161,8 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         );
       } on FirebaseFunctionsException catch (e) {
         final details = e.details;
-        final detailsMap = details is Map
-            ? Map<String, dynamic>.from(details)
-            : null;
+        final detailsMap =
+            details is Map ? Map<String, dynamic>.from(details) : null;
         final requiresCascade = detailsMap?['requiresCascade'] == true;
         if (requiresCascade) {
           final reservationCount = detailsMap?['reservationCount'];
@@ -1257,9 +1260,9 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                 child: DefaultTapbar(
                   labels:
                       (widget.enrollment.remainingReservations > 0 ||
-                          widget.enrollment.hasPendingExtensionRequest)
-                      ? const ['횟수 조정', '기간 연장', '재등록/취소']
-                      : const ['횟수 조정', '재등록/취소'],
+                              widget.enrollment.hasPendingExtensionRequest)
+                          ? const ['횟수 조정', '기간 연장', '재등록/취소']
+                          : const ['횟수 조정', '재등록/취소'],
                   selectedIndex: _tabController.index,
                   onTabChanged: (index) {
                     _tabController.animateTo(index);
@@ -1352,11 +1355,11 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                             '최초 등록일',
                             widget.enrollment.firstEnrolledAt != null
                                 ? TimezoneUtils.formatDateToSeoul(
-                                    widget.enrollment.firstEnrolledAt!,
-                                  )
+                                  widget.enrollment.firstEnrolledAt!,
+                                )
                                 : TimezoneUtils.formatDateToSeoul(
-                                    widget.enrollment.enrolledAt,
-                                  ),
+                                  widget.enrollment.enrolledAt,
+                                ),
                           ),
                           _buildDivider(),
 
@@ -1497,17 +1500,17 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                 child: ElevatedButton(
                   onPressed:
                       (_isRemainingReservationsValid() &&
-                          _hasRemainingReservationsChanges() &&
-                          !_isSaving)
-                      ? _saveRemainingReservations
-                      : null,
+                              _hasRemainingReservationsChanges() &&
+                              !_isSaving)
+                          ? _saveRemainingReservations
+                          : null,
                   style: ElevatedButton.styleFrom(
                     backgroundColor:
                         (_isRemainingReservationsValid() &&
-                            _hasRemainingReservationsChanges() &&
-                            !_isSaving)
-                        ? AppColors.primaryGreen
-                        : AppColors.borderLight,
+                                _hasRemainingReservationsChanges() &&
+                                !_isSaving)
+                            ? AppColors.primaryGreen
+                            : AppColors.borderLight,
                     disabledBackgroundColor: AppColors.borderLight,
                     padding: const EdgeInsets.symmetric(vertical: 18),
                     shape: RoundedRectangleBorder(
@@ -1515,28 +1518,29 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                     ),
                     elevation: 0,
                   ),
-                  child: _isSaving
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: AppColors.primaryGreen,
+                  child:
+                      _isSaving
+                          ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: AppColors.primaryGreen,
+                            ),
+                          )
+                          : Text(
+                            '저장',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color:
+                                  (_isRemainingReservationsValid() &&
+                                          _hasRemainingReservationsChanges() &&
+                                          !_isSaving)
+                                      ? Colors.white
+                                      : AppColors.textSecondary,
+                            ),
                           ),
-                        )
-                      : Text(
-                          '저장',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color:
-                                (_isRemainingReservationsValid() &&
-                                    _hasRemainingReservationsChanges() &&
-                                    !_isSaving)
-                                ? Colors.white
-                                : AppColors.textSecondary,
-                          ),
-                        ),
                 ),
               ),
             ),
@@ -1646,9 +1650,10 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                   child: Container(
                     padding: const EdgeInsets.all(6),
                     decoration: BoxDecoration(
-                      color: _extensionMode == ValidPeriodMode.calendar
-                          ? AppColors.primaryGreen
-                          : Colors.transparent,
+                      color:
+                          _extensionMode == ValidPeriodMode.calendar
+                              ? AppColors.primaryGreen
+                              : Colors.transparent,
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: SvgPicture.asset(
@@ -1846,27 +1851,29 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                     Material(
                       color: Colors.transparent,
                       child: InkWell(
-                        onTap: _canDecreasePeriod()
-                            ? () {
-                                setState(() {
-                                  _extensionMode = ValidPeriodMode.period;
-                                  final newValue = _extensionPeriodValue - 1;
-                                  _extensionPeriodValue = newValue;
-                                  _extensionPeriodController.text = newValue
-                                      .toString();
-                                  _updateExtensionValidUntil();
-                                });
-                              }
-                            : null,
+                        onTap:
+                            _canDecreasePeriod()
+                                ? () {
+                                  setState(() {
+                                    _extensionMode = ValidPeriodMode.period;
+                                    final newValue = _extensionPeriodValue - 1;
+                                    _extensionPeriodValue = newValue;
+                                    _extensionPeriodController.text =
+                                        newValue.toString();
+                                    _updateExtensionValidUntil();
+                                  });
+                                }
+                                : null,
                         borderRadius: BorderRadius.circular(8),
                         child: Container(
                           padding: const EdgeInsets.all(8),
                           child: Icon(
                             Icons.remove_rounded,
                             size: 20,
-                            color: _canDecreasePeriod()
-                                ? AppColors.primaryGreen
-                                : AppColors.textLight.withOpacity(0.3),
+                            color:
+                                _canDecreasePeriod()
+                                    ? AppColors.primaryGreen
+                                    : AppColors.textLight.withOpacity(0.3),
                           ),
                         ),
                       ),
@@ -1886,9 +1893,10 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                         style: TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w600,
-                          color: _extensionPeriodValue == 0
-                              ? AppColors.textSecondary.withOpacity(0.4)
-                              : AppColors.textPrimary,
+                          color:
+                              _extensionPeriodValue == 0
+                                  ? AppColors.textSecondary.withOpacity(0.4)
+                                  : AppColors.textPrimary,
                         ),
                         decoration: InputDecoration(
                           border: InputBorder.none,
@@ -1952,14 +1960,15 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                                 _updateExtensionValidUntil();
                               });
                             } else if (intValue.abs() > _getMaxPeriodValue()) {
-                              final capped = intValue.isNegative
-                                  ? -_getMaxPeriodValue()
-                                  : _getMaxPeriodValue();
+                              final capped =
+                                  intValue.isNegative
+                                      ? -_getMaxPeriodValue()
+                                      : _getMaxPeriodValue();
                               setState(() {
                                 _extensionMode = ValidPeriodMode.period;
                                 _extensionPeriodValue = capped;
-                                _extensionPeriodController.text = capped
-                                    .toString();
+                                _extensionPeriodController.text =
+                                    capped.toString();
                                 _updateExtensionValidUntil();
                               });
                             } else {
@@ -1993,19 +2002,19 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                       child: InkWell(
                         onTap:
                             _canIncreasePeriod() &&
-                                _extensionPeriodValue.abs() <
-                                    _getMaxPeriodValue()
-                            ? () {
-                                setState(() {
-                                  _extensionMode = ValidPeriodMode.period;
-                                  final newValue = _extensionPeriodValue + 1;
-                                  _extensionPeriodValue = newValue;
-                                  _extensionPeriodController.text = newValue
-                                      .toString();
-                                  _updateExtensionValidUntil();
-                                });
-                              }
-                            : null,
+                                    _extensionPeriodValue.abs() <
+                                        _getMaxPeriodValue()
+                                ? () {
+                                  setState(() {
+                                    _extensionMode = ValidPeriodMode.period;
+                                    final newValue = _extensionPeriodValue + 1;
+                                    _extensionPeriodValue = newValue;
+                                    _extensionPeriodController.text =
+                                        newValue.toString();
+                                    _updateExtensionValidUntil();
+                                  });
+                                }
+                                : null,
                         borderRadius: BorderRadius.circular(8),
                         child: Container(
                           padding: const EdgeInsets.all(8),
@@ -2014,9 +2023,10 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                             size: 20,
                             color:
                                 _canIncreasePeriod() &&
-                                    _extensionPeriodValue < _getMaxPeriodValue()
-                                ? AppColors.primaryGreen
-                                : AppColors.textLight.withOpacity(0.3),
+                                        _extensionPeriodValue <
+                                            _getMaxPeriodValue()
+                                    ? AppColors.primaryGreen
+                                    : AppColors.textLight.withOpacity(0.3),
                           ),
                         ),
                       ),
@@ -2043,14 +2053,15 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
               child: SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: (_hasPeriodExtensionChanges() && !_isSaving)
-                      ? _savePeriodExtension
-                      : null,
+                  onPressed:
+                      (_hasPeriodExtensionChanges() && !_isSaving)
+                          ? _savePeriodExtension
+                          : null,
                   style: ElevatedButton.styleFrom(
                     backgroundColor:
                         (_hasPeriodExtensionChanges() && !_isSaving)
-                        ? AppColors.primaryGreen
-                        : AppColors.borderLight,
+                            ? AppColors.primaryGreen
+                            : AppColors.borderLight,
                     disabledBackgroundColor: AppColors.borderLight,
                     padding: const EdgeInsets.symmetric(vertical: 18),
                     shape: RoundedRectangleBorder(
@@ -2058,25 +2069,27 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                     ),
                     elevation: 0,
                   ),
-                  child: _isSaving
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: AppColors.primaryGreen,
+                  child:
+                      _isSaving
+                          ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: AppColors.primaryGreen,
+                            ),
+                          )
+                          : Text(
+                            '저장',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color:
+                                  (_hasPeriodExtensionChanges() && !_isSaving)
+                                      ? Colors.white
+                                      : AppColors.textSecondary,
+                            ),
                           ),
-                        )
-                      : Text(
-                          '저장',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: (_hasPeriodExtensionChanges() && !_isSaving)
-                                ? Colors.white
-                                : AppColors.textSecondary,
-                          ),
-                        ),
                 ),
               ),
             ),
@@ -2109,9 +2122,8 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w600,
-              color: isSelected
-                  ? AppColors.textPrimary
-                  : AppColors.textSecondary,
+              color:
+                  isSelected ? AppColors.textPrimary : AppColors.textSecondary,
             ),
           ),
         ),
@@ -2178,16 +2190,16 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                 setState(() {
                   _reEnrollPeriodType = type;
                   _reEnrollPeriodValue = type == PeriodType.days ? 7 : 1;
-                  _reEnrollPeriodController.text = _reEnrollPeriodValue
-                      .toString();
+                  _reEnrollPeriodController.text =
+                      _reEnrollPeriodValue.toString();
                   _updateReEnrollValidUntilFromPeriod();
                 });
               },
               onPeriodValueChanged: (value) {
                 setState(() {
                   _reEnrollPeriodValue = value.clamp(0, 999);
-                  _reEnrollPeriodController.text = _reEnrollPeriodValue
-                      .toString();
+                  _reEnrollPeriodController.text =
+                      _reEnrollPeriodValue.toString();
                   _updateReEnrollValidUntilFromPeriod();
                 });
               },
@@ -2201,21 +2213,21 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                 child: ElevatedButton(
                   onPressed:
                       (_canReEnroll() &&
-                          _isReEnrollValid() &&
-                          _hasReEnrollChanges() &&
-                          !_isReenrolling &&
-                          !_isCancelling)
-                      ? _saveReEnrollment
-                      : null,
+                              _isReEnrollValid() &&
+                              _hasReEnrollChanges() &&
+                              !_isReenrolling &&
+                              !_isCancelling)
+                          ? _saveReEnrollment
+                          : null,
                   style: ElevatedButton.styleFrom(
                     backgroundColor:
                         (_canReEnroll() &&
-                            _isReEnrollValid() &&
-                            _hasReEnrollChanges() &&
-                            !_isReenrolling &&
-                            !_isCancelling)
-                        ? AppColors.primaryGreen
-                        : AppColors.borderLight,
+                                _isReEnrollValid() &&
+                                _hasReEnrollChanges() &&
+                                !_isReenrolling &&
+                                !_isCancelling)
+                            ? AppColors.primaryGreen
+                            : AppColors.borderLight,
                     disabledBackgroundColor: AppColors.borderLight,
                     padding: const EdgeInsets.symmetric(vertical: 18),
                     shape: RoundedRectangleBorder(
@@ -2223,30 +2235,31 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                     ),
                     elevation: 0,
                   ),
-                  child: _isReenrolling
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: AppColors.primaryGreen,
+                  child:
+                      _isReenrolling
+                          ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: AppColors.primaryGreen,
+                            ),
+                          )
+                          : Text(
+                            '재등록',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color:
+                                  (_canReEnroll() &&
+                                          _isReEnrollValid() &&
+                                          _hasReEnrollChanges() &&
+                                          !_isReenrolling &&
+                                          !_isCancelling)
+                                      ? Colors.white
+                                      : AppColors.textSecondary,
+                            ),
                           ),
-                        )
-                      : Text(
-                          '재등록',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color:
-                                (_canReEnroll() &&
-                                    _isReEnrollValid() &&
-                                    _hasReEnrollChanges() &&
-                                    !_isReenrolling &&
-                                    !_isCancelling)
-                                ? Colors.white
-                                : AppColors.textSecondary,
-                          ),
-                        ),
                 ),
               ),
             ),
@@ -2257,9 +2270,10 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
               child: SizedBox(
                 width: double.infinity,
                 child: OutlinedButton(
-                  onPressed: (_isCancelling || _isReenrolling)
-                      ? null
-                      : _cancelEnrollment,
+                  onPressed:
+                      (_isCancelling || _isReenrolling)
+                          ? null
+                          : _cancelEnrollment,
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
@@ -2270,23 +2284,24 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                       width: 1,
                     ),
                   ),
-                  child: _isCancelling
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.red,
+                  child:
+                      _isCancelling
+                          ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.red,
+                            ),
+                          )
+                          : Text(
+                            '수강 취소 처리',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.red,
+                            ),
                           ),
-                        )
-                      : Text(
-                          '수강 취소 처리',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.red,
-                          ),
-                        ),
                 ),
               ),
             ),
@@ -2392,31 +2407,32 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
     // 필터링된 아이템
     List<Map<String, dynamic>> filteredItems = timelineItems;
     if (_selectedTimelineFilter != null) {
-      filteredItems = timelineItems.where((item) {
-        final type = item['type'] as String;
-        switch (_selectedTimelineFilter) {
-          case '재등록':
-            return type == 'reenrollment' ||
-                type == 'reenrollmentCancelled' ||
-                (type == 'adminAction' &&
+      filteredItems =
+          timelineItems.where((item) {
+            final type = item['type'] as String;
+            switch (_selectedTimelineFilter) {
+              case '재등록':
+                return type == 'reenrollment' ||
+                    type == 'reenrollmentCancelled' ||
+                    (type == 'adminAction' &&
+                        (item['data'] as AdminAction).actionType ==
+                            AdminActionType.reenroll);
+              case '연장':
+                return type == 'extensionRequest';
+              case '횟수조정':
+                return type == 'adminAction' &&
                     (item['data'] as AdminAction).actionType ==
-                        AdminActionType.reenroll);
-          case '연장':
-            return type == 'extensionRequest';
-          case '횟수조정':
-            return type == 'adminAction' &&
-                (item['data'] as AdminAction).actionType ==
-                    AdminActionType.adjustCount;
-          case '기타':
-            return type == 'adminAction' &&
-                (item['data'] as AdminAction).actionType !=
-                    AdminActionType.adjustCount &&
-                (item['data'] as AdminAction).actionType !=
-                    AdminActionType.reenroll;
-          default:
-            return true;
-        }
-      }).toList();
+                        AdminActionType.adjustCount;
+              case '기타':
+                return type == 'adminAction' &&
+                    (item['data'] as AdminAction).actionType !=
+                        AdminActionType.adjustCount &&
+                    (item['data'] as AdminAction).actionType !=
+                        AdminActionType.reenroll;
+              default:
+                return true;
+            }
+          }).toList();
     }
 
     if (filteredItems.isEmpty) {
@@ -2526,9 +2542,10 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
-          color: isSelected
-              ? AppColors.primaryGreen
-              : const Color.fromARGB(255, 238, 238, 238),
+          color:
+              isSelected
+                  ? AppColors.primaryGreen
+                  : const Color.fromARGB(255, 238, 238, 238),
           borderRadius: BorderRadius.circular(16),
         ),
         child: Text(
@@ -2566,13 +2583,14 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           padding: const EdgeInsets.only(left: 20),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            children: items.asMap().entries.map((entry) {
-              final index = entry.key;
-              final item = entry.value;
-              final isLast = index == items.length - 1 && !hasMore;
+            children:
+                items.asMap().entries.map((entry) {
+                  final index = entry.key;
+                  final item = entry.value;
+                  final isLast = index == items.length - 1 && !hasMore;
 
-              return _buildTimelineItem(item, isLast);
-            }).toList(),
+                  return _buildTimelineItem(item, isLast);
+                }).toList(),
           ),
         ),
       ],
@@ -2595,10 +2613,6 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
       case 'adminAction':
         final action = item['data'] as AdminAction;
         content = _buildAdminActionTimelineItem(action);
-        break;
-      case 'extensionRequest':
-        final request = item['data'] as ExtensionRequest;
-        content = _buildExtensionRequestTimelineItem(request);
         break;
       default:
         content = const SizedBox.shrink();
@@ -2709,11 +2723,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           ),
           if (!isCancelled) ...[
             const SizedBox(height: 4),
-            Text(
-              '총 횟수: ${record.totalReservations}회',
-              style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
-            ),
-            const SizedBox(height: 4),
+
             Text(
               '유효기간: ${TimezoneUtils.formatDateToSeoul(record.validFrom)} ~ ${TimezoneUtils.formatDateToSeoul(record.validUntil)}',
               style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
@@ -2760,70 +2770,6 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
     );
   }
 
-  Widget _buildExtensionRequestTimelineItem(ExtensionRequest request) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.backgroundWhite,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                '연장 요청',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: _getExtensionStatusColor(
-                    request.status,
-                  ).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  _getExtensionStatusText(request.status),
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: _getExtensionStatusColor(request.status),
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '일시: ${TimezoneUtils.formatDateToSeoul(request.requestedAt)}',
-            style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '사유: ${request.reason}',
-            style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
-          ),
-          if (request.status == ExtensionRequestStatus.rejected &&
-              request.rejectionReason != null) ...[
-            const SizedBox(height: 4),
-            Text(
-              '거부 사유: ${request.rejectionReason}',
-              style: TextStyle(fontSize: 14, color: Colors.red),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
   String _getActionTypeLabel(AdminActionType type) {
     switch (type) {
       case AdminActionType.adjustCount:
@@ -2832,38 +2778,12 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         return '기간 연장';
       case AdminActionType.reenroll:
         return '재등록';
-      case AdminActionType.approveExtension:
-        return '연장 승인';
-      case AdminActionType.rejectExtension:
-        return '연장 거부';
       case AdminActionType.cancel:
         return '취소';
       case AdminActionType.memoUpdated:
         return '메모 업데이트';
       case AdminActionType.other:
         return '기타';
-    }
-  }
-
-  String _getExtensionStatusText(ExtensionRequestStatus status) {
-    switch (status) {
-      case ExtensionRequestStatus.pending:
-        return '대기';
-      case ExtensionRequestStatus.approved:
-        return '승인';
-      case ExtensionRequestStatus.rejected:
-        return '거부';
-    }
-  }
-
-  Color _getExtensionStatusColor(ExtensionRequestStatus status) {
-    switch (status) {
-      case ExtensionRequestStatus.pending:
-        return const Color.fromARGB(255, 248, 180, 116);
-      case ExtensionRequestStatus.approved:
-        return const Color.fromARGB(255, 103, 158, 144); // 초록색
-      case ExtensionRequestStatus.rejected:
-        return const Color.fromARGB(255, 253, 115, 105);
     }
   }
 }

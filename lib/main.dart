@@ -93,7 +93,6 @@ class MyApp extends StatelessWidget {
             backgroundColor: AppColors.backgroundWhite,
             foregroundColor: AppColors.textPrimary,
             elevation: 0,
-            leadingWidth: 56,
             iconTheme: const IconThemeData(color: AppColors.textPrimary),
           ),
         ),
@@ -320,9 +319,8 @@ class _MainScreenState extends State<MainScreen> {
             // ⚠️ 바텀 네비로 마이페이지에 "그냥 들어왔을 때"는 하이라이트 애니메이션을 촉발하지 않는다.
             // 하이라이트는 명시적으로 전달된 경우에만 1회 실행되고 소비된다.
             MyPageScreen(
-              highlightReservation: _currentIndex == 2
-                  ? _pendingHighlightReservation
-                  : null,
+              highlightReservation:
+                  _currentIndex == 2 ? _pendingHighlightReservation : null,
             ),
           ],
         ),

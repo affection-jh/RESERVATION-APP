@@ -71,15 +71,8 @@ class ProfileSection extends StatelessWidget {
                               ),
                             ),
                           ),
-                          if (onTap != null)
-                            Icon(
-                              Icons.chevron_right,
-                              color: AppColors.textSecondary,
-                              size: 24,
-                            ),
                         ],
                       ),
-                      const SizedBox(height: 4),
                       Text(
                         _formatPhoneNumber(phoneNumber),
                         style: TextStyle(
@@ -209,10 +202,11 @@ class SettingsItemsBuilder {
     // 전화번호가 있으면 핀 등록 화면으로 바로 이동 (인증 없이)
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => AdminPinRegisterScreen(
-          phoneNumber: phoneNumber,
-          verificationCode: '', // 인증 코드 불필요
-        ),
+        builder:
+            (context) => AdminPinRegisterScreen(
+              phoneNumber: phoneNumber,
+              verificationCode: '', // 인증 코드 불필요
+            ),
       ),
     );
   }
@@ -242,11 +236,12 @@ class SettingsItemsBuilder {
               : 'ON',
           style: TextStyle(
             fontSize: 15,
-            color: isNotificationEnabled != null
-                ? (isNotificationEnabled
-                      ? AppColors.primaryGreen
-                      : AppColors.textSecondary)
-                : AppColors.primaryGreen,
+            color:
+                isNotificationEnabled != null
+                    ? (isNotificationEnabled
+                        ? AppColors.primaryGreen
+                        : AppColors.textSecondary)
+                    : AppColors.primaryGreen,
             fontWeight: FontWeight.w500,
           ),
         ),

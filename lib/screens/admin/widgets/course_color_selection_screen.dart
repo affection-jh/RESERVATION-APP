@@ -76,10 +76,8 @@ class _CourseColorSelectionScreenState
       _selectedColor = widget.savedColorSelection!.selectedColor;
       _selectedDays.clear();
       _selectedDays.addAll(widget.savedColorSelection!.selectedDays);
-      _totalReservationsController.text = widget
-          .savedColorSelection!
-          .defaultTotalReservations
-          .toString();
+      _totalReservationsController.text =
+          widget.savedColorSelection!.defaultTotalReservations.toString();
       _useUniformSettings = widget.savedColorSelection!.useUniformSettings;
       _uniformTotalReservations =
           widget.savedColorSelection!.uniformTotalReservations ??
@@ -95,10 +93,8 @@ class _CourseColorSelectionScreenState
       for (final session in widget.existingCourse!.sessions) {
         _selectedDays.add(session.dayOfWeek);
       }
-      _totalReservationsController.text = widget
-          .existingCourse!
-          .defaultTotalReservations
-          .toString();
+      _totalReservationsController.text =
+          widget.existingCourse!.defaultTotalReservations.toString();
       _useUniformSettings = widget.existingCourse!.useUniformSettings;
       _uniformTotalReservations =
           widget.existingCourse!.uniformTotalReservations ??
@@ -112,8 +108,8 @@ class _CourseColorSelectionScreenState
       _totalReservationsController.text = '0';
       _uniformTotalReservations = 0;
     }
-    _uniformTotalReservationsController.text = _uniformTotalReservations
-        .toString();
+    _uniformTotalReservationsController.text =
+        _uniformTotalReservations.toString();
     _uniformPeriodController.text = _uniformPeriodValue.toString();
   }
 
@@ -236,27 +232,28 @@ class _CourseColorSelectionScreenState
                                 children: [
                                   _selectedColor != null
                                       ? Container(
-                                          width: 38,
-                                          height: 38,
-                                          decoration: BoxDecoration(
-                                            color: _selectedColor != null
-                                                ? Color(_selectedColor!)
-                                                : null,
-                                            borderRadius: BorderRadius.circular(
-                                              20,
-                                            ),
-                                          ),
-                                        )
-                                      : Container(
-                                          width: 38,
-                                          height: 38,
-                                          decoration: BoxDecoration(
-                                            color: AppColors.backgroundLight,
-                                            borderRadius: BorderRadius.circular(
-                                              20,
-                                            ),
+                                        width: 38,
+                                        height: 38,
+                                        decoration: BoxDecoration(
+                                          color:
+                                              _selectedColor != null
+                                                  ? Color(_selectedColor!)
+                                                  : null,
+                                          borderRadius: BorderRadius.circular(
+                                            20,
                                           ),
                                         ),
+                                      )
+                                      : Container(
+                                        width: 38,
+                                        height: 38,
+                                        decoration: BoxDecoration(
+                                          color: AppColors.backgroundLight,
+                                          borderRadius: BorderRadius.circular(
+                                            20,
+                                          ),
+                                        ),
+                                      ),
                                   const SizedBox(width: 12),
                                   Expanded(
                                     child: Text(
@@ -265,9 +262,10 @@ class _CourseColorSelectionScreenState
                                           : '코스 대표 색상 선택하기',
                                       style: TextStyle(
                                         fontSize: 16,
-                                        color: _selectedColor != null
-                                            ? AppColors.textPrimary
-                                            : AppColors.textSecondary,
+                                        color:
+                                            _selectedColor != null
+                                                ? AppColors.textPrimary
+                                                : AppColors.textSecondary,
                                       ),
                                     ),
                                   ),
@@ -334,35 +332,42 @@ class _CourseColorSelectionScreenState
               child: SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: _isFormValid()
-                      ? () {
-                          final totalReservations =
-                              int.tryParse(_totalReservationsController.text) ??
-                              0;
-                          widget.onNext(
-                            CourseColorSelectionData(
-                              basicInfo: widget.basicInfo,
-                              selectedColor: _selectedColor!,
-                              selectedDays: Set.from(_selectedDays),
-                              defaultTotalReservations: totalReservations,
-                              useUniformSettings: _useUniformSettings,
-                              uniformTotalReservations: _useUniformSettings
-                                  ? _uniformTotalReservations
-                                  : null,
-                              uniformPeriodType: _useUniformSettings
-                                  ? _uniformPeriodType
-                                  : null,
-                              uniformPeriodValue: _useUniformSettings
-                                  ? _uniformPeriodValue
-                                  : null,
-                            ),
-                          );
-                        }
-                      : null,
+                  onPressed:
+                      _isFormValid()
+                          ? () {
+                            final totalReservations =
+                                int.tryParse(
+                                  _totalReservationsController.text,
+                                ) ??
+                                0;
+                            widget.onNext(
+                              CourseColorSelectionData(
+                                basicInfo: widget.basicInfo,
+                                selectedColor: _selectedColor!,
+                                selectedDays: Set.from(_selectedDays),
+                                defaultTotalReservations: totalReservations,
+                                useUniformSettings: _useUniformSettings,
+                                uniformTotalReservations:
+                                    _useUniformSettings
+                                        ? _uniformTotalReservations
+                                        : null,
+                                uniformPeriodType:
+                                    _useUniformSettings
+                                        ? _uniformPeriodType
+                                        : null,
+                                uniformPeriodValue:
+                                    _useUniformSettings
+                                        ? _uniformPeriodValue
+                                        : null,
+                              ),
+                            );
+                          }
+                          : null,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: _isFormValid()
-                        ? AppColors.primaryGreen
-                        : AppColors.borderLight,
+                    backgroundColor:
+                        _isFormValid()
+                            ? AppColors.primaryGreen
+                            : AppColors.borderLight,
                     disabledBackgroundColor: AppColors.borderLight,
                     padding: const EdgeInsets.symmetric(vertical: 18),
                     shape: RoundedRectangleBorder(
@@ -375,9 +380,10 @@ class _CourseColorSelectionScreenState
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
-                      color: _isFormValid()
-                          ? Colors.white
-                          : AppColors.textSecondary,
+                      color:
+                          _isFormValid()
+                              ? Colors.white
+                              : AppColors.textSecondary,
                     ),
                   ),
                 ),
@@ -413,14 +419,12 @@ class _CourseColorSelectionScreenState
           curve: Curves.easeInOut,
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
           decoration: BoxDecoration(
-            color: isSelected
-                ? AppColors.primaryGreen
-                : AppColors.backgroundLight,
+            color:
+                isSelected ? AppColors.primaryGreen : AppColors.backgroundLight,
             borderRadius: BorderRadius.circular(54),
             border: Border.all(
-              color: isSelected
-                  ? AppColors.primaryGreen
-                  : AppColors.borderLight,
+              color:
+                  isSelected ? AppColors.primaryGreen : AppColors.borderLight,
               width: 1,
             ),
           ),
@@ -457,7 +461,7 @@ class _CourseColorSelectionScreenState
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '일괄 적용 모드',
+                      '기본 정보 설정',
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w600,
@@ -466,7 +470,7 @@ class _CourseColorSelectionScreenState
                     ),
                     const SizedBox(height: 10),
                     Text(
-                      '이 코스에 멤버를 등록할 때\n수업 횟수와 유효기간을 일괄 적용합니다',
+                      '코스 기본값을 설정합니다\n멤버 등록시 개별적으로 변경 가능합니다',
                       style: TextStyle(
                         fontSize: 14,
                         color: AppColors.textSecondary,
@@ -483,9 +487,10 @@ class _CourseColorSelectionScreenState
                     _useUniformSettings = value;
                   });
                 },
-                activeColor: _selectedColor != null
-                    ? Color(_selectedColor!)
-                    : AppColors.primaryGreen,
+                activeColor:
+                    _selectedColor != null
+                        ? Color(_selectedColor!)
+                        : AppColors.primaryGreen,
               ),
             ],
           ),
@@ -559,8 +564,8 @@ class _CourseColorSelectionScreenState
                       } else {
                         _uniformPeriodValue = 1;
                       }
-                      _uniformPeriodController.text = _uniformPeriodValue
-                          .toString();
+                      _uniformPeriodController.text =
+                          _uniformPeriodValue.toString();
                     });
                   },
                   onPeriodValueChanged: (value) {

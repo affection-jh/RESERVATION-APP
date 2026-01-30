@@ -161,7 +161,7 @@ service cloud.firestore {
     }
 
     // ==================== Enrollments Subcollections (Admin Only) ====================
-    // 히스토리/관리자액션/연장요청은 서브컬렉션으로 분리되어 있으며,
+    // 히스토리/관리자액션은 서브컬렉션으로 분리되어 있으며,
     // 기본 규칙(match /{document=**})에 의해 별도 match가 없으면 전부 거부됨.
     // 관리자 화면에서 쓰기/읽기가 필요하므로 명시적으로 허용.
     match /enrollments/{enrollmentId}/reenrollmentHistory/{recordId} {
@@ -169,10 +169,6 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
     match /enrollments/{enrollmentId}/adminActions/{actionId} {
-      allow read: if isAdmin();
-      allow create, update, delete: if isAdmin();
-    }
-    match /enrollments/{enrollmentId}/extensionRequests/{requestId} {
       allow read: if isAdmin();
       allow create, update, delete: if isAdmin();
     }
@@ -196,6 +192,28 @@ service cloud.firestore {
     match /dateCapacityOverrides/{overrideId} {
       allow read: if isAdmin();
       allow create, update, delete: if isAdmin();
+    }
+
+    // ==================== Booking Week Opens (관리자 "미리 예약 열기") ====================
+    // 주차별로 "정책과 무관하게" 예약을 열어둔 상태 저장
+    // - 읽기: 해당 place 멤버(일반 사용자) 또는 관리자
+    // - 쓰기: 해당 place 관리자만
+    match /bookingWeekOpens/{docId} {
+      allow read: if signedIn() && (
+        // 일반 사용자: 자신의 placeIds에 포함된 경우
+        (hasUserDoc() &&
+          userDoc().data.placeIds != null &&
+          resource.data.placeId != null &&
+          resource.data.placeId in userDoc().data.placeIds)
+        ||
+        // 관리자: 모든 bookingWeekOpens 읽기 가능
+        isAdmin()
+      );
+      allow create, update, delete: if isAdmin() && (
+        (resource.data.placeId != null && isAdminForPlace(resource.data.placeId)) ||
+        (request.resource.data.placeId != null &&
+          isAdminForPlace(request.resource.data.placeId))
+      );
     }
 
     // ==================== Course Members ====================
@@ -263,6 +281,23 @@ service cloud.firestore {
       allow create, delete: if isAdmin();
       // 읽음 처리만 유저가 가능
       allow update: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // ==================== Course Overrides (비정기 일정) ====================
+    match /courseOverrides/{overrideId} {
+      // 읽기: 해당 플레이스의 멤버(일반 사용자) 또는 관리자
+      allow read: if signedIn() && (
+        // 일반 사용자: 자신의 placeIds에 포함된 경우
+        (hasUserDoc() &&
+          userDoc().data.placeIds != null &&
+          resource.data.placeId != null &&
+          resource.data.placeId in userDoc().data.placeIds)
+        ||
+        // 관리자: 모든 courseOverrides 읽기 가능
+        isAdmin()
+      );
+      // 생성/수정/삭제: 관리자만
+      allow create, update, delete: if isAdmin();
     }
   }
 }
