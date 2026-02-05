@@ -22,6 +22,7 @@ import '../../../widgets/user_reservation_manage_bottom_sheet.dart';
 import '../../../utils/snackbar_util.dart';
 import '../../../utils/week_range_calculator.dart';
 import '../../../widgets/week_tab_bar.dart';
+import '../../../widgets/common_dialog.dart';
 import 'package:flutter/scheduler.dart';
 
 class CalendarScreen extends StatefulWidget {
@@ -1582,6 +1583,29 @@ class _CalendarScreenState extends State<CalendarScreen> {
             return;
           }
 
+          // ✅ Apple App Store 가이드라인 5.1.1 준수: 세션 클릭 시 로그인 체크
+          // 세션 브라우징은 로그인 없이 가능하지만, 예약/취소 등 계정 기반 기능은 로그인 필요
+          final String? pid = placeId;
+          final String? uid = userId;
+          final bool isLoggedIn = pid != null && uid != null;
+
+          if (!isLoggedIn) {
+            // 로그인 안 된 경우 로그인 다이얼로그 표시
+            final confirmed = await CommonDialog.show(
+              context: context,
+              title: '로그인이 필요합니다',
+              message: '예약 하려면 로그인이 필요합니다.\n로그인하시겠습니까?',
+              cancelText: '취소',
+              confirmText: '로그인하기',
+            );
+
+            if (confirmed == true) {
+              // 로그인 화면으로 이동
+              Navigator.of(context).pushNamed('/phone-number');
+            }
+            return;
+          }
+
           if (hasUserReservation) {
             // 사용자가 예약한 경우 예약 취소 바텀시트 표시
             UserReservationManageBottomSheet.show(
@@ -1599,13 +1623,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
           }
 
           if (canReserve) {
-            final String? pid = placeId;
-            final String? uid = userId;
-            if (pid == null || uid == null) {
-              SnackbarUtil.showError(context, '로그인이 필요합니다.');
-              return;
-            }
-
             try {
               // ✅ 성공 바텀시트는 ReservationProvider operationEvents에서 처리
               await ReservationBottomSheet.show(

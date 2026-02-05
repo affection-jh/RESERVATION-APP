@@ -74,9 +74,12 @@ class ProfileSection extends StatelessWidget {
                         ],
                       ),
                       Text(
-                        _formatPhoneNumber(phoneNumber),
+                        // 로그인 안 된 경우 메시지는 포맷팅하지 않음
+                        phoneNumber.contains('로그인하고')
+                            ? phoneNumber
+                            : _formatPhoneNumber(phoneNumber),
                         style: TextStyle(
-                          fontSize: 16,
+                          fontSize: 14,
                           color: AppColors.textSecondary,
                           fontWeight: FontWeight.w500,
                         ),
@@ -216,13 +219,13 @@ class SettingsItemsBuilder {
   /// [context] - BuildContext
   /// [isNotificationEnabled] - 알림 설정 상태 (null이면 하드코딩된 'ON' 표시)
   /// [onNotificationTap] - 알림 설정 탭 콜백 (null이면 TODO 처리)
-  /// [onLogout] - 로그아웃 콜백 (필수)
+  /// [onLogout] - 로그아웃 콜백 (null이면 로그아웃 항목 표시 안 함)
   /// [onWithdraw] - 회원탈퇴 콜백 (선택적, null이면 회원탈퇴 항목 표시 안 함)
   static List<SettingItem> buildSettingsItems({
     required BuildContext context,
     bool? isNotificationEnabled,
     VoidCallback? onNotificationTap,
-    required Future<void> Function() onLogout,
+    Future<void> Function()? onLogout,
     Future<void> Function()? onWithdraw,
   }) {
     return [
@@ -306,28 +309,33 @@ class SettingsItemsBuilder {
         },
       ),
 
-      // 로그아웃
-      SettingItem(
-        icon: Icons.logout,
-        title: '로그아웃',
-        onTap: () async {
-          final confirmed = await CommonDialog.show(
-            context: context,
-            title: '로그아웃',
-            message: '로그아웃 하시겠습니까?',
-            confirmText: '로그아웃',
-            cancelText: '취소',
-          );
+      // 로그아웃 (onLogout이 제공된 경우에만 표시)
+      if (onLogout != null)
+        SettingItem(
+          icon: Icons.logout,
+          title: '로그아웃',
+          onTap: () async {
+            final confirmed = await CommonDialog.show(
+              context: context,
+              title: '로그아웃',
+              message: '로그아웃 하시겠습니까?',
+              confirmText: '로그아웃',
+              cancelText: '취소',
+            );
 
-          if (confirmed == true && context.mounted) {
-            await onLogout();
-            if (context.mounted) {
-              Navigator.pushNamedAndRemoveUntil(context, '/', (route) => false);
+            if (confirmed == true && context.mounted) {
+              await onLogout();
+              if (context.mounted) {
+                Navigator.pushNamedAndRemoveUntil(
+                  context,
+                  '/',
+                  (route) => false,
+                );
+              }
             }
-          }
-        },
-        textColor: Colors.red,
-      ),
+          },
+          textColor: Colors.red,
+        ),
 
       // 회원탈퇴 (onWithdraw가 제공된 경우에만 표시)
       if (onWithdraw != null)

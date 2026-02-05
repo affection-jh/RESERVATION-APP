@@ -145,8 +145,8 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
         dateKey,
       );
       final overrideCap = capOverride?.capacity;
-      if (mounted) {
-        setState(() {
+        if (mounted) {
+          setState(() {
           _capacityOverride = overrideCap;
         });
       }
@@ -315,91 +315,91 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
       body: Stack(
         children: [
           SafeArea(
-            child: Column(
-              children: [
-                // 날짜/요일/시간 칩 섹션
-                _buildChipSection(),
+        child: Column(
+          children: [
+            // 날짜/요일/시간 칩 섹션
+            _buildChipSection(),
 
-                const SizedBox(height: 16),
+            const SizedBox(height: 16),
 
-                // 예약 상세 정보 (게이지)
-                Container(
-                  width: double.infinity,
+            // 예약 상세 정보 (게이지)
+            Container(
+              width: double.infinity,
                   padding: const EdgeInsets.symmetric(
                     horizontal: 20,
                     vertical: 12,
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
                     children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _buildInfoItem(
-                              label: '수용 인원',
-                              value: '$totalCapacity명',
-                            ),
-                          ),
-                          Expanded(
-                            child: _buildInfoItem(
-                              label: '예약 현황',
-                              value: '$reservedCount명 / $totalCapacity명',
-                            ),
-                          ),
-                        ],
+                      Expanded(
+                        child: _buildInfoItem(
+                          label: '수용 인원',
+                          value: '$totalCapacity명',
+                        ),
                       ),
-                      const SizedBox(height: 13),
-                      // 진행 바
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: LinearProgressIndicator(
-                          value: progress,
-                          minHeight: 8,
-                          backgroundColor: AppColors.borderLight,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            Color(widget.course.color),
-                          ),
-                          borderRadius: BorderRadius.circular(4),
+                      Expanded(
+                        child: _buildInfoItem(
+                          label: '예약 현황',
+                          value: '$reservedCount명 / $totalCapacity명',
                         ),
                       ),
                     ],
                   ),
-                ),
+                  const SizedBox(height: 13),
+                  // 진행 바
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: progress,
+                      minHeight: 8,
+                      backgroundColor: AppColors.borderLight,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        Color(widget.course.color),
+                      ),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                ],
+              ),
+            ),
 
-                // 예약자 명단
-                Expanded(
-                  child: Container(
-                    width: double.infinity,
-                    color: AppColors.backgroundWhite,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const SizedBox(height: 16),
-                        Expanded(
-                          child:
+            // 예약자 명단
+            Expanded(
+              child: Container(
+                width: double.infinity,
+                color: AppColors.backgroundWhite,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 16),
+                    Expanded(
+                      child:
                               dateReservations.isEmpty
-                                  ? Center(
-                                    child: Column(
+                              ? Center(
+                                child: Column(
                                       mainAxisAlignment:
                                           MainAxisAlignment.center,
-                                      children: [
-                                        Text(
-                                          '아직 예약자가 없어요',
-                                          style: TextStyle(
-                                            fontSize: 16,
-                                            color: AppColors.textSecondary,
-                                          ),
-                                        ),
-                                      ],
+                                  children: [
+                                    Text(
+                                      '아직 예약자가 없어요',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        color: AppColors.textSecondary,
+                                      ),
                                     ),
-                                  )
+                                  ],
+                                ),
+                              )
                                   : ListView.builder(
-                                    padding: const EdgeInsets.symmetric(
+                                padding: const EdgeInsets.symmetric(
                                       horizontal: 10,
-                                    ),
-                                    itemCount: dateReservations.length,
+                                ),
+                                itemCount: dateReservations.length,
 
-                                    itemBuilder: (context, index) {
+                                itemBuilder: (context, index) {
                                       final reservation =
                                           dateReservations[index];
                                       return Padding(
@@ -407,19 +407,19 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                                           bottom: 4,
                                         ),
                                         child: _buildReservistItem(
-                                          index: index + 1,
-                                          reservation: reservation,
+                                    index: index + 1,
+                                    reservation: reservation,
                                         ),
-                                      );
-                                    },
-                                  ),
-                        ),
-                      ],
+                                  );
+                                },
+                              ),
                     ),
-                  ),
+                  ],
                 ),
-              ],
+              ),
             ),
+          ],
+        ),
           ),
           // 세션 취소 중 로딩 오버레이
           if (_isCancellingSession)
@@ -613,15 +613,15 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                     children: [
                       Expanded(
                         child: Text(
-                          userName,
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
+                    userName,
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
                             color:
                                 (isLoading || isMoving || isCancelling)
                                     ? AppColors.textSecondary
                                     : AppColors.textPrimary,
-                          ),
+                    ),
                         ),
                       ),
                     ],
@@ -638,35 +638,35 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                       ),
                       const SizedBox(width: 8),
                       if (!isLoading && !isCancelling)
-                        GestureDetector(
-                          onTap: () {
-                            // 클립보드에 복사
-                            Clipboard.setData(ClipboardData(text: phoneNumber));
-                            setState(() {
-                              _copiedPhones[reservation.id] = true;
-                            });
+                      GestureDetector(
+                        onTap: () {
+                          // 클립보드에 복사
+                          Clipboard.setData(ClipboardData(text: phoneNumber));
+                          setState(() {
+                            _copiedPhones[reservation.id] = true;
+                          });
                             // 스낵바 표시
                             SnackbarUtil.showSuccess(context, '클립보드에 복사되었습니다');
-                            // 2초 후 다시 복사 아이콘으로 변경
-                            Future.delayed(const Duration(seconds: 2), () {
-                              if (mounted) {
-                                setState(() {
-                                  _copiedPhones[reservation.id] = false;
-                                });
-                              }
-                            });
-                          },
-                          child: Icon(
-                            _copiedPhones[reservation.id] == true
-                                ? Icons.check
-                                : Icons.copy_all,
-                            size: 18,
-                            color:
-                                _copiedPhones[reservation.id] == true
-                                    ? AppColors.primaryGreen
-                                    : AppColors.textSecondary,
-                          ),
+                          // 2초 후 다시 복사 아이콘으로 변경
+                          Future.delayed(const Duration(seconds: 2), () {
+                            if (mounted) {
+                              setState(() {
+                                _copiedPhones[reservation.id] = false;
+                              });
+                            }
+                          });
+                        },
+                        child: Icon(
+                          _copiedPhones[reservation.id] == true
+                              ? Icons.check
+                              : Icons.copy_all,
+                          size: 18,
+                          color:
+                              _copiedPhones[reservation.id] == true
+                                  ? AppColors.primaryGreen
+                                  : AppColors.textSecondary,
                         ),
+                      ),
                     ],
                   ),
                 ],
@@ -946,8 +946,8 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
             '회원의 등록 정보를 확인해주세요.',
           );
         } else {
-          SnackbarUtil.showError(context, e.message ?? '예약 추가에 실패했습니다.');
-        }
+        SnackbarUtil.showError(context, e.message ?? '예약 추가에 실패했습니다.');
+      }
       }
       return {'success': false, 'isOneTime': false};
     } catch (e) {
@@ -1051,7 +1051,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
           '일회성 추가 성공: $oneTimeCount명${success > oneTimeCount ? ' (총 $success명 추가됨)' : ''}',
         );
       } else {
-        SnackbarUtil.showSuccess(context, '$success명 예약이 추가되었습니다.');
+      SnackbarUtil.showSuccess(context, '$success명 예약이 추가되었습니다.');
       }
     }
   }

@@ -251,8 +251,7 @@ class _MainScreenState extends State<MainScreen> {
       listen: false,
     );
 
-    // user/place가 아직 준비되지 않았으면 완료 플래그를 세우지 않고 다음 기회를 기다린다.
-    if (authProvider.currentUser == null) return;
+    // place가 아직 준비되지 않았으면 완료 플래그를 세우지 않고 다음 기회를 기다린다.
     final currentPlace = placeProvider.currentPlace;
     if (currentPlace == null) return;
 
@@ -261,6 +260,7 @@ class _MainScreenState extends State<MainScreen> {
       // (이미 로드되어 있으면 스킵)
       final futures = <Future<void>>[];
 
+      // ✅ 로그인 없이도 세션 브라우징 가능 (Apple App Store 가이드라인 준수)
       if (courseProvider.courses.isEmpty) {
         futures.add(courseProvider.loadCourses(currentPlace.id));
       }
@@ -268,19 +268,23 @@ class _MainScreenState extends State<MainScreen> {
         futures.add(storyProvider.loadStories(currentPlace.id));
       }
 
-      // 항상 구독 보장 (Provider 내부에서 중복 구독 방지)
-      futures.add(
-        reservationProvider.loadUserReservations(
-          userId: authProvider.currentUser!.userId,
-          placeId: currentPlace.id,
-        ),
-      );
-      futures.add(
-        enrollmentProvider.loadUserEnrollments(
-          userId: authProvider.currentUser!.userId,
-          placeId: currentPlace.id,
-        ),
-      );
+      // 계정 기반 기능(예약/등록)은 로그인된 경우에만 로드
+      final currentUser = authProvider.currentUser;
+      if (currentUser != null) {
+        // 항상 구독 보장 (Provider 내부에서 중복 구독 방지)
+        futures.add(
+          reservationProvider.loadUserReservations(
+            userId: currentUser.userId,
+            placeId: currentPlace.id,
+          ),
+        );
+        futures.add(
+          enrollmentProvider.loadUserEnrollments(
+            userId: currentUser.userId,
+            placeId: currentPlace.id,
+          ),
+        );
+      }
 
       if (futures.isNotEmpty) {
         await Future.wait(futures);

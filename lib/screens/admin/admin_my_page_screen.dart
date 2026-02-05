@@ -134,8 +134,8 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
   }
 
   Widget _buildPlacesSection(BuildContext context) {
-    return Consumer<PlaceProvider>(
-      builder: (context, placeProvider, child) {
+    return Consumer2<PlaceProvider, AuthProvider>(
+      builder: (context, placeProvider, authProvider, child) {
         final currentPlace = placeProvider.currentPlace;
         if (currentPlace == null) {
           return const SizedBox.shrink();
@@ -146,7 +146,7 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
             // PlaceSwitchWidget
             Expanded(
               child: PlaceSwitchWidget(
-                enabled: true,
+                enabled: authProvider.currentAdmin != null,
                 showDescription: true,
                 padding: EdgeInsets.zero,
                 heroTagSuffix: 'admin_my_page',

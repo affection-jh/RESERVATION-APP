@@ -103,6 +103,62 @@ class FirestoreService {
     return snapshot.docs.map((d) => d.id).toList();
   }
 
+  /// 모든 플레이스 조회 (로그인 없이도 가능)
+  Future<List<Place>> getAllPlaces() async {
+    try {
+      debugPrint('[FirestoreService.getAllPlaces] 플레이스 목록 조회 시작');
+      final snapshot = await _firestore.collection('places').get();
+      debugPrint(
+        '[FirestoreService.getAllPlaces] 쿼리 결과: ${snapshot.docs.length}개 문서',
+      );
+
+      final places = <Place>[];
+      for (final doc in snapshot.docs) {
+        try {
+          final data = doc.data();
+          debugPrint(
+            '[FirestoreService.getAllPlaces] 문서 ID: ${doc.id}, 데이터: $data',
+          );
+          final place = Place.fromJson(data);
+          places.add(place);
+        } catch (e) {
+          debugPrint(
+            '[FirestoreService.getAllPlaces] 문서 파싱 실패 (ID: ${doc.id}): $e',
+          );
+          // 개별 문서 파싱 실패는 스킵하고 계속 진행
+        }
+      }
+
+      debugPrint(
+        '[FirestoreService.getAllPlaces] 성공: ${places.length}개 플레이스 로드',
+      );
+      return places;
+    } catch (e, stackTrace) {
+      debugPrint('[FirestoreService.getAllPlaces] 플레이스 목록 로드 실패: $e');
+      debugPrint('[FirestoreService.getAllPlaces] 스택 트레이스: $stackTrace');
+      rethrow;
+    }
+  }
+
+  /// 모든 플레이스 실시간 구독 (로그인 없이도 가능, 실시간 검색용)
+  Stream<List<Place>> watchAllPlaces() {
+    return _firestore.collection('places').snapshots().map((snapshot) {
+      final places = <Place>[];
+      for (final doc in snapshot.docs) {
+        try {
+          final data = doc.data();
+          final place = Place.fromJson(data);
+          places.add(place);
+        } catch (e) {
+          debugPrint(
+            '[FirestoreService.watchAllPlaces] 문서 파싱 실패 (ID: ${doc.id}): $e',
+          );
+        }
+      }
+      return places;
+    });
+  }
+
   /// 플레이스 실시간 구독
   Stream<Place?> watchPlace(String placeId) {
     return _firestore.collection('places').doc(placeId).snapshots().map((

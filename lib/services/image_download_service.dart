@@ -1,4 +1,5 @@
-import 'dart:typed_data';
+
+/*import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:image_gallery_saver/image_gallery_saver.dart';
 
@@ -36,3 +37,4 @@ class ImageDownloadService {
     return isSuccess;
   }
 }
+*/

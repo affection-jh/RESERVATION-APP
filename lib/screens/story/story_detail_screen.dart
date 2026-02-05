@@ -1,11 +1,8 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import '../../models/place.dart';
 import '../../providers/story_provider.dart' show Story;
-import '../../services/image_download_service.dart';
 import '../../theme/app_colors.dart';
-import '../../utils/snackbar_util.dart';
 
 class StoryDetailScreen extends StatefulWidget {
   final Story story;
@@ -18,10 +15,9 @@ class StoryDetailScreen extends StatefulWidget {
 }
 
 class _StoryDetailScreenState extends State<StoryDetailScreen> {
-  final ImageDownloadService _downloadService = ImageDownloadService();
-  final Map<int, bool> _downloadingStates = {};
+  //final Map<int, bool> _downloadingStates = {};
 
-  Future<void> _downloadImage(String imageUrl, int index) async {
+  /*Future<void> _downloadImage(String imageUrl, int index) async {
     if (_downloadingStates[index] == true) return;
 
     setState(() => _downloadingStates[index] = true);
@@ -44,7 +40,7 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
         setState(() => _downloadingStates[index] = false);
       }
     }
-  }
+  }*/
 
   @override
   Widget build(BuildContext context) {
@@ -94,12 +90,11 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
                   ) {
                     final url = widget.story.imageUrls[index];
                     final heroTag = 'story_image_${url.hashCode}';
-                    final isDownloading = _downloadingStates[index] == true;
+                    //final isDownloading = _downloadingStates[index] == true;
                     return Padding(
                       padding: EdgeInsets.only(
-                        bottom: index == widget.story.imageUrls.length - 1
-                            ? 0
-                            : 6,
+                        bottom:
+                            index == widget.story.imageUrls.length - 1 ? 0 : 6,
                       ),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(16),
@@ -120,36 +115,40 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
                                 fadeOutDuration: const Duration(
                                   milliseconds: 0,
                                 ),
-                                placeholder: (context, _) => Container(
-                                  height: 220,
-                                  color: AppColors.backgroundWhite,
-                                  child: Center(
-                                    child: CircularProgressIndicator(
-                                      color: AppColors.primaryGreen,
-                                      strokeWidth: 2,
+                                placeholder:
+                                    (context, _) => Container(
+                                      height: 220,
+                                      color: AppColors.backgroundWhite,
+                                      child: Center(
+                                        child: CircularProgressIndicator(
+                                          color: AppColors.primaryGreen,
+                                          strokeWidth: 2,
+                                        ),
+                                      ),
                                     ),
-                                  ),
-                                ),
-                                errorWidget: (context, _, __) => Container(
-                                  height: 220,
-                                  color: AppColors.backgroundWhite,
-                                  child: Icon(
-                                    Icons.broken_image_outlined,
-                                    color: AppColors.textSecondary,
-                                  ),
-                                ),
+                                errorWidget:
+                                    (context, _, __) => Container(
+                                      height: 220,
+                                      color: AppColors.backgroundWhite,
+                                      child: Icon(
+                                        Icons.broken_image_outlined,
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
                               ),
                             ),
                             // 다운로드 버튼
+                            /*
                             Positioned(
                               top: 12,
                               right: 12,
                               child: Material(
                                 color: Colors.transparent,
                                 child: InkWell(
-                                  onTap: isDownloading
-                                      ? null
-                                      : () => _downloadImage(url, index),
+                                  onTap:
+                                      isDownloading
+                                          ? null
+                                          : () => _downloadImage(url, index),
                                   borderRadius: BorderRadius.circular(20),
                                   child: Container(
                                     width: 40,
@@ -158,34 +157,35 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
                                       color: Colors.black.withOpacity(0.5),
                                       shape: BoxShape.circle,
                                     ),
-                                    child: isDownloading
-                                        ? const Padding(
-                                            padding: EdgeInsets.all(10),
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                              valueColor:
-                                                  AlwaysStoppedAnimation<Color>(
-                                                    Colors.white,
-                                                  ),
+                                    child:
+                                        isDownloading
+                                            ? const Padding(
+                                              padding: EdgeInsets.all(10),
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                                valueColor:
+                                                    AlwaysStoppedAnimation<
+                                                      Color
+                                                    >(Colors.white),
+                                              ),
+                                            )
+                                            : Padding(
+                                              padding: const EdgeInsets.all(8),
+                                              child: SvgPicture.asset(
+                                                'assets/icons/download.svg',
+                                                width: 24,
+                                                height: 24,
+                                                colorFilter:
+                                                    const ColorFilter.mode(
+                                                      Colors.white,
+                                                      BlendMode.srcIn,
+                                                    ),
+                                              ),
                                             ),
-                                          )
-                                        : Padding(
-                                            padding: const EdgeInsets.all(8),
-                                            child: SvgPicture.asset(
-                                              'assets/icons/download.svg',
-                                              width: 24,
-                                              height: 24,
-                                              colorFilter:
-                                                  const ColorFilter.mode(
-                                                    Colors.white,
-                                                    BlendMode.srcIn,
-                                                  ),
-                                            ),
-                                          ),
                                   ),
                                 ),
                               ),
-                            ),
+                            ),*/
                           ],
                         ),
                       ),
@@ -237,9 +237,8 @@ class _StoryExpandableTextState extends State<_StoryExpandableText> {
               widget.text,
               style: widget.style,
               maxLines: _expanded ? null : widget.maxLines,
-              overflow: _expanded
-                  ? TextOverflow.visible
-                  : TextOverflow.ellipsis,
+              overflow:
+                  _expanded ? TextOverflow.visible : TextOverflow.ellipsis,
             ),
             if (_overflow) ...[
               const SizedBox(height: 6),

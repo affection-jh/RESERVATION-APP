@@ -176,7 +176,6 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final placeProvider = Provider.of<PlaceProvider>(context);
-    final authProvider = Provider.of<AuthProvider>(context);
 
     return Scaffold(
       backgroundColor: AppColors.backgroundLight,
@@ -195,8 +194,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
               const SizedBox(height: 30),
 
-              // 최근 이용 섹션
-              if (authProvider.currentUser != null) _buildRecentUsageSection(),
+              // 최근 이용 섹션 (로그인 여부와 관계없이 표시)
+              _buildRecentUsageSection(),
 
               // 탭
               const SizedBox(height: 52),
@@ -486,13 +485,16 @@ class _HomeScreenState extends State<HomeScreen> {
     final courseProvider = Provider.of<CourseProvider>(context);
     final authProvider = Provider.of<AuthProvider>(context);
 
-    if (authProvider.currentUser == null) {
-      return const SizedBox.shrink();
-    }
+    // ✅ Apple App Store 가이드라인 5.1.1 준수: 로그인 안 되어 있어도 섹션 표시
+    final isLoggedIn = authProvider.currentUser != null;
 
-    final reservations = reservationProvider.reservations;
+    final reservations =
+        isLoggedIn ? reservationProvider.reservations : <Reservation>[];
     final courses = courseProvider.courses;
-    final allReservations = _getRecentReservations(reservations, courses);
+    final allReservations =
+        isLoggedIn
+            ? _getRecentReservations(reservations, courses)
+            : <Map<String, dynamic>>[];
     final totalCount = allReservations.length;
     final currentIndex =
         totalCount > 0
@@ -516,29 +518,31 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
 
-              Padding(
-                padding: const EdgeInsets.only(right: 10),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: List.generate(
-                    totalCount,
-                    (index) => Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 3),
-                      child: Container(
-                        width: 10,
-                        height: 10,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color:
-                              index == currentIndex - 1
-                                  ? AppColors.primaryGreen
-                                  : AppColors.primaryGreen.withOpacity(0.3),
+              // ✅ 로그인된 경우에만 페이지 인디케이터 표시
+              if (isLoggedIn && totalCount > 0)
+                Padding(
+                  padding: const EdgeInsets.only(right: 10),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: List.generate(
+                      totalCount,
+                      (index) => Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 3),
+                        child: Container(
+                          width: 10,
+                          height: 10,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color:
+                                index == currentIndex - 1
+                                    ? AppColors.primaryGreen
+                                    : AppColors.primaryGreen.withOpacity(0.3),
+                          ),
                         ),
                       ),
                     ),
                   ),
                 ),
-              ),
             ],
           ),
         ),
@@ -554,14 +558,17 @@ class _HomeScreenState extends State<HomeScreen> {
     final courseProvider = Provider.of<CourseProvider>(context);
     final authProvider = Provider.of<AuthProvider>(context);
 
-    if (authProvider.currentUser == null) {
-      return const SizedBox.shrink();
-    }
+    // ✅ 로그인 안 되어 있어도 빈 상태 카드 표시
+    final isLoggedIn = authProvider.currentUser != null;
 
-    final reservations = reservationProvider.reservations;
+    final reservations =
+        isLoggedIn ? reservationProvider.reservations : <Reservation>[];
     final courses = courseProvider.courses;
 
-    final recentReservations = _getRecentReservations(reservations, courses);
+    final recentReservations =
+        isLoggedIn
+            ? _getRecentReservations(reservations, courses)
+            : <Map<String, dynamic>>[];
 
     // 리스트가 줄어들 때(취소 직후 등) 현재 페이지 인덱스가 범위를 벗어나면 안정적으로 보정
     final totalCount = recentReservations.length;
@@ -589,7 +596,8 @@ class _HomeScreenState extends State<HomeScreen> {
       });
     }
 
-    if (recentReservations.isEmpty) {
+    // ✅ 로그인 안 되어 있거나 예약이 없으면 빈 상태 카드 표시
+    if (!isLoggedIn || recentReservations.isEmpty) {
       return SizedBox(
         height: _cardHeight,
         child: ListView.builder(

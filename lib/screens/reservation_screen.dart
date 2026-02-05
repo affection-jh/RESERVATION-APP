@@ -371,10 +371,8 @@ class _ReservationScreenState extends State<ReservationScreen> {
     );
 
     void openCalendar() {
-      if (!isEnrolled) {
-        SnackbarUtil.showInfo(context, '등록한 코스가 아니에요.');
-        return;
-      }
+      // ✅ Apple App Store 가이드라인 5.1.1 준수: 세션 브라우징은 로그인 없이도 가능해야 함
+      // 예약 등 계정 기반 기능은 CalendarScreen 내부에서 로그인 체크
       Navigator.of(context).push(
         MaterialPageRoute(builder: (context) => CalendarScreen(course: course)),
       );

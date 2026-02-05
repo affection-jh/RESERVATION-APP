@@ -684,14 +684,23 @@ class _MyPageScreenState extends State<MyPageScreen> {
                       builder: (context) {
                         final authProvider = Provider.of<AuthProvider>(context);
                         final user = authProvider.currentUser;
+                        final isLoggedIn = user != null;
                         final isNotificationEnabled =
                             user?.notificationsEnabled ?? true;
 
                         return UserProfileInfoSection(
                           headerTitle: '마이프로필',
-                          profileName: user?.name ?? '사용자',
-                          profilePhoneNumber: user?.phoneNumber ?? '',
-                          onProfileTap: () {},
+                          profileName: isLoggedIn ? (user.name) : '로그인이 필요합니다',
+                          profilePhoneNumber:
+                              isLoggedIn
+                                  ? (user.phoneNumber)
+                                  : '로그인하고 모든 기능을 이용하세요',
+                          onProfileTap: () {
+                            // ✅ 로그인 안 된 경우 로그인 화면으로 이동
+                            if (!isLoggedIn) {
+                              Navigator.of(context).pushNamed('/phone-number');
+                            }
+                          },
                           profileBottomWidget: const PlaceSwitchWidget(
                             heroTagSuffix: 'my_page_profile',
                           ),
@@ -709,57 +718,66 @@ class _MyPageScreenState extends State<MyPageScreen> {
                                 setState(() {});
                               }
                             },
-                            onLogout: () async {
-                              await authProvider.logout();
-                            },
-                            onWithdraw: () async {
-                              try {
-                                final authProvider = Provider.of<AuthProvider>(
-                                  context,
-                                  listen: false,
-                                );
-                                final user = authProvider.currentUser;
+                            // ✅ 로그인 안 된 경우 로그아웃/회원탈퇴 버튼 숨김
+                            onLogout:
+                                isLoggedIn
+                                    ? () async {
+                                      await authProvider.logout();
+                                    }
+                                    : null, // null이면 로그아웃 항목이 표시되지 않음
+                            onWithdraw:
+                                isLoggedIn
+                                    ? () async {
+                                      try {
+                                        final authProvider =
+                                            Provider.of<AuthProvider>(
+                                              context,
+                                              listen: false,
+                                            );
+                                        final user = authProvider.currentUser;
 
-                                if (user == null) {
-                                  SnackbarUtil.showError(
-                                    context,
-                                    '사용자 정보를 찾을 수 없습니다.',
-                                  );
-                                  return;
-                                }
+                                        if (user == null) {
+                                          SnackbarUtil.showError(
+                                            context,
+                                            '사용자 정보를 찾을 수 없습니다.',
+                                          );
+                                          return;
+                                        }
 
-                                // 유저 계정 삭제 (모든 플레이스에서 제거 + Firebase Auth 삭제)
-                                final functions = FirebaseFunctions.instance;
-                                final deleteAccountCallable = functions
-                                    .httpsCallable('deleteUserAccount');
+                                        // 유저 계정 삭제 (모든 플레이스에서 제거 + Firebase Auth 삭제)
+                                        final functions =
+                                            FirebaseFunctions.instance;
+                                        final deleteAccountCallable = functions
+                                            .httpsCallable('deleteUserAccount');
 
-                                await deleteAccountCallable.call({
-                                  'userId': user.userId,
-                                });
+                                        await deleteAccountCallable.call({
+                                          'userId': user.userId,
+                                        });
 
-                                // 로그아웃 처리
-                                await authProvider.logout();
+                                        // 로그아웃 처리
+                                        await authProvider.logout();
 
-                                if (context.mounted) {
-                                  SnackbarUtil.showSuccess(
-                                    context,
-                                    '회원탈퇴가 완료되었습니다.',
-                                  );
-                                  Navigator.pushNamedAndRemoveUntil(
-                                    context,
-                                    '/',
-                                    (route) => false,
-                                  );
-                                }
-                              } catch (e) {
-                                if (context.mounted) {
-                                  SnackbarUtil.showError(
-                                    context,
-                                    '회원탈퇴 중 오류가 발생했습니다.',
-                                  );
-                                }
-                              }
-                            },
+                                        if (context.mounted) {
+                                          SnackbarUtil.showSuccess(
+                                            context,
+                                            '회원탈퇴가 완료되었습니다.',
+                                          );
+                                          Navigator.pushNamedAndRemoveUntil(
+                                            context,
+                                            '/',
+                                            (route) => false,
+                                          );
+                                        }
+                                      } catch (e) {
+                                        if (context.mounted) {
+                                          SnackbarUtil.showError(
+                                            context,
+                                            '회원탈퇴 중 오류가 발생했습니다.',
+                                          );
+                                        }
+                                      }
+                                    }
+                                    : null, // null이면 회원탈퇴 항목이 표시되지 않음
                           ),
                         );
                       },
@@ -778,8 +796,9 @@ class _MyPageScreenState extends State<MyPageScreen> {
 
   // 플레이스 정보 섹션
   Widget _buildPlaceInfoSection() {
-    return const PlaceSwitchWidget(
-      enabled: true,
+    final authProvider = Provider.of<AuthProvider>(context);
+    return PlaceSwitchWidget(
+      enabled: authProvider.currentUser != null,
       showDescription: true,
       heroTagSuffix: 'my_page',
     );

@@ -184,8 +184,9 @@ class _NotificationScreenState extends State<NotificationScreen> {
       if (mounted) {
         await Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (context) =>
-                StoryDetailScreen(story: story, place: currentPlace),
+            builder:
+                (context) =>
+                    StoryDetailScreen(story: story, place: currentPlace),
           ),
         );
       }
@@ -279,11 +280,12 @@ class _NotificationScreenState extends State<NotificationScreen> {
       if (mounted) {
         await Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (context) => EnrollmentDetailScreen(
-              member: memberData,
-              enrollment: enrollment,
-              course: course,
-            ),
+            builder:
+                (context) => EnrollmentDetailScreen(
+                  member: memberData,
+                  enrollment: enrollment,
+                  course: course,
+                ),
           ),
         );
       }
@@ -301,7 +303,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
         final isLoading = notificationProvider.isLoading;
         final error = notificationProvider.error;
         final unreadCount = notificationProvider.unreadCount;
-
+        final authProvider = Provider.of<AuthProvider>(context, listen: false);
         return Scaffold(
           backgroundColor: AppColors.backgroundLight,
           appBar: AppBar(
@@ -327,7 +329,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
                     color: AppColors.textPrimary,
                   ),
                 ),
-                if (unreadCount > 0) ...[
+                if (unreadCount > 0 && authProvider.currentUser != null) ...[
                   const SizedBox(width: 8),
                   Container(
                     margin: const EdgeInsets.only(top: 2),
@@ -377,13 +379,14 @@ class _NotificationScreenState extends State<NotificationScreen> {
   ) {
     // Provider에서 이미 플레이스와 역할로 필터링되었으므로 중복 필터링 제거
     final filteredNotifications = notifications;
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
 
     if (isLoading && filteredNotifications.isEmpty) {
       return _buildShimmerLoading();
     }
 
     // 오류가 발생해도 자세한 오류 메시지는 표시하지 않고 빈 화면으로 처리
-    if (filteredNotifications.isEmpty) {
+    if (filteredNotifications.isEmpty || authProvider.currentUser == null) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -406,32 +409,36 @@ class _NotificationScreenState extends State<NotificationScreen> {
     final monthStart = todayStart.subtract(const Duration(days: 30));
 
     // 오늘 알림
-    final todayNotifications = filteredNotifications
-        .where((n) => n.createdAt.isAfter(todayStart))
-        .toList();
+    final todayNotifications =
+        filteredNotifications
+            .where((n) => n.createdAt.isAfter(todayStart))
+            .toList();
 
     // 이번 주 알림 (오늘 제외)
-    final weekNotifications = filteredNotifications
-        .where(
-          (n) =>
-              n.createdAt.isAfter(weekStart) &&
-              !n.createdAt.isAfter(todayStart),
-        )
-        .toList();
+    final weekNotifications =
+        filteredNotifications
+            .where(
+              (n) =>
+                  n.createdAt.isAfter(weekStart) &&
+                  !n.createdAt.isAfter(todayStart),
+            )
+            .toList();
 
     // 이번 달 알림 (이번 주 제외)
-    final monthNotifications = filteredNotifications
-        .where(
-          (n) =>
-              n.createdAt.isAfter(monthStart) &&
-              !n.createdAt.isAfter(weekStart),
-        )
-        .toList();
+    final monthNotifications =
+        filteredNotifications
+            .where(
+              (n) =>
+                  n.createdAt.isAfter(monthStart) &&
+                  !n.createdAt.isAfter(weekStart),
+            )
+            .toList();
 
     // 그 이전 알림
-    final earlierNotifications = filteredNotifications
-        .where((n) => !n.createdAt.isAfter(monthStart))
-        .toList();
+    final earlierNotifications =
+        filteredNotifications
+            .where((n) => !n.createdAt.isAfter(monthStart))
+            .toList();
 
     return ListView(
       controller: _scrollController,
@@ -687,16 +694,18 @@ class _NotificationTile extends StatelessWidget {
                     height: 65,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: notification.isRead
-                          ? AppColors.backgroundLight
-                          : AppColors.primaryGreen,
+                      color:
+                          notification.isRead
+                              ? AppColors.backgroundLight
+                              : AppColors.primaryGreen,
                     ),
                     child: Icon(
                       _getNotificationIcon(),
                       size: 28,
-                      color: notification.isRead
-                          ? AppColors.textSecondary.withOpacity(0.6)
-                          : Colors.white,
+                      color:
+                          notification.isRead
+                              ? AppColors.textSecondary.withOpacity(0.6)
+                              : Colors.white,
                     ),
                   ),
                 ],
@@ -711,9 +720,10 @@ class _NotificationTile extends StatelessWidget {
                       notification.title,
                       style: TextStyle(
                         fontSize: 15,
-                        fontWeight: notification.isRead
-                            ? FontWeight.w400
-                            : FontWeight.w600,
+                        fontWeight:
+                            notification.isRead
+                                ? FontWeight.w400
+                                : FontWeight.w600,
                         color: AppColors.textPrimary,
                       ),
                       maxLines: 2,

@@ -39,10 +39,13 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
   final MemberService _memberService = MemberService();
   final AuthService _authService = AuthService();
   final UserService _userService = UserService();
+  final TextEditingController _searchController = TextEditingController();
   String? _userId;
   StreamSubscription<List<PlaceMembership>>? _membershipSubscription;
+  StreamSubscription<List<Place>>? _allPlacesSubscription;
   List<PlaceMembership> _memberships = [];
   Map<String, Place> _placesMap = {};
+  List<Place> _allPlaces = []; // 실시간 검색용 전체 플레이스 목록
   bool _isLoading = true;
   bool _hasAutoNavigated = false;
   bool _requireManualEntrySelection = false;
@@ -91,6 +94,8 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
   @override
   void dispose() {
     _membershipSubscription?.cancel();
+    _allPlacesSubscription?.cancel();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -102,13 +107,14 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
 
       // Firebase Auth에서 현재 사용자 확인
       final firebaseUser = _authService.currentFirebaseUser;
+
+      // ✅ 로그인 없이도 플레이스 브라우징 가능 (Apple App Store 가이드라인 준수)
       if (firebaseUser == null) {
-        // 인증 정보가 없으면 로그인 화면으로 이동
-        if (mounted) {
-          Navigator.of(
-            context,
-          ).pushNamedAndRemoveUntil('/phone-number', (route) => false);
-        }
+        // 로그인 안 된 경우 모든 플레이스 실시간 구독 시작
+        setState(() {
+          _isLoading = true;
+        });
+        _startAllPlacesSubscription();
         return;
       }
 
@@ -242,6 +248,34 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
     }
   }
 
+  /// 모든 플레이스 실시간 구독 시작 (로그인 없이도 가능)
+  void _startAllPlacesSubscription() {
+    _allPlacesSubscription?.cancel();
+
+    _allPlacesSubscription = _firestoreService.watchAllPlaces().listen(
+      (places) {
+        debugPrint('[PlaceWaitingScreen] 실시간 플레이스 업데이트: ${places.length}개');
+        if (mounted) {
+          setState(() {
+            _allPlaces = places;
+            _placesMap = {for (var place in places) place.id: place};
+            _isLoading = false;
+          });
+        }
+      },
+      onError: (e) {
+        debugPrint('[PlaceWaitingScreen] 실시간 플레이스 구독 에러: $e');
+        if (mounted) {
+          setState(() {
+            _allPlaces = [];
+            _placesMap = {};
+            _isLoading = false;
+          });
+        }
+      },
+    );
+  }
+
   /// 멤버십 실시간 구독 시작
   void _startMembershipSubscription() {
     if (_userId == null) return;
@@ -332,27 +366,9 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
   }
 
   void _onPlaceTap(Place place) async {
-    // 인증정보 확인 (Firebase Auth)
-    final firebaseUser = _authService.currentFirebaseUser;
-    if (firebaseUser == null) {
-      // 인증정보가 없으면 다이얼로그 표시
-      final confirmed = await CommonDialog.show(
-        context: context,
-        title: '인증정보 오류',
-        message: '인증정보를 찾을 수 없습니다.\n다시 로그인해주세요.',
-        cancelText: '취소',
-        confirmText: '로그인하기',
-      );
-
-      if (confirmed == true) {
-        // 초기 로그인 화면으로 이동 (모든 화면 제거)
-        Navigator.of(
-          context,
-        ).pushNamedAndRemoveUntil('/phone-number', (route) => false);
-      }
-      return;
-    }
-
+    // ✅ Apple App Store 가이드라인 5.1.1 준수: 세션 브라우징은 로그인 없이도 가능해야 함
+    // 플레이스 선택 시 바로 메인 화면으로 이동 (세션 브라우징 가능)
+    // 예약 등 계정 기반 기능은 각 화면에서 로그인 체크
     _navigateToMain(place);
   }
 
@@ -488,6 +504,13 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
 
   /// 뒤로가기 처리
   Future<bool> _onWillPop() async {
+    // 로그인 안 된 경우 뒤로가기 허용
+    final firebaseUser = _authService.currentFirebaseUser;
+    if (firebaseUser == null) {
+      return true; // 뒤로가기 허용
+    }
+
+    // 로그인된 경우 로그아웃 확인
     final confirmed = await CommonDialog.show(
       context: context,
       title: '로그아웃',
@@ -524,61 +547,103 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
               backgroundColor: AppColors.backgroundLight,
               elevation: 0,
               scrolledUnderElevation: 0,
-              leading: IconButton(
-                onPressed: () async {
-                  await _onWillPop();
-                },
-                icon: Padding(
-                  padding: const EdgeInsets.only(left: 12),
-                  child: SvgPicture.asset(
-                    'assets/icons/logout-icon.svg',
-                    width: 26,
-                    height: 26,
-                    colorFilter: ColorFilter.mode(
-                      AppColors.primaryGreen,
-                      BlendMode.srcIn,
-                    ),
-                  ),
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () async {
-                    await _handleAdminLogin();
-                  },
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  child: Row(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(
-                          '관리자로 진행하기',
-                          style: TextStyle(
-                            fontSize: 18,
-                            color: AppColors.primaryGreen,
-                            fontWeight: FontWeight.w600,
+              leading:
+                  _authService.currentFirebaseUser != null
+                      ? IconButton(
+                        onPressed: () async {
+                          await _onWillPop();
+                        },
+                        icon: Padding(
+                          padding: const EdgeInsets.only(left: 12),
+                          child: SvgPicture.asset(
+                            'assets/icons/logout-icon.svg',
+                            width: 26,
+                            height: 26,
+                            colorFilter: ColorFilter.mode(
+                              AppColors.primaryGreen,
+                              BlendMode.srcIn,
+                            ),
                           ),
                         ),
+                      )
+                      : null,
+              actions: [
+                if (_authService.currentFirebaseUser != null)
+                  TextButton(
+                    onPressed: () async {
+                      await _handleAdminLogin();
+                    },
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
                       ),
-                      const SizedBox(width: 4),
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Icon(
-                          Icons.arrow_forward_ios,
-                          size: 16,
-                          color: AppColors.primaryGreen,
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: Row(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            '관리자로 진행하기',
+                            style: TextStyle(
+                              fontSize: 18,
+                              color: AppColors.primaryGreen,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
                         ),
-                      ),
-                    ],
+                        const SizedBox(width: 4),
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Icon(
+                            Icons.arrow_forward_ios,
+                            size: 16,
+                            color: AppColors.primaryGreen,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
+                if (_authService.currentFirebaseUser == null)
+                  TextButton(
+                    onPressed: () {
+                      Navigator.of(context).pushNamed('/phone-number');
+                    },
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: Row(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            '로그인',
+                            style: TextStyle(
+                              fontSize: 18,
+                              color: AppColors.primaryGreen,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Icon(
+                            Icons.arrow_forward_ios,
+                            size: 16,
+                            color: AppColors.primaryGreen,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 const SizedBox(width: 12),
               ],
             ),
@@ -599,71 +664,234 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
   }
 
   Widget _buildContent() {
-    final approvedPlaces = _getApprovedPlaces();
-
-    if (approvedPlaces.isEmpty) {
-      return Center(child: _buildEmptyState());
+    // ✅ 로그인 여부에 따라 다른 플레이스 목록 표시
+    final firebaseUser = _authService.currentFirebaseUser;
+    List<Place> places;
+    if (firebaseUser == null) {
+      // 로그인 안 된 경우: 모든 플레이스 표시
+      places = _allPlaces;
+    } else {
+      // 로그인된 경우: 멤버십이 있는 플레이스만 표시
+      places = _getApprovedPlaces();
     }
 
-    return _buildPlaceList(approvedPlaces);
+    // 검색어 확인
+    final searchQuery = _searchController.text.trim();
+    final hasSearchQuery = searchQuery.isNotEmpty;
+
+    // 검색 필터링 적용
+    List<Place> filteredPlaces = _filterPlaces(places);
+
+    // 검색어가 없을 때는 최대 5개만 표시 (추천 플레이스)
+    if (!hasSearchQuery && filteredPlaces.length > 5) {
+      filteredPlaces = filteredPlaces.take(5).toList();
+    }
+    return Column(
+      children: [
+        // 검색바 (항상 표시)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          child: Container(
+            decoration: BoxDecoration(
+              color: AppColors.backgroundWhite,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: TextField(
+              controller: _searchController,
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                hintText: '플레이스 이름 또는 위치로 검색',
+                hintStyle: TextStyle(
+                  color: AppColors.textSecondary.withOpacity(0.6),
+                  fontSize: 16,
+                ),
+                prefixIcon: Icon(
+                  Icons.search,
+                  color: AppColors.textSecondary.withOpacity(0.6),
+                ),
+                suffixIcon:
+                    _searchController.text.isNotEmpty
+                        ? IconButton(
+                          icon: Icon(
+                            Icons.clear,
+                            color: AppColors.textSecondary.withOpacity(0.6),
+                          ),
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() {});
+                          },
+                        )
+                        : null,
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 16,
+                ),
+              ),
+              style: TextStyle(fontSize: 16, color: AppColors.textPrimary),
+            ),
+          ),
+        ),
+        // 플레이스 리스트 또는 빈 상태
+        Expanded(
+          child:
+              filteredPlaces.isEmpty && hasSearchQuery
+                  ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          '검색 결과가 없습니다',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                  : filteredPlaces.isEmpty
+                  ? _buildEmptyState()
+                  : ListView.builder(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    itemCount: filteredPlaces.length,
+                    itemBuilder: (context, index) {
+                      return _buildPlaceCard(filteredPlaces[index]);
+                    },
+                  ),
+        ),
+        // 로그인 안 된 경우 관리자 로그인 버튼 (화면 맨 아래)
+        if (firebaseUser == null)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            decoration: BoxDecoration(
+              color: AppColors.backgroundLight,
+              border: Border(
+                top: BorderSide(
+                  color: AppColors.borderLight.withOpacity(0.5),
+                  width: 0.5,
+                ),
+              ),
+            ),
+            child: TextButton(
+              onPressed: () {
+                Navigator.of(context).pushNamed('/phone-number');
+              },
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.info_outline,
+                    size: 18,
+                    color: AppColors.textSecondary,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '관리자로 계속하려면 로그인하세요',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: AppColors.textSecondary,
+                      decoration: TextDecoration.underline,
+                      decorationColor: AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
   }
 
-  /// 초대된 플레이스가 없을 때 표시 (미니게임 포함)
+  /// 플레이스 검색 필터링
+  List<Place> _filterPlaces(List<Place> places) {
+    final searchQuery = _searchController.text.trim().toLowerCase();
+    if (searchQuery.isEmpty) {
+      return places;
+    }
+
+    return places.where((place) {
+      // 플레이스 이름으로 검색
+      final nameMatch = place.name.toLowerCase().contains(searchQuery);
+      // 위치로 검색
+      final locationMatch =
+          place.location != null &&
+          place.location!.toLowerCase().contains(searchQuery);
+      return nameMatch || locationMatch;
+    }).toList();
+  }
+
+  /// 초대된 플레이스가 없을 때 표시
   Widget _buildEmptyState() {
+    final firebaseUser = _authService.currentFirebaseUser;
+    final isLoggedIn = firebaseUser != null;
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                AppConstants.noInvitedPlacesTitle,
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary,
-                  letterSpacing: -0.5,
+          if (isLoggedIn) ...[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  AppConstants.noInvitedPlacesTitle,
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                    letterSpacing: -0.5,
+                  ),
+                  textAlign: TextAlign.center,
                 ),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-
-          Text(
-            AppConstants.noInvitedPlacesMessage,
-            style: TextStyle(
-              fontSize: 16,
-              color: AppColors.textSecondary,
-              height: 1.5,
+              ],
             ),
-            textAlign: TextAlign.center,
-          ),
+            const SizedBox(height: 12),
+            Text(
+              AppConstants.noInvitedPlacesMessage,
+              style: TextStyle(
+                fontSize: 16,
+                color: AppColors.textSecondary,
+                height: 1.5,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ] else ...[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  '등록된 플레이스가 없습니다',
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                    letterSpacing: -0.5,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '플레이스를 검색하거나 로그인하여\n초대된 플레이스를 확인하세요',
+              style: TextStyle(
+                fontSize: 16,
+                color: AppColors.textSecondary,
+                height: 1.5,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
         ],
       ),
-    );
-  }
-
-  /// 플레이스 리스트 표시
-  Widget _buildPlaceList(List<Place> places) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // 헤더
-        SizedBox(height: 16),
-        // 플레이스 리스트
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            itemCount: places.length,
-            itemBuilder: (context, index) {
-              return _buildPlaceCard(places[index]);
-            },
-          ),
-        ),
-      ],
     );
   }
 
@@ -716,6 +944,12 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
                     ],
                   ],
                 ),
+              ),
+              // 오른쪽 화살표 아이콘
+              Icon(
+                Icons.arrow_forward_ios,
+                size: 16,
+                color: AppColors.textSecondary.withOpacity(0.6),
               ),
             ],
           ),

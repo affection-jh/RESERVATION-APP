@@ -5,7 +5,6 @@ import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
 import '../models/user.dart';
 import '../widgets/splash_screen.dart';
-import 'phone_number_input_screen.dart';
 import '../screens/admin_screen.dart';
 import 'place_waiting_screen.dart';
 import '../main.dart' show MainScreen;
@@ -297,10 +296,10 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
         return;
       }
 
-      // 2) 자동 로그인 실패 → 전화번호 입력 화면
+      // 2) 자동 로그인 실패 → 플레이스 브라우징 화면 (Apple App Store 가이드라인 준수)
       debugPrint('[AppStartup._checkAutoLogin] 자동 로그인 실패');
-      // ✅ Firebase Auth 세션이 살아있으면 phone input으로 보내지 말고 Waiting으로 보낸다.
-      // (Firestore/네트워크 이슈로 사용자 조회가 실패해도 "로그인 화면으로 튀는" UX를 방지)
+      // ✅ 로그인 없이도 플레이스 브라우징 가능하도록 PlaceWaitingScreen으로 이동
+      // (계정 기반이 아닌 기능은 자유롭게 접근 가능해야 함)
       final firebaseUser2 = authService.currentFirebaseUser;
       await _ensureMinLoadingTime();
       if (!mounted) return;
@@ -316,9 +315,13 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
         _hideSplash();
       } else {
         debugPrint(
-          '[AppStartup._checkAutoLogin] Firebase 세션 없음 → PhoneNumberInputScreen으로 이동',
+          '[AppStartup._checkAutoLogin] Firebase 세션 없음 → PlaceWaitingScreen으로 이동 (플레이스 브라우징)',
         );
-        _preparePhoneInputScreen();
+        // 로그인 없이도 플레이스 브라우징 가능
+        setState(() {
+          _targetScreen = const PlaceWaitingScreen(phoneNumber: '');
+        });
+        _hideSplash();
       }
     } catch (e, stackTrace) {
       debugPrint('[AppStartup._checkAutoLogin] ❌ 에러 발생: $e');
@@ -338,19 +341,14 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
           });
           _hideSplash();
         } else {
-          _preparePhoneInputScreen();
+          // 로그인 없이도 플레이스 브라우징 가능
+          setState(() {
+            _targetScreen = const PlaceWaitingScreen(phoneNumber: '');
+          });
+          _hideSplash();
         }
       }
     }
-  }
-
-  /// 전화번호 입력 화면 준비
-  void _preparePhoneInputScreen() {
-    debugPrint('[AppStartup] _preparePhoneInputScreen');
-    setState(() {
-      _targetScreen = const PhoneNumberInputScreen();
-    });
-    _hideSplash();
   }
 
   /// 사용자 화면 준비
