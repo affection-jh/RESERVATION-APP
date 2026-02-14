@@ -104,6 +104,7 @@ class DateRangePickerUtil {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
+      useSafeArea: true,
       builder: (context) => _SingleDatePickerBottomSheet(
         initialDate: date,
         firstDate: first,

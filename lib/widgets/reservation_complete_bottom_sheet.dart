@@ -23,6 +23,7 @@ class ReservationCompleteBottomSheet extends StatelessWidget {
       barrierColor: Colors.black.withOpacity(0.7),
       isDismissible: true,
       enableDrag: true,
+      useSafeArea: true,
       builder: (context) => ReservationCompleteBottomSheet(
         onViewReservations: onViewReservations,
         onClose: onClose,

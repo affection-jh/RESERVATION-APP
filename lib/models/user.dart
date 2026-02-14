@@ -9,7 +9,6 @@ class User {
   final String phoneNumber; // 필수
   @Deprecated('users.placeIds는 더 이상 사용하지 않습니다. placeMemberships 기반으로 조회하세요.')
   final List<String> placeIds; // (레거시) 속한 플레이스들
-  final List<String> adminForPlaces; // 관리자로 관리하는 플레이스들 (새 필드)
   final String? currentPlaceId; // 현재 선택된 플레이스 ID (서버 저장)
   final List<CourseEnrollment> enrollments; // 등록한 코스들
   final List<Reservation> reservations; // 예약 기록
@@ -22,7 +21,6 @@ class User {
     required this.name,
     required this.phoneNumber,
     this.placeIds = const [],
-    this.adminForPlaces = const [], // 기본값: 빈 배열 (일반 유저)
     this.currentPlaceId,
     this.enrollments = const [],
     this.reservations = const [],
@@ -30,14 +28,6 @@ class User {
     required this.createdAt,
     this.updatedAt,
   });
-
-  // 관리자 여부 확인
-  bool get isAdmin => adminForPlaces.isNotEmpty;
-
-  // 특정 플레이스를 관리하는지 확인
-  bool isAdminForPlace(String placeId) {
-    return adminForPlaces.contains(placeId);
-  }
 
   // 특정 플레이스에 속해있는지 확인
   bool belongsToPlace(String placeId) {
@@ -162,7 +152,6 @@ class User {
     String? name,
     String? phoneNumber,
     List<String>? placeIds,
-    List<String>? adminForPlaces,
     String? currentPlaceId,
     List<CourseEnrollment>? enrollments,
     List<Reservation>? reservations,
@@ -175,7 +164,6 @@ class User {
       name: name ?? this.name,
       phoneNumber: phoneNumber ?? this.phoneNumber,
       placeIds: placeIds ?? this.placeIds,
-      adminForPlaces: adminForPlaces ?? this.adminForPlaces,
       currentPlaceId: currentPlaceId ?? this.currentPlaceId,
       enrollments: enrollments ?? this.enrollments,
       reservations: reservations ?? this.reservations,
@@ -192,7 +180,6 @@ class User {
       'name': name,
       'phoneNumber': phoneNumber,
       // users.placeIds는 더 이상 Firestore에 저장하지 않음 (placeMemberships 기반)
-      'adminForPlaces': adminForPlaces, // 새 필드 추가
       'currentPlaceId': currentPlaceId, // 현재 선택된 플레이스 ID
       // enrollments 필드 제거: enrollments 컬렉션에서 직접 조회
       'reservations': reservations.map((r) => r.toJson()).toList(),
@@ -209,8 +196,6 @@ class User {
       name: json['name'] as String? ?? '이름 없음',
       phoneNumber: json['phoneNumber'] as String? ?? '',
       placeIds: (json['placeIds'] as List?)?.cast<String>() ?? [],
-      adminForPlaces:
-          (json['adminForPlaces'] as List?)?.cast<String>() ?? [], // 새 필드 추가
       currentPlaceId: json['currentPlaceId'] as String?, // 현재 선택된 플레이스 ID
       // enrollments 필드 무시: enrollments 컬렉션에서 직접 조회
       enrollments: const [],

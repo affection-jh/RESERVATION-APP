@@ -27,26 +27,15 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/places/$(placeId));
     }
 
-    // ✅ 관리자 판별 (개선된 구조)
-    //
-    // - users/{request.auth.uid} 문서의 `adminForPlaces` 배열로 관리자 여부 판별
-    // - 한 유저가 관리자도 되고 일반 유저도 될 수 있음
+    // ✅ 관리자 판별: adminUsers 컬렉션 기준
     function isAdmin() {
-      // users.adminForPlaces 기반 (신규 구조) 또는 adminUsers 문서 존재(레거시/관리자 온보딩)
-      return (hasUserDoc() &&
-        userDoc().data.adminForPlaces != null &&
-        userDoc().data.adminForPlaces.size() > 0)
-        || hasAdminUserDoc();
+      return hasAdminUserDoc();
     }
 
     function isAdminForPlace(placeId) {
-      // users.adminForPlaces 또는 adminUsers.placeIds 둘 중 하나로 관리자 권한 판별
-      return (hasUserDoc() &&
-        userDoc().data.adminForPlaces != null &&
-        placeId in userDoc().data.adminForPlaces)
-        || (hasAdminUserDoc() &&
-          adminUserDoc().data.placeIds != null &&
-          placeId in adminUserDoc().data.placeIds);
+      return hasAdminUserDoc() &&
+        adminUserDoc().data.placeIds != null &&
+        placeId in adminUserDoc().data.placeIds;
     }
 
     // 기본: 전부 거부

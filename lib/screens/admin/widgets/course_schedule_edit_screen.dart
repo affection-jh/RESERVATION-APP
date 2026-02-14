@@ -1340,6 +1340,7 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
+      useSafeArea: true,
       builder: (context) => StatefulBuilder(
         builder: (context, setModalState) {
           // 변경사항 확인 함수

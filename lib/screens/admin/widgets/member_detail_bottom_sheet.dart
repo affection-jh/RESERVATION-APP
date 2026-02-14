@@ -40,6 +40,7 @@ class MemberDetailBottomSheet extends StatefulWidget {
       barrierColor: Colors.black.withOpacity(0.7),
       isDismissible: true,
       enableDrag: true,
+      useSafeArea: true,
       builder: (context) => MemberDetailBottomSheet(member: member),
     );
   }

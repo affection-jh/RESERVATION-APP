@@ -1028,19 +1028,21 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
                                 )
                                 : firebaseUser != null
                                 ? _buildNoInvitedPlacesPlaceholder()
-                                : _buildNoVisitHistoryPlaceholder()),
+                                : (MediaQuery.of(context).viewInsets.bottom == 0
+                                    ? _buildNoVisitHistoryPlaceholder()
+                                    : const SizedBox.shrink())),
                   ),
                 ],
               );
             },
           ),
         ),
-        // 로그인 안 된 경우 관리자 로그인 버튼 (화면 맨 아래) (화면 맨 아래)
-        if (firebaseUser == null)
+        // 로그인 안 된 경우 관리자 로그인 버튼 (화면 맨 아래) — 키보드 내려갔을 때만
+        if (firebaseUser == null && MediaQuery.of(context).viewInsets.bottom == 0)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 5),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(16),
                 color: AppColors.backgroundLight,
@@ -1074,7 +1076,6 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
                       style: TextStyle(
                         fontSize: 14,
                         color: AppColors.textSecondary,
-                        decoration: TextDecoration.underline,
                         decorationColor: AppColors.textSecondary,
                       ),
                     ),

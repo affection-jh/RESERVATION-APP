@@ -270,7 +270,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
         userId: member.userId,
         name: member.name,
         phoneNumber: member.phoneNumber,
-        role: member.isAdmin ? 'admin' : 'user',
+        role: 'user', // 관리자 여부는 adminUsers 등 별도 소스에서 조회
         isActive: true,
         pendingExtensionRequests: member.pendingExtensionRequests.length,
         enrolledCourseIds: member.enrollments.map((e) => e.courseId).toList(),

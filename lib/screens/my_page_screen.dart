@@ -1029,6 +1029,7 @@ class _MyPageScreenState extends State<MyPageScreen> {
       barrierColor: Colors.black.withOpacity(0.7),
       isDismissible: true,
       enableDrag: true,
+      useSafeArea: true,
       builder:
           (context) => EnrollmentDetailBottomSheet(
             course: course,

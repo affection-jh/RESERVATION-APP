@@ -24,6 +24,7 @@ class NameEditBottomSheet extends StatefulWidget {
       barrierColor: Colors.black.withOpacity(0.7),
       isDismissible: true,
       enableDrag: true,
+      useSafeArea: true,
       builder: (context) => Padding(
         padding: EdgeInsets.only(
           bottom: MediaQuery.of(context).viewInsets.bottom,

@@ -63,6 +63,7 @@ class ReservationManageBottomSheet extends StatelessWidget {
       barrierColor: Colors.black.withOpacity(0.7),
       isDismissible: true,
       enableDrag: true,
+      useSafeArea: true,
       builder:
           (context) => ReservationManageBottomSheet(
             course: course,
@@ -453,6 +454,7 @@ class ReservationManageBottomSheet extends StatelessWidget {
         barrierColor: Colors.black.withOpacity(0.7),
         isDismissible: true,
         enableDrag: true,
+        useSafeArea: true,
         builder:
             (context) => BulkMoveReservationsBottomSheet(
               course: course,

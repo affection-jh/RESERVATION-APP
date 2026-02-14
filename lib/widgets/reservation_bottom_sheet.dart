@@ -56,6 +56,7 @@ class ReservationBottomSheet extends StatefulWidget {
       enableDrag: true,
       backgroundColor: Colors.transparent,
       barrierColor: Colors.black.withOpacity(0.7),
+      useSafeArea: true,
       builder: (context) => ReservationBottomSheet(
         activityName: activityName,
         date: date,

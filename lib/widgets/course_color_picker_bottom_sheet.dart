@@ -546,6 +546,7 @@ void showCourseColorPickerBottomSheet(
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
     barrierColor: Colors.black.withOpacity(0.1),
+    useSafeArea: true,
     builder: (context) => CourseColorPickerBottomSheet(
       initialColor: initialColor,
       onColorChanged: (color) {

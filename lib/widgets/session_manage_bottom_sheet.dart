@@ -374,6 +374,7 @@ Future<Map<String, dynamic>?> showSessionManageBottomSheet({
     barrierColor: Colors.black.withOpacity(0.6),
     isDismissible: true,
     enableDrag: true,
+    useSafeArea: true,
     builder:
         (context) => SessionManageBottomSheet(
           course: course,

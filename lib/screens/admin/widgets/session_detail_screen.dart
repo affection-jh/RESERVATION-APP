@@ -707,6 +707,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
       barrierColor: Colors.black.withOpacity(0.7),
       isDismissible: true,
       enableDrag: true,
+      useSafeArea: true,
       builder:
           (context) => ReservationManageBottomSheet(
             course: widget.course,

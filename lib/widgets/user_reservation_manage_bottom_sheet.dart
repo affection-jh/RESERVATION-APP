@@ -54,6 +54,7 @@ class UserReservationManageBottomSheet extends StatefulWidget {
       // 캘린더/리스트 UI에서 "진행 중" 표시로 피드백을 제공한다.
       isDismissible: true,
       enableDrag: true,
+      useSafeArea: true,
       builder:
           (context) => UserReservationManageBottomSheet(
             course: course,

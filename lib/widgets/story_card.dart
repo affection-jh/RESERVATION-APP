@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../theme/app_colors.dart';
 
@@ -58,12 +59,30 @@ class _StoryCardState extends State<StoryCard> {
                     fadeInDuration: const Duration(milliseconds: 0),
                     fadeOutDuration: const Duration(milliseconds: 0),
                     placeholder: (context, url) =>
-                        Container(color: AppColors.backgroundLight),
+                        Container(color: AppColors.backgroundWhite),
                     errorWidget: (context, url, error) =>
-                        Container(color: AppColors.backgroundLight),
+                        Container(color: AppColors.backgroundWhite),
                   )
                 else
-                  Container(color: AppColors.backgroundLight),
+                  Container(color: AppColors.backgroundWhite),
+
+                // 좌상단 캘린더 아이콘
+                Positioned(
+                  top: 12,
+                  left: 12,
+                  child: SvgPicture.asset(
+                    'assets/icons/calendar-icon.svg',
+                    width: 24,
+                    height: 24,
+                    colorFilter: ColorFilter.mode(
+                      widget.backgroundImageUrl != null &&
+                              widget.backgroundImageUrl!.isNotEmpty
+                          ? Colors.white.withOpacity(0.9)
+                          : AppColors.textPrimary,
+                      BlendMode.srcIn,
+                    ),
+                  ),
+                ),
 
                 // 이미지가 여러 장일 때 닷 인디케이터 (오른쪽 위)
                 if (widget.imageUrls.length > 1)
@@ -87,23 +106,26 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                // 텍스트 오버레이
+                // 텍스트 오버레이 (이미지 있으면 그라데이션+흰글씨, 없으면 그라데이션 없이 textPrimary)
                 Positioned(
                   bottom: 0,
                   left: 0,
                   right: 0,
                   child: Container(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.transparent,
-                          Colors.black.withOpacity(0.65),
-                          Colors.black.withOpacity(0.75),
-                        ],
-                      ),
-                    ),
+                    decoration: widget.backgroundImageUrl != null &&
+                            widget.backgroundImageUrl!.isNotEmpty
+                        ? BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Colors.transparent,
+                                Colors.black.withOpacity(0.65),
+                                Colors.black.withOpacity(0.75),
+                              ],
+                            ),
+                          )
+                        : null,
                     padding: const EdgeInsets.all(20),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -111,10 +133,13 @@ class _StoryCardState extends State<StoryCard> {
                       children: [
                         Text(
                           widget.title,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 28,
                             fontWeight: FontWeight.bold,
-                            color: Colors.white,
+                            color: widget.backgroundImageUrl != null &&
+                                    widget.backgroundImageUrl!.isNotEmpty
+                                ? Colors.white
+                                : AppColors.textPrimary,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -124,7 +149,10 @@ class _StoryCardState extends State<StoryCard> {
                           widget.content,
                           style: TextStyle(
                             fontSize: 16,
-                            color: Colors.white.withOpacity(0.9),
+                            color: widget.backgroundImageUrl != null &&
+                                    widget.backgroundImageUrl!.isNotEmpty
+                                ? Colors.white.withOpacity(0.9)
+                                : AppColors.textPrimary,
                             height: 1.5,
                           ),
                           maxLines: 2,
