@@ -1,3 +1,4 @@
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:reservation/screens/admin/widgets/admin_shared_widgets.dart'
@@ -13,7 +14,6 @@ import '../../widgets/place_switch_widget.dart';
 import '../../providers/place_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/course_provider.dart';
-import '../../services/user_service.dart';
 import '../../utils/snackbar_util.dart';
 import 'widgets/admin_place_edit_screen.dart';
 
@@ -81,30 +81,33 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
                         await authService.logout();
                       },
                       onWithdraw: () async {
-                        try {
-                          final authProvider = Provider.of<AuthProvider>(
+                        final authProvider = Provider.of<AuthProvider>(
+                          context,
+                          listen: false,
+                        );
+                        final admin = authProvider.currentAdmin;
+
+                        if (admin == null) {
+                          SnackbarUtil.showError(
                             context,
-                            listen: false,
+                            '관리자 정보를 찾을 수 없습니다.',
                           );
-                          final userService = UserService();
-                          final admin = authProvider.currentAdmin;
+                          return;
+                        }
 
-                          if (admin == null) {
-                            SnackbarUtil.showError(
-                              context,
-                              '관리자 정보를 찾을 수 없습니다.',
-                            );
-                            return;
-                          }
+                        SnackbarUtil.showLoading(context, '탈퇴중');
 
-                          // UserService를 통해 관리자 데이터 삭제
-                          await userService.deleteAdmin(admin.userId);
+                        try {
+                          // 서버 deleteUserAccount 호출 (관리자 소속 플레이스 있으면 탈퇴 불가 검사 포함)
+                          final callable = FirebaseFunctions.instance
+                              .httpsCallable('deleteUserAccount');
+                          await callable.call({'userId': admin.userId});
 
-                          // 로그아웃 처리
                           await authProvider.logout();
 
                           if (context.mounted) {
-                            SnackbarUtil.showSuccess(context, '회원탈퇴가 완료되었습니다.');
+                            SnackbarUtil.showSuccess(
+                                context, '회원탈퇴가 완료되었습니다.');
                             Navigator.pushNamedAndRemoveUntil(
                               context,
                               '/',
@@ -113,10 +116,20 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
                           }
                         } catch (e) {
                           if (context.mounted) {
-                            SnackbarUtil.showError(
-                              context,
-                              '회원탈퇴 중 오류가 발생했습니다.',
-                            );
+                            String message = '회원탈퇴 중 오류가 발생했습니다.';
+                            if (e is FirebaseFunctionsException &&
+                                (e.message ?? '').trim().isNotEmpty) {
+                              message = e.message!.trim();
+                            } else {
+                              try {
+                                final msg =
+                                    (e as dynamic).message?.toString();
+                                if (msg != null && msg.trim().isNotEmpty) {
+                                  message = msg.trim();
+                                }
+                              } catch (_) {}
+                            }
+                            SnackbarUtil.showError(context, message);
                           }
                         }
                       },

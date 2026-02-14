@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/story_card.dart';
-import '../../widgets/place_switch_widget.dart';
+import '../../widgets/place_switch_widget.dart'
+    show PlaceSwitchWidget, navigateToPlaceWaitingScreen;
 import '../../widgets/compact_calendar_widget.dart';
 import '../../widgets/week_tab_bar.dart';
 import '../../widgets/notification_icon_widget.dart';
@@ -13,6 +14,7 @@ import 'widgets/story_add_screen.dart';
 import 'widgets/course_add_flow.dart';
 import 'widgets/weekly_override_schedule_screen.dart';
 import '../../providers/place_provider.dart';
+import '../../providers/auth_provider.dart';
 import '../../providers/course_provider.dart';
 import '../../providers/story_provider.dart' show Story, StoryProvider;
 import '../../models/course.dart';
@@ -308,7 +310,17 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
                         color: AppColors.primaryGreen,
                         size: 34,
                       ),
-                      onPressed: () => _showWeeklyOverrideSchedule(context),
+                      onPressed: () {
+                        final courseProvider = Provider.of<CourseProvider>(
+                          context,
+                          listen: false,
+                        );
+                        if (courseProvider.courses.isEmpty) {
+                          _showCourseAddFlow(context);
+                        } else {
+                          _showWeeklyOverrideSchedule(context);
+                        }
+                      },
                     ),
                   ),
 
@@ -338,22 +350,56 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
   }
 
   Widget _buildPlacesSection(BuildContext context) {
-    return Row(
-      children: [
-        // PlaceSwitchWidget
-        Expanded(
-          child: PlaceSwitchWidget(
-            enabled: false,
-            showDescription: false,
-            padding: EdgeInsets.zero,
-            heroTagSuffix: 'admin_home',
-          ),
-        ),
-        // 알림 아이콘
-        const SizedBox(width: 12),
-        NotificationIconWidget(),
-        const SizedBox(width: 20),
-      ],
+    return Consumer2<PlaceProvider, AuthProvider>(
+      builder: (context, placeProvider, authProvider, _) {
+        final place = placeProvider.currentPlace;
+        final memberIds = authProvider.approvedPlaceIds;
+        final adminIds = authProvider.adminManagedPlaceIds;
+        final isUnregistered =
+            place != null &&
+            !memberIds.contains(place.id) &&
+            !adminIds.contains(place.id);
+        final isLoggedIn =
+            authProvider.currentUser != null ||
+            authProvider.currentAdmin != null;
+        // 로그인 안 되어 있어도 나가기 버튼 표시
+        final showExitButton = place != null && (!isLoggedIn || isUnregistered);
+
+        return Row(
+          children: [
+            Expanded(
+              child: PlaceSwitchWidget(
+                enabled: false,
+                showDescription: false,
+                padding: EdgeInsets.zero,
+                heroTagSuffix: 'admin_home',
+              ),
+            ),
+            const SizedBox(width: 12),
+            if (showExitButton)
+              TextButton(
+                onPressed:
+                    () => navigateToPlaceWaitingScreen(context, authProvider),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Icon(
+                  Icons.logout,
+                  size: 24,
+                  color: AppColors.primaryGreen,
+                ),
+              )
+            else
+              const NotificationIconWidget(),
+            const SizedBox(width: 20),
+          ],
+        );
+      },
     );
   }
 
@@ -436,25 +482,54 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 20),
         child: Container(
-          height: 330,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
           decoration: BoxDecoration(
             color: AppColors.backgroundWhite,
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.05),
+                blurRadius: 10,
+                offset: const Offset(0, 2),
+              ),
+            ],
           ),
-          child: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  '아직 스토리가 없어요',
-                  style: TextStyle(
-                    color: AppColors.textSecondary,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '아직 스토리가 없어요',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textSecondary.withOpacity(0.6),
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 10),
+              Center(
+                child: ElevatedButton(
+                  onPressed: () => _showStoryAddScreen(context),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryGreen,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 16,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    elevation: 0,
+                  ),
+                  child: const Text(
+                    '스토리 추가하기',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       );

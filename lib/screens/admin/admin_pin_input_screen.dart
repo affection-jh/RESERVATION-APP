@@ -88,53 +88,50 @@ class _AdminPinInputScreenState extends State<AdminPinInputScreen> {
 
       debugPrint('[AdminPinInput] authResult: $authResult');
 
-      // AdminService에서 현재 관리자 정보 가져오기 (placeIds 포함)
+      // authenticateAdmin 내부에서 AdminService.loginWithAdmin(admin) 호출됨 → placeIds 포함
       final adminService = AdminService();
       final currentAdmin = adminService.currentAdmin;
 
-      // AuthProvider에 관리자 정보 설정
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
       if (currentAdmin != null) {
         authProvider.setCurrentAdmin(currentAdmin);
       } else {
-        // AdminService에 관리자가 없으면 User 정보로 생성 (placeIds는 빈 배열)
         authProvider.setCurrentAdmin(
           AdminUser(
             userId: authResult.user.userId,
             name: authResult.user.name,
             phoneNumber: authResult.user.phoneNumber,
-            placeIds: [], // User.placeIds는 더 이상 사용하지 않음
+            placeIds: [],
             createdAt: authResult.user.createdAt,
             updatedAt: authResult.user.updatedAt,
           ),
         );
       }
 
-      // 로그인 시 플레이스가 없으면 플레이스 등록 화면으로 이동
-      if (mounted) {
-        // 명시적 진입 선택(관리자 경로) 완료 → 플래그 해제
-        await authService.clearRequireManualEntrySelection();
+      if (!mounted) return;
+      await authService.clearRequireManualEntrySelection();
+      if (!mounted) return;
 
-        final adminPlaceIds = currentAdmin?.placeIds ?? [];
-        if (adminPlaceIds.isEmpty) {
-          // 플레이스가 없으면 플레이스 등록 화면으로 이동
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(
-              builder: (context) => AdminPlaceRegistrationScreen(
-                isFromLogin: true, // 로그인 플로우
-              ),
-            ),
-            (route) => false,
-          );
-          return;
-        }
-
-        // 플레이스가 있으면 관리자 홈 화면으로 이동
+      // 이미 플레이스가 있으면 관리자 홈(들어가기), 없을 때만 플레이스 등록 플로우
+      final adminPlaceIds = authProvider.currentAdmin?.placeIds ?? [];
+      debugPrint('[AdminPinInput] adminPlaceIds: $adminPlaceIds (count: ${adminPlaceIds.length})');
+      if (adminPlaceIds.isEmpty) {
         Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (context) => const AdminScreen()),
+          MaterialPageRoute(
+            builder:
+                (context) => AdminPlaceRegistrationScreen(
+                  isFromLogin: true,
+                ),
+          ),
           (route) => false,
         );
+        return;
       }
+
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (context) => const AdminScreen()),
+        (route) => false,
+      );
     } catch (e) {
       debugPrint('error: $e');
       if (mounted) {
@@ -185,7 +182,6 @@ class _AdminPinInputScreenState extends State<AdminPinInputScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const SizedBox(height: 40),
                     // 제목
                     Text(
                       '관리자 인증 PIN을 입력해주세요',
@@ -231,7 +227,7 @@ class _AdminPinInputScreenState extends State<AdminPinInputScreen> {
             if (_isFormValid())
               Padding(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
+                  horizontal: 24,
                   vertical: 12,
                 ),
                 child: SizedBox(
@@ -239,37 +235,38 @@ class _AdminPinInputScreenState extends State<AdminPinInputScreen> {
                   child: ElevatedButton(
                     onPressed:
                         (_isFormValid() && !_isLoading && _errorMessage.isEmpty)
-                        ? _onLogin
-                        : null,
+                            ? _onLogin
+                            : null,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primaryGreen,
                       foregroundColor: Colors.white,
                       disabledBackgroundColor: AppColors.borderLight,
                       disabledForegroundColor: AppColors.textLight,
-                      padding: const EdgeInsets.symmetric(vertical: 18),
+                      padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(20),
                       ),
                       elevation: 0,
                     ),
-                    child: _isLoading
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(
-                                AppColors.primaryGreen,
+                    child:
+                        _isLoading
+                            ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  AppColors.primaryGreen,
+                                ),
+                              ),
+                            )
+                            : const Text(
+                              '확인',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
-                          )
-                        : const Text(
-                            '확인',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
                   ),
                 ),
               ),
@@ -322,15 +319,12 @@ class _AdminPinInputScreenState extends State<AdminPinInputScreen> {
             length: 6,
             controller: _pinController,
             focusNode: _pinFocusNode,
-            defaultPinTheme: _errorMessage.isNotEmpty
-                ? errorPinTheme
-                : defaultPinTheme,
-            focusedPinTheme: _errorMessage.isNotEmpty
-                ? errorPinTheme
-                : focusedPinTheme,
-            submittedPinTheme: _errorMessage.isNotEmpty
-                ? errorPinTheme
-                : filledPinTheme,
+            defaultPinTheme:
+                _errorMessage.isNotEmpty ? errorPinTheme : defaultPinTheme,
+            focusedPinTheme:
+                _errorMessage.isNotEmpty ? errorPinTheme : focusedPinTheme,
+            submittedPinTheme:
+                _errorMessage.isNotEmpty ? errorPinTheme : filledPinTheme,
             errorPinTheme: errorPinTheme,
             pinputAutovalidateMode: PinputAutovalidateMode.onSubmit,
             showCursor: true,

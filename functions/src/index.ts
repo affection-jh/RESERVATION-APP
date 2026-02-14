@@ -325,9 +325,9 @@ function evaluateReservation({
 
     // 4) 오픈 정책 (skipOpenPolicy가 true이거나 미리 열린 주차이면 건너뛰기)
     if (!skipOpenPolicy && !isBookingWeekOpened) {
-    const openAt = computeOpenAt({ policy, sessionDateString });
-    if (openAt && now.getTime() < openAt.getTime()) {
-        return { canReserve: false, reason: ReservationLockReason.notOpenedYet, openAt };
+        const openAt = computeOpenAt({ policy, sessionDateString });
+        if (openAt && now.getTime() < openAt.getTime()) {
+            return { canReserve: false, reason: ReservationLockReason.notOpenedYet, openAt };
         }
     }
 
@@ -1494,7 +1494,7 @@ export const createReservation = functions.https.onCall(async (data, context) =>
     // (트랜잭션 내 query를 지원하므로 transaction.get(query)로 처리)
 
     try {
-    return await db.runTransaction(async (tx) => {
+        return await db.runTransaction(async (tx) => {
             // 1) enrollment 검증 (pending 멤버는 pendingMembers에서 조회)
             const isPendingMember = userId.startsWith('pending_');
             let remainingReservations: number;
@@ -1566,61 +1566,61 @@ export const createReservation = functions.https.onCall(async (data, context) =>
                 }
             } else {
                 // 일반 멤버: enrollments에서 조회
-        const enrollmentQuery = db
-            .collection('enrollments')
-            .where('userId', '==', userId)
-            .where('courseId', '==', courseId)
-            .limit(1);
+                const enrollmentQuery = db
+                    .collection('enrollments')
+                    .where('userId', '==', userId)
+                    .where('courseId', '==', courseId)
+                    .limit(1);
 
-        const enrollmentSnap = await tx.get(enrollmentQuery as any);
-        if (enrollmentSnap.empty) {
-            throw new functions.https.HttpsError('failed-precondition', '등록된 코스가 아닙니다.');
-        }
+                const enrollmentSnap = await tx.get(enrollmentQuery as any);
+                if (enrollmentSnap.empty) {
+                    throw new functions.https.HttpsError('failed-precondition', '등록된 코스가 아닙니다.');
+                }
                 enrollmentDoc = enrollmentSnap.docs[0] as admin.firestore.QueryDocumentSnapshot;
-        const enrollmentData = enrollmentDoc.data() as any;
+                const enrollmentData = enrollmentDoc.data() as any;
                 remainingReservations = Number((enrollmentData?.remainingReservations ?? 0) as any);
                 validFrom = (enrollmentData?.validFrom instanceof admin.firestore.Timestamp)
-            ? enrollmentData.validFrom.toDate()
-            : (enrollmentData?.validFrom ? new Date(enrollmentData.validFrom) : new Date(0));
+                    ? enrollmentData.validFrom.toDate()
+                    : (enrollmentData?.validFrom ? new Date(enrollmentData.validFrom) : new Date(0));
                 validUntil = (enrollmentData?.validUntil instanceof admin.firestore.Timestamp)
-            ? enrollmentData.validUntil.toDate()
-            : (enrollmentData?.validUntil ? new Date(enrollmentData.validUntil) : new Date(0));
+                    ? enrollmentData.validUntil.toDate()
+                    : (enrollmentData?.validUntil ? new Date(enrollmentData.validUntil) : new Date(0));
             }
 
-        // 날짜만 비교 (시간 무시) - validUntil 당일까지 예약 가능
-        // 서울 시간대 기준으로 날짜만 추출
-        const todayString = `${seoulNow.getFullYear()}-${pad2(seoulNow.getMonth() + 1)}-${pad2(seoulNow.getDate())}`;
-        const today = seoulDateOnly(todayString);
+            // 날짜만 비교 (시간 무시) - validUntil 당일까지 예약 가능
+            // 서울 시간대 기준으로 날짜만 추출
+            const todayString = `${seoulNow.getFullYear()}-${pad2(seoulNow.getMonth() + 1)}-${pad2(seoulNow.getDate())}`;
+            const today = seoulDateOnly(todayString);
 
-        // validFrom, validUntil도 서울 시간대 기준으로 날짜만 추출
-        const validFromString = `${validFrom.getFullYear()}-${pad2(validFrom.getMonth() + 1)}-${pad2(validFrom.getDate())}`;
-        const validUntilString = `${validUntil.getFullYear()}-${pad2(validUntil.getMonth() + 1)}-${pad2(validUntil.getDate())}`;
-        const validFromDate = seoulDateOnly(validFromString);
-        const validUntilDate = seoulDateOnly(validUntilString);
+            // validFrom, validUntil도 서울 시간대 기준으로 날짜만 추출
+            const validFromString = `${validFrom.getFullYear()}-${pad2(validFrom.getMonth() + 1)}-${pad2(validFrom.getDate())}`;
+            const validUntilString = `${validUntil.getFullYear()}-${pad2(validUntil.getMonth() + 1)}-${pad2(validUntil.getDate())}`;
+            const validFromDate = seoulDateOnly(validFromString);
+            const validUntilDate = seoulDateOnly(validUntilString);
 
-        const enrollmentCanReserve =
-            today >= validFromDate && today <= validUntilDate && remainingReservations > 0;
+            const enrollmentCanReserve =
+                today >= validFromDate && today <= validUntilDate && remainingReservations > 0;
 
             console.log(`[createReservation] enrollment check: userId=${userId}, isPending=${isPendingMember}, remainingReservations=${remainingReservations}, today=${todayString}, validFrom=${validFromString}, validUntil=${validUntilString}, canReserve=${enrollmentCanReserve}`);
 
-        // 2) place + course + session
-        const placeDoc = await tx.get(placeRef);
-        if (!placeDoc.exists) {
-            throw new functions.https.HttpsError('not-found', '플레이스를 찾을 수 없습니다.');
-        }
-        const place = placeDoc.data()!;
-        const course = findCourse(place, courseId);
-        if (!course) {
-            throw new functions.https.HttpsError('not-found', '코스를 찾을 수 없습니다.');
-        }
-        // 3) 정책 로드(active/scheduled/effectiveFrom)
-        const policyDoc = await tx.get(policyRef);
-        const policyData = policyDoc.exists ? (policyDoc.data() as CoursePolicyDoc) : null;
-        const policy = selectEffectivePolicy(now, policyData, { courseId, placeId });
+            // 2) place + course + session
+            const placeDoc = await tx.get(placeRef);
+            if (!placeDoc.exists) {
+                throw new functions.https.HttpsError('not-found', '플레이스를 찾을 수 없습니다.');
+            }
+            const place = placeDoc.data()!;
+            const course = findCourse(place, courseId);
+            if (!course) {
+                throw new functions.https.HttpsError('not-found', '코스를 찾을 수 없습니다.');
+            }
+            // 3) 정책 로드(active/scheduled/effectiveFrom)
+            const policyDoc = await tx.get(policyRef);
+            const policyData = policyDoc.exists ? (policyDoc.data() as CoursePolicyDoc) : null;
+            const policy = selectEffectivePolicy(now, policyData, { courseId, placeId });
 
             // 4) 세션 찾기 (정기 일정 또는 비정기 일정)
             const session = findSession(course, dayOfWeek, startTime);
-        const sessionId = `${courseId}_${dayOfWeek}_${startTime}`;
+            const sessionId = `${courseId}_${dayOfWeek}_${startTime}`;
             let capacity: number;
             let isOverrideSession = false; // override 세션인지 여부
 
@@ -1646,43 +1646,43 @@ export const createReservation = functions.https.onCall(async (data, context) =>
                 isOverrideSession = true; // override 세션으로 표시
             } else {
                 // 정기 일정인 경우 capacity 확인 (dateCapacityOverrides 우선)
-        const overrideQuery = db
-            .collection('dateCapacityOverrides')
+                const overrideQuery = db
+                    .collection('dateCapacityOverrides')
                     .where('placeId', '==', placeId)
-            .where('sessionId', '==', sessionId)
-            .where('date', '==', reservedDateString)
-            .limit(1);
-        const overrideSnap = await tx.get(overrideQuery as any);
-        const overrideCap = !overrideSnap.empty
-            ? Number(((overrideSnap.docs[0].data() as any)?.capacity ?? 0) as any)
-            : undefined;
+                    .where('sessionId', '==', sessionId)
+                    .where('date', '==', reservedDateString)
+                    .limit(1);
+                const overrideSnap = await tx.get(overrideQuery as any);
+                const overrideCap = !overrideSnap.empty
+                    ? Number(((overrideSnap.docs[0].data() as any)?.capacity ?? 0) as any)
+                    : undefined;
                 capacity = Number.isFinite(overrideCap) ? (overrideCap as number) : Number(session.capacity ?? 0);
             }
 
-        // 5) sessionReservations (deterministic doc id)
-        const srRef = db.collection('sessionReservations').doc(`${sessionId}_${reservedDateString}`);
-        const srDoc = await tx.get(srRef);
-        const currentReservedCount = srDoc.exists ? Number(srDoc.data()?.reservedCount ?? 0) : 0;
-        const isCancelled = srDoc.exists ? Boolean((srDoc.data() as any)?.isCancelled ?? false) : false;
-        if (isCancelled) {
-            throw new functions.https.HttpsError('failed-precondition', '취소된 세션입니다.');
-        }
+            // 5) sessionReservations (deterministic doc id)
+            const srRef = db.collection('sessionReservations').doc(`${sessionId}_${reservedDateString}`);
+            const srDoc = await tx.get(srRef);
+            const currentReservedCount = srDoc.exists ? Number(srDoc.data()?.reservedCount ?? 0) : 0;
+            const isCancelled = srDoc.exists ? Boolean((srDoc.data() as any)?.isCancelled ?? false) : false;
+            if (isCancelled) {
+                throw new functions.https.HttpsError('failed-precondition', '취소된 세션입니다.');
+            }
 
-        // 6) 중복 예약(유저가 이미 같은 세션/날짜 예약) - 플레이스 서브컬렉션에서 조회
-        const dupQuery = db
-            .collection('places')
-            .doc(placeId)
-            .collection('reservations')
-            .where('userId', '==', userId)
-            .where('courseId', '==', courseId)
-            .where('dayOfWeek', '==', dayOfWeek)
-            .where('startTime', '==', startTime)
-            .where('reservedDateString', '==', reservedDateString)
-            .limit(1);
-        const dupSnap = await tx.get(dupQuery as any);
-        if (!dupSnap.empty) {
-            throw new functions.https.HttpsError('already-exists', '이미 예약된 세션입니다.');
-        }
+            // 6) 중복 예약(유저가 이미 같은 세션/날짜 예약) - 플레이스 서브컬렉션에서 조회
+            const dupQuery = db
+                .collection('places')
+                .doc(placeId)
+                .collection('reservations')
+                .where('userId', '==', userId)
+                .where('courseId', '==', courseId)
+                .where('dayOfWeek', '==', dayOfWeek)
+                .where('startTime', '==', startTime)
+                .where('reservedDateString', '==', reservedDateString)
+                .limit(1);
+            const dupSnap = await tx.get(dupQuery as any);
+            if (!dupSnap.empty) {
+                throw new functions.https.HttpsError('already-exists', '이미 예약된 세션입니다.');
+            }
 
             // 7) 미리 열린 주차 확인 (관리자가 미리 예약 열기한 주차인지)
             const reservedDate = seoulDateOnly(reservedDateString);
@@ -1693,125 +1693,125 @@ export const createReservation = functions.https.onCall(async (data, context) =>
             const isBookingWeekOpened = bookingWeekOpenDoc.exists;
 
             // 8) 중앙 정책 엔진(서버 버전)으로 최종 검증
-        // 관리자가 다른 사용자를 위해 예약 생성 시: 정원 초과/오픈 전/마감 전은 허용, 과거 날짜만 차단
+            // 관리자가 다른 사용자를 위해 예약 생성 시: 정원 초과/오픈 전/마감 전은 허용, 과거 날짜만 차단
             // ⚠️ override 세션(비정기 일정)인 경우 오픈 정책을 건너뛰고 즉시 예약 가능하도록 함
             // ⚠️ 미리 열린 주차인 경우도 오픈 정책을 건너뛰고 즉시 예약 가능하도록 함
-        const eligibility = evaluateReservation({
-            now,
-            policy,
-            sessionDateString: reservedDateString,
-            startTime,
-            capacity,
-            reservedCount: currentReservedCount,
-            enrollmentCanReserve,
+            const eligibility = evaluateReservation({
+                now,
+                policy,
+                sessionDateString: reservedDateString,
+                startTime,
+                capacity,
+                reservedCount: currentReservedCount,
+                enrollmentCanReserve,
                 // override 세션이거나 "미리 열린 주차"면 오픈 정책을 건너뛰기
                 skipOpenPolicy: isOverrideSession || isBookingWeekOpened,
                 isBookingWeekOpened,
-        });
+            });
 
-        if (!eligibility.canReserve) {
-            if (isAdminCreatingForUser) {
-                // ✅ 관리자라도 절대 우회 불가: 과거 날짜 / 크레딧·유효기간
-                if (eligibility.reason === ReservationLockReason.pastDate) {
-                    throw new functions.https.HttpsError('failed-precondition', '과거 날짜는 예약할 수 없습니다.', { reason: eligibility.reason });
-                }
-                if (eligibility.reason === ReservationLockReason.noCreditsOrExpired) {
-                    throw new functions.https.HttpsError(
-                        'failed-precondition',
-                        '남은 예약 횟수가 없거나 유효 기간이 만료된 회원은 예약을 추가할 수 없습니다.',
-                        { reason: eligibility.reason },
-                    );
-                }
-
-                // ⚠️ 관리자 “강제 추가”가 가능한 케이스는 명시적 force=true일 때만 허용
-                const forceableReasons = new Set([
-                    ReservationLockReason.full,
-                    ReservationLockReason.closedBeforeStart,
-                    ReservationLockReason.notOpenedYet,
-                ]);
-                if (forceableReasons.has(eligibility.reason as any)) {
-                    if (!force) {
-                        // UI에서 "강제 추가" 확인 다이얼로그를 띄울 수 있도록 상세 정보 반환
-                        throwRequiresForce({
-                            reason: eligibility.reason,
-                            openAt: eligibility.openAt ? eligibility.openAt.toISOString() : null,
-                            capacity,
-                            reservedCount: currentReservedCount,
-                            closeBeforeMinutes: policy.closeBeforeMinutes ?? 60,
-                        });
+            if (!eligibility.canReserve) {
+                if (isAdminCreatingForUser) {
+                    // ✅ 관리자라도 절대 우회 불가: 과거 날짜 / 크레딧·유효기간
+                    if (eligibility.reason === ReservationLockReason.pastDate) {
+                        throw new functions.https.HttpsError('failed-precondition', '과거 날짜는 예약할 수 없습니다.', { reason: eligibility.reason });
                     }
-                    console.log(`[createReservation] Admin force create: ${eligibility.reason}`);
+                    if (eligibility.reason === ReservationLockReason.noCreditsOrExpired) {
+                        throw new functions.https.HttpsError(
+                            'failed-precondition',
+                            '남은 예약 횟수가 없거나 유효 기간이 만료된 회원은 예약을 추가할 수 없습니다.',
+                            { reason: eligibility.reason },
+                        );
+                    }
+
+                    // ⚠️ 관리자 “강제 추가”가 가능한 케이스는 명시적 force=true일 때만 허용
+                    const forceableReasons = new Set([
+                        ReservationLockReason.full,
+                        ReservationLockReason.closedBeforeStart,
+                        ReservationLockReason.notOpenedYet,
+                    ]);
+                    if (forceableReasons.has(eligibility.reason as any)) {
+                        if (!force) {
+                            // UI에서 "강제 추가" 확인 다이얼로그를 띄울 수 있도록 상세 정보 반환
+                            throwRequiresForce({
+                                reason: eligibility.reason,
+                                openAt: eligibility.openAt ? eligibility.openAt.toISOString() : null,
+                                capacity,
+                                reservedCount: currentReservedCount,
+                                closeBeforeMinutes: policy.closeBeforeMinutes ?? 60,
+                            });
+                        }
+                        console.log(`[createReservation] Admin force create: ${eligibility.reason}`);
+                    } else {
+                        // 예기치 않은 reason이면 안전하게 차단
+                        throw new functions.https.HttpsError('failed-precondition', '정책상 예약을 추가할 수 없습니다.', { reason: eligibility.reason });
+                    }
                 } else {
-                    // 예기치 않은 reason이면 안전하게 차단
-                    throw new functions.https.HttpsError('failed-precondition', '정책상 예약을 추가할 수 없습니다.', { reason: eligibility.reason });
-                }
-            } else {
                     // 일반 사용자: 정책 그대로 적용 (override/미리열기면 evaluateReservation이 openPolicy를 이미 스킵)
-                if (eligibility.reason === ReservationLockReason.notOpenedYet && eligibility.openAt) {
-                    throw new functions.https.HttpsError(
-                        'failed-precondition',
-                        '아직 예약 오픈 전입니다.',
-                        { reason: eligibility.reason, openAt: eligibility.openAt.toISOString() },
-                    );
-                }
-                switch (eligibility.reason) {
-                    case ReservationLockReason.noCreditsOrExpired:
-                        throw new functions.https.HttpsError('failed-precondition', '예약 가능한 횟수가 없거나 유효 기간이 만료되었습니다.');
-                    case ReservationLockReason.pastDate:
-                        throw new functions.https.HttpsError('failed-precondition', '과거 날짜는 예약할 수 없습니다.');
-                    case ReservationLockReason.full:
-                        throw new functions.https.HttpsError('resource-exhausted', '예약 가능한 인원이 없습니다.');
-                    case ReservationLockReason.closedBeforeStart:
-                        throw new functions.https.HttpsError('failed-precondition', `세션 시작 ${policy.closeBeforeMinutes}분 전까지만 예약 가능합니다.`);
-                    case ReservationLockReason.notOpenedYet:
-                        throw new functions.https.HttpsError('failed-precondition', '아직 예약 오픈 전입니다.');
-                    case ReservationLockReason.none:
-                        break;
+                    if (eligibility.reason === ReservationLockReason.notOpenedYet && eligibility.openAt) {
+                        throw new functions.https.HttpsError(
+                            'failed-precondition',
+                            '아직 예약 오픈 전입니다.',
+                            { reason: eligibility.reason, openAt: eligibility.openAt.toISOString() },
+                        );
+                    }
+                    switch (eligibility.reason) {
+                        case ReservationLockReason.noCreditsOrExpired:
+                            throw new functions.https.HttpsError('failed-precondition', '예약 가능한 횟수가 없거나 유효 기간이 만료되었습니다.');
+                        case ReservationLockReason.pastDate:
+                            throw new functions.https.HttpsError('failed-precondition', '과거 날짜는 예약할 수 없습니다.');
+                        case ReservationLockReason.full:
+                            throw new functions.https.HttpsError('resource-exhausted', '예약 가능한 인원이 없습니다.');
+                        case ReservationLockReason.closedBeforeStart:
+                            throw new functions.https.HttpsError('failed-precondition', `세션 시작 ${policy.closeBeforeMinutes}분 전까지만 예약 가능합니다.`);
+                        case ReservationLockReason.notOpenedYet:
+                            throw new functions.https.HttpsError('failed-precondition', '아직 예약 오픈 전입니다.');
+                        case ReservationLockReason.none:
+                            break;
+                    }
                 }
             }
-        }
 
-        // 8) reservation 생성 (플레이스 서브컬렉션)
-        const reservationRef = db
-            .collection('places')
-            .doc(placeId)
-            .collection('reservations')
-            .doc();
-        tx.set(reservationRef, {
-            id: reservationRef.id,
-            userId,
-            courseId,
-            placeId,
-            dayOfWeek,
-            startTime,
-            reservedAt: admin.firestore.FieldValue.serverTimestamp(),
-            reservedDate: admin.firestore.Timestamp.fromDate(reservedDate),
-            reservedDateString: reservedDateString,
-        });
+            // 8) reservation 생성 (플레이스 서브컬렉션)
+            const reservationRef = db
+                .collection('places')
+                .doc(placeId)
+                .collection('reservations')
+                .doc();
+            tx.set(reservationRef, {
+                id: reservationRef.id,
+                userId,
+                courseId,
+                placeId,
+                dayOfWeek,
+                startTime,
+                reservedAt: admin.firestore.FieldValue.serverTimestamp(),
+                reservedDate: admin.firestore.Timestamp.fromDate(reservedDate),
+                reservedDateString: reservedDateString,
+            });
 
-        // 9) sessionReservations upsert + reservedCount++
-        await incrementSessionReservedCountUpsert(tx, db, {
-            sessionId,
-            srRef,
-            srDoc,
-            courseId,
-            placeId,
-            dayOfWeek,
-            startTime,
-            reservedDateString,
-            capacity,
-            currentReservedCount,
-        });
+            // 9) sessionReservations upsert + reservedCount++
+            await incrementSessionReservedCountUpsert(tx, db, {
+                sessionId,
+                srRef,
+                srDoc,
+                courseId,
+                placeId,
+                dayOfWeek,
+                startTime,
+                reservedDateString,
+                capacity,
+                currentReservedCount,
+            });
 
             // 10) enrollment remainingReservations-- (pending 멤버는 pendingMembers 업데이트)
-        // 불변식: remainingReservations는 음수가 되면 안 됨 (관리자도 크레딧/기간은 우회 불가)
-        if (remainingReservations <= 0) {
-            throw new functions.https.HttpsError(
-                'failed-precondition',
-                '남은 예약 횟수가 없습니다.',
-                { reason: ReservationLockReason.noCreditsOrExpired },
-            );
-        }
+            // 불변식: remainingReservations는 음수가 되면 안 됨 (관리자도 크레딧/기간은 우회 불가)
+            if (remainingReservations <= 0) {
+                throw new functions.https.HttpsError(
+                    'failed-precondition',
+                    '남은 예약 횟수가 없습니다.',
+                    { reason: ReservationLockReason.noCreditsOrExpired },
+                );
+            }
 
             if (isPendingMember) {
                 // pending 멤버: pendingMembers의 courseEnrollments 업데이트
@@ -1835,44 +1835,44 @@ export const createReservation = functions.https.onCall(async (data, context) =>
             } else {
                 // 일반 멤버: enrollments 업데이트
                 if (enrollmentDoc) {
-        tx.update(enrollmentDoc.ref, { remainingReservations: remainingReservations - 1 });
+                    tx.update(enrollmentDoc.ref, { remainingReservations: remainingReservations - 1 });
                 }
             }
 
-        const result = {
-            id: reservationRef.id,
-            userId,
-            courseId,
-            placeId,
-            dayOfWeek,
-            startTime,
-            reservedDateString,
-        };
-        logFunctionSuccess(functionName, { reservationId: reservationRef.id, courseId, reservedDateString });
-
-        // 11) 예약 생성 성공 알림 전송 (트랜잭션 외부에서)
-        // 코스명을 포함한 알림 메시지 생성
-        const courseName = getCourseName(place, courseId);
-        const notificationBody = `${courseName} - ${reservedDateString} ${startTime}`;
-
-        // 트랜잭션 완료 후 알림 생성 (트랜잭션 외부에서 실행)
-        createNotification({
-            userId,
-            type: 'reservation',
-            title: `${courseName} 예약이 완료되었습니다`,
-            body: notificationBody,
-            placeId,
-            data: {
-                reservationId: reservationRef.id,
+            const result = {
+                id: reservationRef.id,
+                userId,
                 courseId,
                 placeId,
-            },
-            isAdmin: false,
-        }).catch((error) => {
-            console.error(`[createReservation] Error creating notification:`, error);
-        });
+                dayOfWeek,
+                startTime,
+                reservedDateString,
+            };
+            logFunctionSuccess(functionName, { reservationId: reservationRef.id, courseId, reservedDateString });
 
-        return result;
+            // 11) 예약 생성 성공 알림 전송 (트랜잭션 외부에서)
+            // 코스명을 포함한 알림 메시지 생성
+            const courseName = getCourseName(place, courseId);
+            const notificationBody = `${courseName} - ${reservedDateString} ${startTime}`;
+
+            // 트랜잭션 완료 후 알림 생성 (트랜잭션 외부에서 실행)
+            createNotification({
+                userId,
+                type: 'reservation',
+                title: `${courseName} 예약이 완료되었습니다`,
+                body: notificationBody,
+                placeId,
+                data: {
+                    reservationId: reservationRef.id,
+                    courseId,
+                    placeId,
+                },
+                isAdmin: false,
+            }).catch((error) => {
+                console.error(`[createReservation] Error creating notification:`, error);
+            });
+
+            return result;
         });
     } catch (error) {
         logFunctionError(functionName, error as Error, { userId, courseId, reservedDateString });
@@ -2339,7 +2339,7 @@ export const updateCourseSchedule = functions.https.onCall(async (data, context)
  * 서버에서만 수행하도록 중앙화합니다.
  *
  * 정책:
- * - 미래 예약이 하나라도 있으면 삭제 불가(먼저 예약/세션 정리 필요)
+ * - 예약이 있어도 서버에서 모두 삭제 후 플레이스 삭제 (예약 취소 별도 불필요)
  */
 export const deletePlace = functions.https.onCall(async (data, context) => {
     const functionName = 'deletePlace';
@@ -2358,29 +2358,16 @@ export const deletePlace = functions.https.onCall(async (data, context) => {
     await assertAdminForPlaceUid(callerId, placeId);
 
     const db = admin.firestore();
-    const now = getSeoulDateTime();
-    const todayString = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
 
-    // 활성(미래) 예약이 있으면 삭제 불가
-    const activeSnap = await db
-        .collection('places')
-        .doc(placeId)
-        .collection('reservations')
-        .where('reservedDateString', '>=', todayString)
-        .limit(1)
-        .get();
-    if (!activeSnap.empty) {
-        throw new functions.https.HttpsError(
-            'failed-precondition',
-            '활성 예약이 있는 플레이스는 삭제할 수 없습니다. 먼저 예약을 취소해주세요.',
-            { hasActiveReservations: true },
-        );
+    // place 존재 확인 및 코스 ID 수집 (coursePolicies 삭제용)
+    const placeDoc = await db.collection('places').doc(placeId).get();
+    if (!placeDoc.exists) {
+        throw new functions.https.HttpsError('not-found', '플레이스를 찾을 수 없습니다.');
     }
+    const placeData = placeDoc.data() as any;
+    const courseIds = ((placeData?.courses as any[]) || []).map((c: any) => c?.id).filter(Boolean) as string[];
 
-    // place 존재 확인(없으면 not-found)
-    await getPlaceOrThrow(placeId);
-
-    // 하위/관련 데이터 정리
+    // 하위/관련 데이터 정리 (예약 포함 전부 서버에서 삭제)
     const deletedReservations = await deleteCollectionByPath(db, `places/${placeId}/reservations`);
     const deletedEnrollments = await deleteByQuery(
         db,
@@ -2414,6 +2401,27 @@ export const deletePlace = functions.https.onCall(async (data, context) => {
         db,
         db.collection('notifications').where('placeId', '==', placeId),
     );
+    const deletedBookingWeekOpens = await deleteByQuery(
+        db,
+        db.collection('bookingWeekOpens').where('placeId', '==', placeId),
+    );
+    const deletedDateCapacityOverrides = await deleteByQuery(
+        db,
+        db.collection('dateCapacityOverrides').where('placeId', '==', placeId),
+    );
+    const deletedCourseOverrides = await deleteByQuery(
+        db,
+        db.collection('courseOverrides').where('placeId', '==', placeId),
+    );
+    let deletedCoursePolicies = 0;
+    for (const courseId of courseIds) {
+        const policyRef = db.collection('coursePolicies').doc(courseId);
+        const policySnap = await policyRef.get();
+        if (policySnap.exists) {
+            await policyRef.delete();
+            deletedCoursePolicies++;
+        }
+    }
 
     await db.collection('places').doc(placeId).delete();
 
@@ -2429,8 +2437,191 @@ export const deletePlace = functions.https.onCall(async (data, context) => {
         deletedPromotions,
         deletedSessionReservations,
         deletedNotifications,
+        deletedBookingWeekOpens,
+        deletedDateCapacityOverrides,
+        deletedCourseOverrides,
+        deletedCoursePolicies,
     });
     return { success: true };
+});
+
+/**
+ * 회원탈퇴 (본인 계정 삭제)
+ *
+ * - 호출자는 반드시 본인(context.auth.uid === userId)이어야 함.
+ * - 관리자이며 소속 플레이스가 있으면 탈퇴 불가 (먼저 플레이스 삭제 요청).
+ * - Firestore: users, placeMemberships, enrollments, courseMembers, reservations(+ sessionReservations 정리), pendingMembers, notifications, adminUsers 정리
+ * - Firebase Auth 사용자 삭제 (마지막에 수행)
+ */
+export const deleteUserAccount = functions.https.onCall(async (data, context) => {
+    const functionName = 'deleteUserAccount';
+    logFunctionStart(functionName, { userId: context.auth?.uid });
+
+    if (!context.auth?.uid) {
+        logFunctionError(functionName, new Error('Unauthenticated'), {});
+        throw new functions.https.HttpsError('unauthenticated', '로그인이 필요합니다.');
+    }
+
+    const callerUid = context.auth.uid;
+    const userId = String(data?.userId ?? '').trim();
+
+    if (!userId || userId !== callerUid) {
+        logFunctionError(functionName, new Error('Forbidden: only self'), { callerUid, userId });
+        throw new functions.https.HttpsError('permission-denied', '본인 계정만 탈퇴할 수 있습니다.');
+    }
+
+    const db = admin.firestore();
+
+    try {
+        // 0) 관리자이며 소속 플레이스가 있으면 탈퇴 거부 (먼저 플레이스 삭제 요청)
+        const adminRef = db.collection('adminUsers').doc(userId);
+        const adminDoc = await adminRef.get();
+        if (adminDoc.exists) {
+            const adminData = adminDoc.data() as { placeIds?: string[] };
+            const placeIds = Array.isArray(adminData?.placeIds) ? adminData.placeIds : [];
+            if (placeIds.length > 0) {
+                logFunctionError(functionName, new Error('Admin has places'), { userId, placeCount: placeIds.length });
+                throw new functions.https.HttpsError(
+                    'failed-precondition',
+                    '관리자인 경우 소속 플레이스를 먼저 삭제해주세요.',
+                );
+            }
+        }
+
+        // 1) users 문서 조회 (phoneNumber 등 후속 정리용)
+        const userRef = db.collection('users').doc(userId);
+        const userDoc = await userRef.get();
+        const userData = userDoc.exists ? userDoc.data() : null;
+        const phoneNumber = userData?.phoneNumber ? String(userData.phoneNumber).replace(/\D/g, '') : '';
+
+        // 2) placeMemberships 삭제 및 placeId 수집
+        const membershipsSnap = await db.collection('placeMemberships').where('userId', '==', userId).get();
+        const placeIds = [...new Set(membershipsSnap.docs.map((d) => d.data().placeId as string))];
+        const deletedMemberships = await deleteByQuery(
+            db,
+            db.collection('placeMemberships').where('userId', '==', userId),
+        );
+        console.log(`[${functionName}] Deleted placeMemberships: ${deletedMemberships}, placeIds: ${placeIds.join(', ')}`);
+
+        // 3) enrollments 삭제
+        const deletedEnrollments = await deleteByQuery(
+            db,
+            db.collection('enrollments').where('userId', '==', userId),
+        );
+        console.log(`[${functionName}] Deleted enrollments: ${deletedEnrollments}`);
+
+        // 4) courseMembers 삭제
+        const deletedCourseMembers = await deleteByQuery(
+            db,
+            db.collection('courseMembers').where('userId', '==', userId),
+        );
+        console.log(`[${functionName}] Deleted courseMembers: ${deletedCourseMembers}`);
+
+        // 5) 예약 삭제 + sessionReservations.reservedCount 정리 (일반 유저 남은 예약 반영)
+        let deletedReservations = 0;
+        for (const placeId of placeIds) {
+            const reservationsSnap = await db
+                .collection('places')
+                .doc(placeId)
+                .collection('reservations')
+                .where('userId', '==', userId)
+                .get();
+            if (reservationsSnap.empty) continue;
+
+            // sessionReservations 키별로 감소할 개수 집계
+            const srDecrements = new Map<string, number>();
+            const reservationRefs: FirebaseFirestore.DocumentReference[] = [];
+            for (const doc of reservationsSnap.docs) {
+                const r = doc.data() as { courseId?: string; dayOfWeek?: number; startTime?: string; reservedDateString?: string };
+                const courseId = String(r?.courseId ?? '');
+                const dayOfWeek = Number(r?.dayOfWeek ?? 0);
+                const startTime = String(r?.startTime ?? '');
+                const dateStr = String(r?.reservedDateString ?? '');
+                if (!courseId || !startTime || !dateStr) continue;
+                const sessionId = `${courseId}_${dayOfWeek}_${startTime}`;
+                const srKey = `${sessionId}_${dateStr}`;
+                srDecrements.set(srKey, (srDecrements.get(srKey) ?? 0) + 1);
+                reservationRefs.push(doc.ref);
+            }
+
+            // sessionReservations 문서 읽어서 reservedCount 감소 후 업데이트
+            for (const [srKey, decrement] of srDecrements.entries()) {
+                const srRef = db.collection('sessionReservations').doc(srKey);
+                const srSnap = await srRef.get();
+                if (srSnap.exists) {
+                    const current = Number((srSnap.data()?.reservedCount ?? 0) as number);
+                    await srRef.update({
+                        reservedCount: Math.max(0, current - decrement),
+                        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+                    });
+                    console.log(`[${functionName}] sessionReservations ${srKey} reservedCount ${current} -> ${Math.max(0, current - decrement)}`);
+                }
+            }
+
+            // 예약 문서 일괄 삭제 (배치 400개 제한)
+            const batchSize = 400;
+            for (let i = 0; i < reservationRefs.length; i += batchSize) {
+                const batch = db.batch();
+                reservationRefs.slice(i, i + batchSize).forEach((ref) => batch.delete(ref));
+                await batch.commit();
+                deletedReservations += Math.min(batchSize, reservationRefs.length - i);
+            }
+        }
+        console.log(`[${functionName}] Deleted reservations: ${deletedReservations}`);
+
+        // 6) pendingMembers 삭제 (phoneNumber로 검색)
+        let deletedPending = 0;
+        if (phoneNumber) {
+            deletedPending = await deleteByQuery(
+                db,
+                db.collection('pendingMembers').where('phoneNumber', '==', phoneNumber),
+            );
+            console.log(`[${functionName}] Deleted pendingMembers (phoneNumber): ${deletedPending}`);
+        }
+
+        // 7) notifications 삭제
+        const deletedNotifications = await deleteByQuery(
+            db,
+            db.collection('notifications').where('userId', '==', userId),
+        );
+        console.log(`[${functionName}] Deleted notifications: ${deletedNotifications}`);
+
+        // 8) users 문서 삭제
+        if (userDoc.exists) {
+            await userRef.delete();
+            console.log(`[${functionName}] Deleted users doc: ${userId}`);
+        }
+
+        // 9) adminUsers 문서 삭제 (doc id가 uid인 경우)
+        if (adminDoc.exists) {
+            await adminRef.delete();
+            console.log(`[${functionName}] Deleted adminUsers doc for: ${userId}`);
+        }
+
+        // 10) Firebase Auth 사용자 삭제 (마지막에 수행)
+        await admin.auth().deleteUser(userId);
+        console.log(`[${functionName}] Deleted Firebase Auth user: ${userId}`);
+
+        logFunctionSuccess(functionName, {
+            userId,
+            deletedMemberships,
+            deletedEnrollments,
+            deletedCourseMembers,
+            deletedReservations,
+            deletedPending,
+            deletedNotifications,
+        });
+        return { success: true };
+    } catch (error) {
+        logFunctionError(functionName, error as Error, { userId });
+        if (error instanceof functions.https.HttpsError) throw error;
+        console.error(`[${functionName}] Error:`, error);
+        throw new functions.https.HttpsError(
+            'internal',
+            '회원탈퇴 처리 중 오류가 발생했습니다.',
+            (error as Error).message,
+        );
+    }
 });
 
 /**
@@ -3078,15 +3269,15 @@ export const batchMoveReservations = functions.https.onCall(async (data, context
                     capacity = Number(overrideData?.capacity ?? 0);
                 } else {
                     // 정기 일정인 경우 capacity 확인 (dateCapacityOverrides 우선)
-                const overrideQuery = db.collection('dateCapacityOverrides')
-                    .where('sessionId', '==', newSessionId)
-                    .where('date', '==', newReservedDateString)
-                    .limit(1);
-                const overrideSnap = await tx.get(overrideQuery as any);
-                const overrideCap = !overrideSnap.empty
-                    ? Number(((overrideSnap.docs[0].data() as any)?.capacity ?? 0) as any)
-                    : undefined;
-                capacity = Number.isFinite(overrideCap) ? (overrideCap as number) : Number(session.capacity ?? 0);
+                    const overrideQuery = db.collection('dateCapacityOverrides')
+                        .where('sessionId', '==', newSessionId)
+                        .where('date', '==', newReservedDateString)
+                        .limit(1);
+                    const overrideSnap = await tx.get(overrideQuery as any);
+                    const overrideCap = !overrideSnap.empty
+                        ? Number(((overrideSnap.docs[0].data() as any)?.capacity ?? 0) as any)
+                        : undefined;
+                    capacity = Number.isFinite(overrideCap) ? (overrideCap as number) : Number(session.capacity ?? 0);
                 }
             }
 
@@ -3461,4 +3652,49 @@ export const batchCancelReservations = functions.https.onCall(async (data, conte
     });
 });
 
+/**
+ * 플레이스 서버 검색 (이름/위치 포함 검색)
+ * - 인증 불필요 (공개 검색)
+ * - 최대 100건 반환
+ */
+export const searchPlaces = functions.https.onCall(async (data, context) => {
+    const functionName = 'searchPlaces';
+    const query = typeof data?.query === 'string' ? (data.query as string).trim().toLowerCase() : '';
+    logFunctionStart(functionName, { queryLength: query.length });
+
+    if (query.length === 0) {
+        logFunctionSuccess(functionName, { count: 0 });
+        return { places: [] };
+    }
+
+    const db = admin.firestore();
+    const snapshot = await db.collection('places').limit(300).get();
+    const maxResults = 100;
+    const places: { id: string; name: string; adminId: string; description?: string; location?: string; imageUrl?: string; appBarText?: string; greetingText?: string; courses: unknown[] }[] = [];
+
+    for (const doc of snapshot.docs) {
+        if (places.length >= maxResults) break;
+        const d = doc.data();
+        const name = (d.name as string) || '';
+        const location = (d.location as string) || '';
+        const nameMatch = name.toLowerCase().includes(query);
+        const locationMatch = location.toLowerCase().includes(query);
+        if (!nameMatch && !locationMatch) continue;
+
+        places.push({
+            id: doc.id,
+            name: name,
+            adminId: (d.adminId as string) ?? '',
+            description: d.description as string | undefined,
+            location: location || undefined,
+            imageUrl: d.imageUrl as string | undefined,
+            appBarText: d.appBarText as string | undefined,
+            greetingText: d.greetingText as string | undefined,
+            courses: (d.courses as unknown[]) || [],
+        });
+    }
+
+    logFunctionSuccess(functionName, { count: places.length });
+    return { places };
+});
 

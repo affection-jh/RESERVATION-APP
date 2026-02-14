@@ -174,9 +174,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
 
     if (sessionDateTime.isBefore(now)) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('지나간 일정은 취소할 수 없습니다.')));
+        SnackbarUtil.showInfo(context, '지나간 일정입니다.');
       }
       return;
     }
@@ -395,9 +393,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
         setState(() {
           _cancellingSessions.remove(cancellingKey);
         });
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('오류가 발생했습니다: $e')));
+        SnackbarUtil.showInfo(context, '오류가 발생했습니다: $e');
       }
     }
   }
@@ -1111,8 +1107,10 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     // 일정보기 모드인 경우
     if (widget.weeklyViewMode) {
       if (widget.userReservations == null || widget.userReservations!.isEmpty) {
-        // 예약이 없을 때는 높이를 100px로 제한
-        return SizedBox(height: widget.height, child: _buildEmptyState());
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [_buildEmptyState()],
+        );
       }
 
       // 현재 주의 날짜들 계산 (이번주만)
@@ -1172,29 +1170,30 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
             });
           }).toList();
 
-      // 마이페이지(weeklyViewMode)에서는 부모가 준 height(예: 500)를 유지해야 UX가 안정적임.
-      // 주차에 예약이 없어도 height를 축소하지 않고, 내부에서 빈 상태를 보여준다.
       final datesToRender = weekDates;
+
+      // 예약/세션이 없을 때는 높이를 낮춰서 아래 CTA 카드가 보이도록
+      if (datesToRender.isEmpty) {
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [_buildEmptyState()],
+        );
+      }
 
       return SizedBox(
         height: widget.height,
         child: Column(
           children: [
-            // 요일 헤더: 예약이 없는 주차면 헤더를 숨기고 빈 상태만 보여줌
-            if (datesToRender.isNotEmpty) _buildDayHeaders(datesToRender),
-            // 캘린더 그리드 / 빈 상태
+            _buildDayHeaders(datesToRender),
             Expanded(
-              child:
-                  datesToRender.isEmpty
-                      ? _buildEmptyState()
-                      : LayoutBuilder(
-                        builder: (context, constraints) {
-                          return _buildCalendarGrid(
-                            datesToRender,
-                            viewportHeight: constraints.maxHeight,
-                          );
-                        },
-                      ),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  return _buildCalendarGrid(
+                    datesToRender,
+                    viewportHeight: constraints.maxHeight,
+                  );
+                },
+              ),
             ),
           ],
         ),
@@ -1243,38 +1242,41 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
           return true;
         }).toList();
 
+    final isLoading = _isLoadingCourse || _isLoadingWeek;
+
     return SizedBox(
       height: widget.height,
       child: Column(
         children: [
           // 코스 선택 드롭다운
           if (!widget.hideCourseSelector) _buildCourseSelector(),
-          // 로딩 중이면 스피너 표시 (코스 변경 또는 주차 변경)
-          if (_isLoadingCourse || _isLoadingWeek)
-            Expanded(
-              child: Center(
-                child: CircularProgressIndicator(
-                  valueColor: AlwaysStoppedAnimation<Color>(
-                    AppColors.primaryGreen,
-                  ),
+          // 요일 헤더 (축 유지 → 깜빡임 방지)
+          _buildDayHeaders(weekDates),
+          // 캘린더 그리드 (축 유지, 하위 영역에만 로딩 스피너)
+          Expanded(
+            child: Stack(
+              children: [
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    return _buildCalendarGrid(
+                      weekDates,
+                      viewportHeight: constraints.maxHeight,
+                    );
+                  },
                 ),
-              ),
-            )
-          else ...[
-            // 요일 헤더
-            _buildDayHeaders(weekDates),
-            // 캘린더 그리드
-            Expanded(
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  return _buildCalendarGrid(
-                    weekDates,
-                    viewportHeight: constraints.maxHeight,
-                  );
-                },
-              ),
+                if (isLoading)
+                  Positioned.fill(
+                    child: Center(
+                      child: CircularProgressIndicator(
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          AppColors.primaryGreen,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
-          ],
+          ),
         ],
       ),
     );
@@ -1452,26 +1454,70 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     );
   }
 
-  // 빈 상태 UI
+  // 빈 상태 UI (home_screen CTA와 동일한 텍스트+버튼 디자인)
+  static const double _emptyStateHeight = 72.0;
+
   Widget _buildEmptyState() {
     final message = widget.weeklyViewMode ? '예약이 없어요' : '아직 코스가 없어요';
+    final isCourseEmpty = !widget.weeklyViewMode;
+    final showAddButton = isCourseEmpty && widget.onAddCourseTap != null;
+
     return Container(
-      height: widget.height,
+      height: showAddButton ? 140 : _emptyStateHeight,
       color: widget.backgroundColor ?? AppColors.backgroundWhite,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 6),
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: Text(
-            message,
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w500,
-              color: AppColors.textSecondary.withOpacity(0.7),
+      padding: showAddButton
+          ? const EdgeInsets.symmetric(horizontal: 16, vertical: 24)
+          : null,
+      child: showAddButton
+          ? Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  message,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textSecondary.withOpacity(0.6),
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 10),
+                Center(
+                  child: ElevatedButton(
+                    onPressed: widget.onAddCourseTap,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primaryGreen,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 16,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      elevation: 0,
+                    ),
+                    child: const Text(
+                      '코스 추가하기',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            )
+          : Center(
+              child: Text(
+                message,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textSecondary.withOpacity(0.6),
+                ),
+              ),
             ),
-          ),
-        ),
-      ),
     );
   }
 
@@ -2999,8 +3045,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                       offset: Offset(0, shakeOffset),
                       child: Container(
                         padding: EdgeInsets.symmetric(
-                          horizontal: 4,
-                          vertical: sessionHeightPx >= 50 ? 2 : 1,
+                          horizontal: 12,
+                          vertical: sessionHeightPx >= 50 ? 8 : 6,
                         ),
                         decoration: BoxDecoration(
                           color: blockColor,
@@ -3111,8 +3157,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                 )
                 : Container(
                   padding: EdgeInsets.symmetric(
-                    horizontal: 4,
-                    vertical: sessionHeightPx >= 50 ? 2 : 1,
+                    horizontal: 12,
+                    vertical: sessionHeightPx >= 50 ? 8 : 6,
                   ),
                   decoration: BoxDecoration(
                     color: blockColor,
@@ -3506,9 +3552,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                 ? () {
                   // 지나간 일정은 롱프레스로도 취소 불가 (이미 위에서 계산한 isPastSession 사용)
                   if (isPastSession) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('지나간 일정은 취소할 수 없습니다.')),
-                    );
+                    SnackbarUtil.showInfo(context, '지나간 일정입니다.');
                     return;
                   }
                   _showCancelSessionDialog(_selectedCourse!, session, date);

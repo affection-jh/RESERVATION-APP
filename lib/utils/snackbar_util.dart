@@ -78,6 +78,23 @@ class SnackbarUtil {
       curve: Curves.easeOut,
     );
   }
+
+  /// 상단에 로딩 스낵바 표시 (스피너 + 메시지, 탈퇴 중 등)
+  /// 성공/에러 스낵바를 보여줄 때까지 유지하려면 이후 showSuccess/showError 호출로 대체하면 됨.
+  static void showLoading(BuildContext context, String message) {
+    final overlay = Overlay.maybeOf(context);
+    if (overlay == null) {
+      _fallbackSnackBar(context, message, isError: false);
+      return;
+    }
+    showTopSnackBar(
+      overlay,
+      _LoadingSnackBar(message: message),
+      animationDuration: const Duration(milliseconds: 300),
+      reverseAnimationDuration: const Duration(milliseconds: 250),
+      curve: Curves.easeOut,
+    );
+  }
 }
 
 /// iOS 스타일 스낵바 위젯 (반투명 배경, blur 효과)
@@ -256,6 +273,83 @@ class _ErrorSnackBar extends StatelessWidget {
                     ),
                   ],
                 ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 로딩 중 스낵바 (스피너 + 메시지)
+class _LoadingSnackBar extends StatelessWidget {
+  final String message;
+
+  const _LoadingSnackBar({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        margin: const EdgeInsets.only(left: 16, right: 16, top: 0, bottom: 8),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 14,
+              ),
+              decoration: BoxDecoration(
+                color: AppColors.primaryGreen.withOpacity(0.85),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: Colors.white.withOpacity(0.2),
+                  width: 0.5,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.15),
+                    blurRadius: 20,
+                    offset: const Offset(0, 4),
+                  ),
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.1),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.2,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        Colors.white.withOpacity(0.95),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Flexible(
+                    child: Text(
+                      message,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.white.withOpacity(0.95),
+                        letterSpacing: -0.2,
+                      ),
+                      textAlign: TextAlign.left,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),

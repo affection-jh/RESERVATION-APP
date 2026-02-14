@@ -602,205 +602,247 @@ class _MyPageScreenState extends State<MyPageScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.backgroundLight,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // 메인 콘텐츠
-            Expanded(
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // 플레이스 정보
-                    _buildPlaceInfoSection(),
+      body: Stack(
+        children: [
+          SafeArea(
+            child: Column(
+              children: [
+                // 메인 콘텐츠
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // 플레이스 정보
+                        _buildPlaceInfoSection(),
 
-                    const SizedBox(height: 34),
+                        const SizedBox(height: 34),
 
-                    // 주차 이동 탭 (최소 4주 이후까지)
-                    if (userReservations.isNotEmpty) ...[
-                      WeekTabBar(
-                        selectedIndex: _selectedWeekTab,
-                        onTabChanged: (index) {
-                          setState(() {
-                            _selectedWeekTab = index;
-                          });
-                          // 탭 변경 시 해당 주차의 비정기 세션 정보 로드
-                          _loadOverridesForWeek(availableWeekOffsets[index]);
-                        },
-                        availableWeekOffsets: availableWeekOffsets,
-                        showDot: true,
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-
-                    // 캘린더 위젯 (일정보기 모드) - 카드 스타일
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: AppColors.backgroundWhite,
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        clipBehavior: Clip.antiAlias,
-                        child: CompactCalendarWidget(
-                          courses: userCourses,
-                          usage:
-                              CompactCalendarUsage.userWeeklyReservationsView,
-                          weekOffset: selectedWeekOffset,
-                          // ✅ 선택된 주차에 예약이 없으면 100px로 축소
-                          height: hasAnyReservationInSelectedWeek ? 500 : 100,
-                          onSessionTap: _onSessionTap,
-                          hideCourseSelector: true, // 일정보기 모드에서는 드롭다운 숨김
-                          weeklyViewMode: true, // 일정보기 모드 활성화
-                          userReservations: userReservations, // 사용자 예약 리스트 전달
-                          highlightReservation:
-                              _shouldHighlightReservation &&
-                                      _highlightedReservation != null &&
-                                      _highlightedCourse != null &&
-                                      _highlightedSession != null &&
-                                      _highlightedDate != null
-                                  ? {
-                                    'reservationId':
-                                        _highlightedReservation!.id,
-                                    'courseId': _highlightedCourse!.id,
-                                    'dayOfWeek': _highlightedSession!.dayOfWeek,
-                                    'startTime': _highlightedSession!.startTime,
-                                    'reservedDate': _highlightedDate!,
-                                  }
-                                  : null,
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(height: 32),
-
-                    // 수강 중인 코스 섹션
-                    _buildEnrolledCoursesSection(),
-
-                    const SizedBox(height: 32),
-
-                    // 마이프로필 섹션
-                    Builder(
-                      builder: (context) {
-                        final authProvider = Provider.of<AuthProvider>(context);
-                        final user = authProvider.currentUser;
-                        final isLoggedIn = user != null;
-                        final isNotificationEnabled =
-                            user?.notificationsEnabled ?? true;
-
-                        return UserProfileInfoSection(
-                          headerTitle: '마이프로필',
-                          profileName: isLoggedIn ? (user.name) : '로그인이 필요합니다',
-                          profilePhoneNumber:
-                              isLoggedIn
-                                  ? (user.phoneNumber)
-                                  : '로그인하고 모든 기능을 이용하세요',
-                          onProfileTap: () {
-                            // ✅ 로그인 안 된 경우 로그인 화면으로 이동
-                            if (!isLoggedIn) {
-                              Navigator.of(context).pushNamed('/phone-number');
-                            }
-                          },
-                          profileBottomWidget: const PlaceSwitchWidget(
-                            heroTagSuffix: 'my_page_profile',
-                          ),
-                          settingsItems: SettingsItemsBuilder.buildSettingsItems(
-                            context: context,
-                            isNotificationEnabled: isNotificationEnabled,
-                            onNotificationTap: () async {
-                              final result =
-                                  await NotificationSettingsDialog.show(
-                                    context: context,
-                                    initialValue: isNotificationEnabled,
-                                  );
-                              if (result == true && context.mounted) {
-                                // 다이얼로그에서 설정이 변경되었으면 화면 새로고침
-                                setState(() {});
-                              }
+                        // 주차 이동 탭 (최소 4주 이후까지)
+                        if (userReservations.isNotEmpty) ...[
+                          WeekTabBar(
+                            selectedIndex: _selectedWeekTab,
+                            onTabChanged: (index) {
+                              setState(() {
+                                _selectedWeekTab = index;
+                              });
+                              // 탭 변경 시 해당 주차의 비정기 세션 정보 로드
+                              _loadOverridesForWeek(
+                                availableWeekOffsets[index],
+                              );
                             },
-                            // ✅ 로그인 안 된 경우 로그아웃/회원탈퇴 버튼 숨김
-                            onLogout:
-                                isLoggedIn
-                                    ? () async {
-                                      await authProvider.logout();
-                                    }
-                                    : null, // null이면 로그아웃 항목이 표시되지 않음
-                            onWithdraw:
-                                isLoggedIn
-                                    ? () async {
-                                      try {
-                                        final authProvider =
-                                            Provider.of<AuthProvider>(
-                                              context,
-                                              listen: false,
-                                            );
-                                        final user = authProvider.currentUser;
-
-                                        if (user == null) {
-                                          SnackbarUtil.showError(
-                                            context,
-                                            '사용자 정보를 찾을 수 없습니다.',
-                                          );
-                                          return;
-                                        }
-
-                                        // 유저 계정 삭제 (모든 플레이스에서 제거 + Firebase Auth 삭제)
-                                        final functions =
-                                            FirebaseFunctions.instance;
-                                        final deleteAccountCallable = functions
-                                            .httpsCallable('deleteUserAccount');
-
-                                        await deleteAccountCallable.call({
-                                          'userId': user.userId,
-                                        });
-
-                                        // 로그아웃 처리
-                                        await authProvider.logout();
-
-                                        if (context.mounted) {
-                                          SnackbarUtil.showSuccess(
-                                            context,
-                                            '회원탈퇴가 완료되었습니다.',
-                                          );
-                                          Navigator.pushNamedAndRemoveUntil(
-                                            context,
-                                            '/',
-                                            (route) => false,
-                                          );
-                                        }
-                                      } catch (e) {
-                                        if (context.mounted) {
-                                          SnackbarUtil.showError(
-                                            context,
-                                            '회원탈퇴 중 오류가 발생했습니다.',
-                                          );
-                                        }
-                                      }
-                                    }
-                                    : null, // null이면 회원탈퇴 항목이 표시되지 않음
+                            availableWeekOffsets: availableWeekOffsets,
+                            showDot: true,
                           ),
-                        );
-                      },
-                    ),
+                          const SizedBox(height: 12),
+                        ],
 
-                    const SizedBox(height: 32),
-                  ],
+                        // 캘린더 위젯 (일정보기 모드) - 카드 스타일
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: AppColors.backgroundWhite,
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            clipBehavior: Clip.antiAlias,
+                            child: CompactCalendarWidget(
+                              courses: userCourses,
+                              usage:
+                                  CompactCalendarUsage
+                                      .userWeeklyReservationsView,
+                              weekOffset: selectedWeekOffset,
+                              // ✅ 선택된 주차에 예약이 없으면 100px로 축소
+                              height:
+                                  hasAnyReservationInSelectedWeek ? 500 : 100,
+                              onSessionTap: _onSessionTap,
+                              hideCourseSelector: true, // 일정보기 모드에서는 드롭다운 숨김
+                              weeklyViewMode: true, // 일정보기 모드 활성화
+                              userReservations:
+                                  userReservations, // 사용자 예약 리스트 전달
+                              highlightReservation:
+                                  _shouldHighlightReservation &&
+                                          _highlightedReservation != null &&
+                                          _highlightedCourse != null &&
+                                          _highlightedSession != null &&
+                                          _highlightedDate != null
+                                      ? {
+                                        'reservationId':
+                                            _highlightedReservation!.id,
+                                        'courseId': _highlightedCourse!.id,
+                                        'dayOfWeek':
+                                            _highlightedSession!.dayOfWeek,
+                                        'startTime':
+                                            _highlightedSession!.startTime,
+                                        'reservedDate': _highlightedDate!,
+                                      }
+                                      : null,
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 32),
+
+                        // 수강 중인 코스 섹션
+                        _buildEnrolledCoursesSection(),
+
+                        const SizedBox(height: 32),
+
+                        // 마이프로필 섹션
+                        Builder(
+                          builder: (context) {
+                            final authProvider = Provider.of<AuthProvider>(
+                              context,
+                            );
+                            final user = authProvider.currentUser;
+                            final isLoggedIn = user != null;
+                            final isNotificationEnabled =
+                                user?.notificationsEnabled ?? true;
+
+                            return UserProfileInfoSection(
+                              headerTitle: '마이프로필',
+                              profileName:
+                                  isLoggedIn ? (user.name) : '로그인이 필요합니다',
+                              profilePhoneNumber:
+                                  isLoggedIn
+                                      ? (user.phoneNumber)
+                                      : '로그인하고 모든 기능을 이용하세요',
+                              onProfileTap: () {
+                                // ✅ 로그인 안 된 경우 로그인 화면으로 이동
+                                if (!isLoggedIn) {
+                                  Navigator.of(
+                                    context,
+                                  ).pushNamed('/phone-number');
+                                }
+                              },
+                              profileBottomWidget: const PlaceSwitchWidget(
+                                heroTagSuffix: 'my_page_profile',
+                                showExitWhenUnregistered: true,
+                              ),
+                              settingsItems: SettingsItemsBuilder.buildSettingsItems(
+                                context: context,
+                                isNotificationEnabled: isNotificationEnabled,
+                                onNotificationTap: () async {
+                                  final result =
+                                      await NotificationSettingsDialog.show(
+                                        context: context,
+                                        initialValue: isNotificationEnabled,
+                                      );
+                                  if (result == true && context.mounted) {
+                                    // 다이얼로그에서 설정이 변경되었으면 화면 새로고침
+                                    setState(() {});
+                                  }
+                                },
+                                // ✅ 로그인 안 된 경우 로그아웃/회원탈퇴 버튼 숨김
+                                onLogout:
+                                    isLoggedIn
+                                        ? () async {
+                                          await authProvider.logout();
+                                        }
+                                        : null, // null이면 로그아웃 항목이 표시되지 않음
+                                onWithdraw:
+                                    isLoggedIn
+                                        ? () async {
+                                          final authProvider =
+                                              Provider.of<AuthProvider>(
+                                                context,
+                                                listen: false,
+                                              );
+                                          final user = authProvider.currentUser;
+
+                                          if (user == null) {
+                                            SnackbarUtil.showError(
+                                              context,
+                                              '사용자 정보를 찾을 수 없습니다.',
+                                            );
+                                            return;
+                                          }
+
+                                          SnackbarUtil.showLoading(
+                                            context,
+                                            '탈퇴중',
+                                          );
+
+                                          try {
+                                            final functions =
+                                                FirebaseFunctions.instance;
+                                            final deleteAccountCallable =
+                                                functions.httpsCallable(
+                                                  'deleteUserAccount',
+                                                );
+
+                                            await deleteAccountCallable.call({
+                                              'userId': user.userId,
+                                            });
+
+                                            await authProvider.logout();
+
+                                            if (context.mounted) {
+                                              SnackbarUtil.showSuccess(
+                                                context,
+                                                '회원탈퇴가 완료되었습니다.',
+                                              );
+                                              Navigator.pushNamedAndRemoveUntil(
+                                                context,
+                                                '/',
+                                                (route) => false,
+                                              );
+                                            }
+                                          } catch (e) {
+                                            if (context.mounted) {
+                                              String message =
+                                                  '회원탈퇴 중 오류가 발생했습니다.';
+                                              if (e
+                                                      is FirebaseFunctionsException &&
+                                                  (e.message ?? '')
+                                                      .trim()
+                                                      .isNotEmpty) {
+                                                message = e.message!.trim();
+                                              } else {
+                                                try {
+                                                  final msg =
+                                                      (e as dynamic).message
+                                                          ?.toString();
+                                                  if (msg != null &&
+                                                      msg.trim().isNotEmpty) {
+                                                    message = msg.trim();
+                                                  }
+                                                } catch (_) {}
+                                              }
+                                              SnackbarUtil.showError(
+                                                context,
+                                                message,
+                                              );
+                                            }
+                                          }
+                                        }
+                                        : null, // null이면 회원탈퇴 항목이 표시되지 않음
+                              ),
+                            );
+                          },
+                        ),
+
+                        const SizedBox(height: 32),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  // 플레이스 정보 섹션
+  // 플레이스 정보 섹션 (나가기 버튼은 프로필 쪽 한 곳에서만 표시)
   Widget _buildPlaceInfoSection() {
     final authProvider = Provider.of<AuthProvider>(context);
     return PlaceSwitchWidget(
       enabled: authProvider.currentUser != null,
       showDescription: true,
       heroTagSuffix: 'my_page',
+      showExitWhenUnregistered: false,
     );
   }
 

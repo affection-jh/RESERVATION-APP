@@ -357,6 +357,10 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
       '[AppStartup] _prepareUserScreen: hasApprovedPlaces=${result.hasApprovedPlaces}, lastAccessedPlaceId=${result.lastAccessedPlaceId}',
     );
 
+    // ✅ 사용자 경로 진입 시 무조건 일반(멤버) 모드로 설정 (관리자 카드가 선택된 상태로 보이지 않도록)
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    authProvider.clearCurrentAdmin();
+
     String? targetPlaceId = result.lastAccessedPlaceId;
     bool isLastPlaceApproved = false;
 
@@ -435,7 +439,7 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
           .getPlace(targetPlaceId)
           .timeout(const Duration(seconds: 6));
       if (place != null) {
-        // PlaceProvider에 플레이스 설정
+        // 플레이스가 유효할 때만 설정 (삭제된 플레이스면 null → 아래에서 waiting으로 폴백)
         placeProvider.setCurrentPlace(place);
         // AuthService에 플레이스 설정 (마지막 접속 플레이스 저장)
         await authService.setCurrentPlace(place);
@@ -506,13 +510,27 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
         }
       }
     } catch (e) {
-      // 플레이스 로드 실패 시 그냥 진행 (메인 화면에서 처리)
       debugPrint('[AppStartup._prepareUserScreen] 플레이스 로드 실패: $e');
     }
 
     // 최소 로딩 시간 보장 후 스플래시 숨김
     await _ensureMinLoadingTime();
     if (!mounted) return;
+
+    // 플레이스가 유효한지 확인 (삭제된 플레이스면 currentPlace가 null → waiting으로 폴백)
+    final placeProviderForCheck = Provider.of<PlaceProvider>(context, listen: false);
+    if (placeProviderForCheck.currentPlace == null) {
+      debugPrint(
+        '[AppStartup._prepareUserScreen] 유효한 플레이스 없음 → PlaceWaitingScreen 폴백',
+      );
+      final firebasePhone =
+          AuthService().currentFirebaseUser?.phoneNumber ?? '';
+      setState(() {
+        _targetScreen = PlaceWaitingScreen(phoneNumber: firebasePhone);
+      });
+      _hideSplash();
+      return;
+    }
 
     debugPrint(
       '[AppStartup] _prepareUserScreen: target=MainScreen (placeId=$targetPlaceId)',
@@ -653,11 +671,11 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
     }
 
     // 플레이스 로드 및 설정
+    final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
     try {
       debugPrint(
         '[AppStartup._navigateToAdminScreen] 플레이스 로드 시작: $targetPlaceId',
       );
-      final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
       final authService = AuthService();
       final firestoreService = FirestoreService();
       final notificationProvider = Provider.of<NotificationProvider>(
@@ -686,27 +704,49 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
         debugPrint(
           '[AppStartup._navigateToAdminScreen] 플레이스 로드 성공: ${place.name}',
         );
-        // PlaceProvider에 플레이스 설정
         placeProvider.setCurrentPlace(place);
-        debugPrint(
-          '[AppStartup._navigateToAdminScreen] PlaceProvider에 플레이스 설정 완료',
-        );
-        // AuthService에 플레이스 설정 (마지막 접속 플레이스 저장)
         await authService.updateLastAccessedPlace(place.id);
-        debugPrint(
-          '[AppStartup._navigateToAdminScreen] AuthService에 마지막 접속 플레이스 저장 완료',
-        );
       } else {
-        // 플레이스를 찾을 수 없는 경우 로그 출력
         debugPrint(
-          '[AppStartup._navigateToAdminScreen] ⚠️ 플레이스를 찾을 수 없습니다: $targetPlaceId',
+          '[AppStartup._navigateToAdminScreen] ⚠️ 플레이스를 찾을 수 없음(삭제됨?) → PlaceWaitingScreen 폴백: $targetPlaceId',
         );
+        if (mounted) {
+          setState(() {
+            _targetScreen = PlaceWaitingScreen(
+              phoneNumber: result.admin.phoneNumber,
+            );
+          });
+          _hideSplash();
+          return;
+        }
       }
     } catch (e, stackTrace) {
-      // 플레이스 로드 실패 시 에러 로그 출력
       debugPrint('[AppStartup._navigateToAdminScreen] ❌ 플레이스 로드 실패: $e');
       debugPrint('[AppStartup._navigateToAdminScreen] 스택 트레이스: $stackTrace');
-      // 에러가 발생해도 관리자 홈으로 이동 (AdminScreen에서 처리)
+      if (mounted) {
+        setState(() {
+          _targetScreen = PlaceWaitingScreen(
+            phoneNumber: result.admin.phoneNumber,
+          );
+        });
+        _hideSplash();
+        return;
+      }
+    }
+
+    if (placeProvider.currentPlace == null) {
+      debugPrint(
+        '[AppStartup._navigateToAdminScreen] currentPlace null → PlaceWaitingScreen 폴백',
+      );
+      if (mounted) {
+        setState(() {
+          _targetScreen = PlaceWaitingScreen(
+            phoneNumber: result.admin.phoneNumber,
+          );
+        });
+        _hideSplash();
+        return;
+      }
     }
 
     debugPrint('[AppStartup._navigateToAdminScreen] 관리자 홈으로 이동');

@@ -17,6 +17,40 @@ import '../utils/snackbar_util.dart';
 import '../widgets/cached_image_widget.dart' show PlaceImageWidget;
 import '../widgets/place_image_detail_screen.dart';
 
+/// 등록되지 않은 플레이스에서 나가기 시 place-waiting으로 이동 (홈/마이페이지 공통)
+void navigateToPlaceWaitingScreen(
+  BuildContext context,
+  AuthProvider authProvider,
+) {
+  String phoneNumber = '';
+  final user = authProvider.currentUser;
+  final admin = authProvider.currentAdmin;
+  final linkedAdmin = authProvider.linkedAdmin;
+  final fromUser = (user?.phoneNumber ?? '').trim();
+  final fromAdmin = (admin?.phoneNumber)?.trim() ?? '';
+  final fromLinked = (linkedAdmin?.phoneNumber)?.trim() ?? '';
+  if (fromUser.isNotEmpty) {
+    phoneNumber = fromUser;
+  } else if (fromAdmin.isNotEmpty) {
+    phoneNumber = fromAdmin;
+  } else if (fromLinked.isNotEmpty) {
+    phoneNumber = fromLinked;
+  }
+  phoneNumber = phoneNumber.replaceAll(RegExp(r'[^\d+]'), '');
+  if (phoneNumber.startsWith('+82')) {
+    phoneNumber = '0${phoneNumber.substring(3)}';
+  } else if (phoneNumber.startsWith('82')) {
+    phoneNumber = '0${phoneNumber.substring(2)}';
+  } else if (phoneNumber.startsWith('+') && phoneNumber.length > 10) {
+    phoneNumber = phoneNumber.substring(phoneNumber.length - 10);
+  }
+  Navigator.of(context).pushNamedAndRemoveUntil(
+    '/place-waiting',
+    (route) => false,
+    arguments: phoneNumber,
+  );
+}
+
 /// 플레이스 정보 및 전환 위젯 (공통)
 class PlaceSwitchWidget extends StatefulWidget {
   /// 패딩을 커스터마이징할 수 있음
@@ -35,6 +69,9 @@ class PlaceSwitchWidget extends StatefulWidget {
   /// Hero 태그 고유성을 위한 접미사 (여러 화면에서 사용 시 중복 방지)
   final String? heroTagSuffix;
 
+  /// 등록되지 않은 플레이스일 때 나가기(로그아웃) 버튼 표시 여부 (마이페이지에서 중복 방지용 false)
+  final bool showExitWhenUnregistered;
+
   const PlaceSwitchWidget({
     super.key,
     this.padding,
@@ -42,6 +79,7 @@ class PlaceSwitchWidget extends StatefulWidget {
     this.showDescription = false,
     this.showNotificationIcon = false,
     this.heroTagSuffix,
+    this.showExitWhenUnregistered = true,
   });
 
   @override
@@ -146,63 +184,58 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
       padding: EdgeInsets.only(top: 10, bottom: 10, left: 20, right: 10),
       child: Column(
         children: [
-          // 플레이스 정보 (클릭 가능)
+          // 플레이스 정보 (로그인 시에만 클릭 가능)
           Row(
             children: [
-              // 플레이스 이미지와 이름 (이미지 상세 보기용)
+              // 플레이스 이미지와 이름 (enabled일 때만 이미지 상세 보기로 이동)
               Expanded(
                 child: InkWell(
-                  onTap: () {
-                    // 이미지 상세 화면 표시
-                    final heroTag =
-                        widget.heroTagSuffix != null
-                            ? 'place_image_${currentPlace.id}_${widget.heroTagSuffix}'
-                            : 'place_image_${currentPlace.id}_${widget.key?.hashCode ?? hashCode}';
-                    Navigator.of(context).push(
-                      PageRouteBuilder(
-                        pageBuilder:
-                            (context, animation, secondaryAnimation) =>
-                                PlaceImageDetailScreen(
-                                  imageUrl: currentPlace.imageUrl,
-                                  placeName: currentPlace.name,
-                                  heroTag: heroTag,
+                  onTap:
+                      widget.enabled
+                          ? () {
+                            // Hero 미사용: 탭 전환 시 소스가 사라지면 타겟만 남아 이미지가 남는 문제 방지
+                            Navigator.of(context).push(
+                              PageRouteBuilder(
+                                pageBuilder:
+                                    (context, animation, secondaryAnimation) =>
+                                        PlaceImageDetailScreen(
+                                          imageUrl: currentPlace.imageUrl,
+                                          placeName: currentPlace.name,
+                                          heroTag: null,
+                                        ),
+                                transitionDuration: const Duration(
+                                  milliseconds: 300,
                                 ),
-                        transitionDuration: const Duration(milliseconds: 300),
-                        reverseTransitionDuration: const Duration(
-                          milliseconds: 300,
-                        ),
-                        opaque: false,
-                        transitionsBuilder: (
-                          context,
-                          animation,
-                          secondaryAnimation,
-                          child,
-                        ) {
-                          return FadeTransition(
-                            opacity: animation,
-                            child: child,
-                          );
-                        },
-                      ),
-                    );
-                  },
+                                reverseTransitionDuration: const Duration(
+                                  milliseconds: 300,
+                                ),
+                                opaque: false,
+                                transitionsBuilder: (
+                                  context,
+                                  animation,
+                                  secondaryAnimation,
+                                  child,
+                                ) {
+                                  return FadeTransition(
+                                    opacity: animation,
+                                    child: child,
+                                  );
+                                },
+                              ),
+                            );
+                          }
+                          : null,
                   borderRadius: BorderRadius.circular(16),
                   splashColor: Colors.transparent,
                   highlightColor: Colors.transparent,
                   child: Row(
                     children: [
-                      // 플레이스 이미지 (Hero 태그)
-                      Hero(
-                        tag:
-                            widget.heroTagSuffix != null
-                                ? 'place_image_${currentPlace.id}_${widget.heroTagSuffix}'
-                                : 'place_image_${currentPlace.id}_${widget.key?.hashCode ?? hashCode}',
-                        child: PlaceImageWidget(
-                          imageUrl: currentPlace.imageUrl,
-                          width: 50,
-                          height: 50,
-                          borderRadius: BorderRadius.circular(16),
-                        ),
+                      // 플레이스 이미지 (Hero 미사용 → 탭 전환 시 타겟 누락 이슈 방지)
+                      PlaceImageWidget(
+                        imageUrl: currentPlace.imageUrl,
+                        width: 50,
+                        height: 50,
+                        borderRadius: BorderRadius.circular(16),
                       ),
                       const SizedBox(width: 16),
                       // 플레이스 이름

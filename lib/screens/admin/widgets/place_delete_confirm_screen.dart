@@ -131,35 +131,11 @@ class _PlaceDeleteConfirmScreenState extends State<PlaceDeleteConfirmScreen> {
   Future<void> _handleDelete() async {
     if (!_canDelete()) return;
 
-    // 마지막 확인 다이얼로그
-    final confirmed = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('최종 확인'),
-          content: Text(
-            '"${widget.place.name}" 플레이스를 정말로 삭제하시겠습니까?\n\n이 작업은 되돌릴 수 없습니다.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('취소'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              style: TextButton.styleFrom(foregroundColor: Colors.red),
-              child: const Text('삭제'),
-            ),
-          ],
-        );
-      },
-    );
-    if (confirmed != true) return;
-
     setState(() {
       _isLoading = true;
     });
+
+    FocusScope.of(context).unfocus();
 
     try {
       final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
@@ -188,9 +164,10 @@ class _PlaceDeleteConfirmScreenState extends State<PlaceDeleteConfirmScreen> {
         }
 
         // PlaceSwitchWidget 등에서 사용하는 관리 플레이스 캐시도 즉시 반영
-        final updatedManagedIds = authProvider.adminManagedPlaceIds
-            .where((id) => id != widget.place.id)
-            .toList();
+        final updatedManagedIds =
+            authProvider.adminManagedPlaceIds
+                .where((id) => id != widget.place.id)
+                .toList();
         authProvider.setAdminManagedPlaceIds(updatedManagedIds);
       }
 
@@ -207,246 +184,261 @@ class _PlaceDeleteConfirmScreenState extends State<PlaceDeleteConfirmScreen> {
         setState(() {
           _isLoading = false;
         });
-        SnackbarUtil.showError(
-          context,
-          '플레이스 삭제 중 오류가 발생했습니다: ${e.toString()}',
-        );
+        // 사용자에게 기술적 예외 문구 그대로 노출하지 않고 정제된 메시지 표시
+        final raw =
+            e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '').trim();
+        final message =
+            raw.isNotEmpty ? raw : '플레이스 삭제에 실패했습니다. 잠시 후 다시 시도해주세요.';
+        SnackbarUtil.showError(context, message);
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.backgroundWhite,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // 헤더
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-              child: Row(
-                children: [
-                  IconButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: Icon(
-                      Icons.arrow_back_ios,
-                      color: AppColors.primaryGreen,
-                      size: 24,
-                    ),
-                  ),
-                  Text(
-                    '플레이스 삭제',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-            // 메인 콘텐츠
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+    return PopScope(
+      canPop: !_isLoading,
+      child: Scaffold(
+        backgroundColor: AppColors.backgroundWhite,
+        body: SafeArea(
+          child: Column(
+            children: [
+              // 헤더
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 0,
+                ),
+                child: Row(
                   children: [
-                    const SizedBox(height: 22),
-
-                    // 경고 메시지
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.red.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.warning_amber_rounded,
-                            color: Colors.red,
-                            size: 24,
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              '이 작업은 되돌릴 수 없습니다.\n모든 데이터가 영구적으로 삭제됩니다.',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.red.shade700,
-                                height: 1.4,
-                              ),
-                            ),
-                          ),
-                        ],
+                    IconButton(
+                      onPressed:
+                          _isLoading ? null : () => Navigator.of(context).pop(),
+                      icon: Icon(
+                        Icons.arrow_back_ios,
+                        color:
+                            _isLoading
+                                ? AppColors.textSecondary.withOpacity(0.5)
+                                : AppColors.primaryGreen,
+                        size: 24,
                       ),
                     ),
-
-                    const SizedBox(height: 42),
-
-                    // 1단계: PIN 인증
                     Text(
-                      '관리자 인증을 위해 PIN을 입력해주세요.',
+                      '플레이스 삭제',
                       style: TextStyle(
-                        fontSize: 15,
-                        color: AppColors.textSecondary,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
                       ),
                     ),
-                    const SizedBox(height: 16),
+                  ],
+                ),
+              ),
 
-                    // PIN 입력
-                    _buildPinInput(),
+              // 메인 콘텐츠
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 22),
 
-                    if (_pinErrorMessage.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        _pinErrorMessage,
-                        style: TextStyle(fontSize: 14, color: Colors.red),
-                      ),
-                    ],
-
-                    // PIN 인증 버튼
-                    if (!_isPinVerified && _isPinValid())
-                      Padding(
-                        padding: const EdgeInsets.only(top: 16),
-                        child: SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton(
-                            onPressed: _isLoading ? null : _verifyPin,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.primaryGreen,
-                              foregroundColor: Colors.white,
-                              disabledBackgroundColor: AppColors.borderLight,
-                              padding: const EdgeInsets.symmetric(vertical: 16),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
+                      // 경고 메시지
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.warning_amber_rounded,
+                              color: Colors.red,
+                              size: 24,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                '이 작업은 되돌릴 수 없습니다.\n모든 데이터가 영구적으로 삭제됩니다.',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.red.shade700,
+                                  height: 1.4,
+                                ),
                               ),
                             ),
-                            child: _isLoading
-                                ? const SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      valueColor: AlwaysStoppedAnimation<Color>(
-                                        AppColors.primaryGreen,
-                                      ),
-                                    ),
-                                  )
-                                : const Text(
-                                    'PIN 인증',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                          ),
+                          ],
                         ),
                       ),
 
-                    const SizedBox(height: 62),
+                      const SizedBox(height: 42),
 
-                    // 2단계: 플레이스 이름 확인
-                    if (_isPinVerified) ...[
+                      // 1단계: PIN 인증
                       Text(
-                        '아래에 플레이스 이름을 정확히 입력해주세요.',
+                        '관리자 인증을 위해 PIN을 입력해주세요.',
                         style: TextStyle(
                           fontSize: 15,
                           color: AppColors.textSecondary,
                         ),
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '플레이스 이름: "${widget.place.name}"',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
                       const SizedBox(height: 16),
 
-                      // 플레이스 이름 입력
-                      TextField(
-                        controller: _placeNameController,
-                        focusNode: _placeNameFocusNode,
-                        textInputAction: TextInputAction.done,
-                        onSubmitted: (_) {
-                          if (_canDelete()) {
-                            _handleDelete();
-                          }
-                        },
-                        decoration: TextFieldDecorationUtil.defaultDecoration(
-                          hintText: '플레이스 이름을 입력하세요',
+                      // PIN 입력
+                      _buildPinInput(),
 
-                          fillColor: AppColors.backgroundLight,
-                          hasError: _placeNameErrorMessage.isNotEmpty,
-
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 16,
-                          ),
-                        ),
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: AppColors.textPrimary,
-                        ),
-                        onChanged: (_) => setState(() {}),
-                      ),
-
-                      if (_placeNameErrorMessage.isNotEmpty) ...[
+                      if (_pinErrorMessage.isNotEmpty) ...[
                         const SizedBox(height: 8),
                         Text(
-                          _placeNameErrorMessage,
-                          style: TextStyle(fontSize: 13, color: Colors.red),
+                          _pinErrorMessage,
+                          style: TextStyle(fontSize: 14, color: Colors.red),
                         ),
                       ],
 
-                      const SizedBox(height: 62),
-
-                      // 삭제 버튼
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton(
-                          onPressed: _canDelete() ? _handleDelete : null,
-                          style: FilledButton.styleFrom(
-                            backgroundColor: Colors.red,
-                            disabledBackgroundColor: AppColors.borderLight,
-                            padding: const EdgeInsets.symmetric(vertical: 18),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(20),
+                      // PIN 인증 버튼
+                      if (!_isPinVerified && _isPinValid())
+                        Padding(
+                          padding: const EdgeInsets.only(top: 16),
+                          child: SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton(
+                              onPressed: _isLoading ? null : _verifyPin,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppColors.primaryGreen,
+                                foregroundColor: Colors.white,
+                                disabledBackgroundColor: AppColors.borderLight,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 16,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              child:
+                                  _isLoading
+                                      ? const SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          valueColor:
+                                              AlwaysStoppedAnimation<Color>(
+                                                AppColors.primaryGreen,
+                                              ),
+                                        ),
+                                      )
+                                      : const Text(
+                                        'PIN 인증',
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
                             ),
                           ),
-                          child: _isLoading
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                      Colors.white,
-                                    ),
-                                  ),
-                                )
-                              : const Text(
-                                  '플레이스 삭제',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600,
-                                    color: Colors.white,
-                                  ),
-                                ),
                         ),
-                      ),
+
+                      const SizedBox(height: 62),
+
+                      // 2단계: 플레이스 이름 확인
+                      if (_isPinVerified) ...[
+                        Text(
+                          '아래에 플레이스 이름을 정확히 입력해주세요.',
+                          style: TextStyle(
+                            fontSize: 15,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          '플레이스 이름: "${widget.place.name}"',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+
+                        // 플레이스 이름 입력
+                        TextField(
+                          controller: _placeNameController,
+                          focusNode: _placeNameFocusNode,
+                          textInputAction: TextInputAction.done,
+                          onSubmitted: (_) {
+                            if (_canDelete()) {
+                              _handleDelete();
+                            }
+                          },
+                          decoration: TextFieldDecorationUtil.defaultDecoration(
+                            hintText: '플레이스 이름을 입력하세요',
+
+                            fillColor: AppColors.backgroundLight,
+                            hasError: _placeNameErrorMessage.isNotEmpty,
+
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 16,
+                            ),
+                          ),
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: AppColors.textPrimary,
+                          ),
+                          onChanged: (_) => setState(() {}),
+                        ),
+
+                        if (_placeNameErrorMessage.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            _placeNameErrorMessage,
+                            style: TextStyle(fontSize: 13, color: Colors.red),
+                          ),
+                        ],
+                      ],
                     ],
-                  ],
+                  ),
                 ),
               ),
-            ),
-          ],
+              if (_isPinVerified)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: _canDelete() ? _handleDelete : null,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      disabledBackgroundColor: AppColors.borderLight,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                    ),
+                    child:
+                        _isLoading
+                            ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  Colors.white,
+                                ),
+                              ),
+                            )
+                            : const Text(
+                              '플레이스 삭제',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.white,
+                              ),
+                            ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -466,11 +458,12 @@ class _PlaceDeleteConfirmScreenState extends State<PlaceDeleteConfirmScreen> {
         color: AppColors.backgroundWhite,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: _pinErrorMessage.isNotEmpty
-              ? Colors.red
-              : (_isPinVerified
-                    ? AppColors.primaryGreen
-                    : AppColors.borderLight),
+          color:
+              _pinErrorMessage.isNotEmpty
+                  ? Colors.red
+                  : (_isPinVerified
+                      ? AppColors.primaryGreen
+                      : AppColors.borderLight),
           width: _isPinVerified ? 2 : 1,
         ),
       ),
@@ -479,9 +472,8 @@ class _PlaceDeleteConfirmScreenState extends State<PlaceDeleteConfirmScreen> {
     final focusedPinTheme = defaultPinTheme.copyWith(
       decoration: defaultPinTheme.decoration!.copyWith(
         border: Border.all(
-          color: _pinErrorMessage.isNotEmpty
-              ? Colors.red
-              : AppColors.primaryGreen,
+          color:
+              _pinErrorMessage.isNotEmpty ? Colors.red : AppColors.primaryGreen,
           width: 2,
         ),
       ),
@@ -490,11 +482,12 @@ class _PlaceDeleteConfirmScreenState extends State<PlaceDeleteConfirmScreen> {
     final filledPinTheme = defaultPinTheme.copyWith(
       decoration: defaultPinTheme.decoration!.copyWith(
         border: Border.all(
-          color: _isPinVerified
-              ? AppColors.primaryGreen
-              : (_pinErrorMessage.isNotEmpty
-                    ? Colors.red
-                    : AppColors.borderLight),
+          color:
+              _isPinVerified
+                  ? AppColors.primaryGreen
+                  : (_pinErrorMessage.isNotEmpty
+                      ? Colors.red
+                      : AppColors.borderLight),
           width: 2,
         ),
       ),
@@ -505,20 +498,22 @@ class _PlaceDeleteConfirmScreenState extends State<PlaceDeleteConfirmScreen> {
       controller: _pinController,
       focusNode: _pinFocusNode,
       enabled: !_isPinVerified,
-      defaultPinTheme: _pinErrorMessage.isNotEmpty
-          ? defaultPinTheme.copyWith(
-              decoration: defaultPinTheme.decoration!.copyWith(
-                border: Border.all(color: Colors.red, width: 2),
-              ),
-            )
-          : (_isPinVerified ? filledPinTheme : defaultPinTheme),
-      focusedPinTheme: _pinErrorMessage.isNotEmpty
-          ? focusedPinTheme.copyWith(
-              decoration: focusedPinTheme.decoration!.copyWith(
-                border: Border.all(color: Colors.red, width: 2),
-              ),
-            )
-          : focusedPinTheme,
+      defaultPinTheme:
+          _pinErrorMessage.isNotEmpty
+              ? defaultPinTheme.copyWith(
+                decoration: defaultPinTheme.decoration!.copyWith(
+                  border: Border.all(color: Colors.red, width: 2),
+                ),
+              )
+              : (_isPinVerified ? filledPinTheme : defaultPinTheme),
+      focusedPinTheme:
+          _pinErrorMessage.isNotEmpty
+              ? focusedPinTheme.copyWith(
+                decoration: focusedPinTheme.decoration!.copyWith(
+                  border: Border.all(color: Colors.red, width: 2),
+                ),
+              )
+              : focusedPinTheme,
       submittedPinTheme: _isPinVerified ? filledPinTheme : defaultPinTheme,
       showCursor: !_isPinVerified,
       keyboardType: TextInputType.number,

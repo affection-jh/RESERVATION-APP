@@ -187,12 +187,12 @@ class _AdminPlaceRegistrationScreenState
       final confirmed = await CommonDialog.show(
         context: context,
         title: '플레이스 등록 취소',
-        message: widget.isFromRegistration
-            ? '플레이스 등록을 취소하시겠습니까?'
-            : '플레이스 등록을 취소하시겠습니까?',
-        secondaryMessage: widget.isFromRegistration
-            ? '취소하시면 관리자 등록이 완료되지 않습니다.'
-            : null,
+        message:
+            widget.isFromRegistration
+                ? '플레이스 등록을 취소하시겠습니까?'
+                : '플레이스 등록을 취소하시겠습니까?',
+        secondaryMessage:
+            widget.isFromRegistration ? '취소하시면 관리자 등록이 완료되지 않습니다.' : null,
         cancelText: '계속하기',
         confirmText: '취소하기',
         confirmButtonColor: Colors.red,
@@ -298,14 +298,15 @@ class _AdminPlaceRegistrationScreenState
             height: 150,
             fit: BoxFit.cover,
             borderRadius: BorderRadius.circular(15),
-            errorWidget: _selectedImage != null
-                ? Image.file(
-                    _selectedImage!,
-                    width: 150,
-                    height: 150,
-                    fit: BoxFit.cover,
-                  )
-                : null,
+            errorWidget:
+                _selectedImage != null
+                    ? Image.file(
+                      _selectedImage!,
+                      width: 150,
+                      height: 150,
+                      fit: BoxFit.cover,
+                    )
+                    : null,
           ),
           Positioned(
             top: 8,
@@ -348,7 +349,7 @@ class _AdminPlaceRegistrationScreenState
             color: Colors.black.withOpacity(0.5),
             child: const Center(
               child: CircularProgressIndicator(
-                color: AppColors.primaryGreen,
+                color: Colors.white,
                 strokeWidth: 2,
               ),
             ),
@@ -491,8 +492,8 @@ class _AdminPlaceRegistrationScreenState
   Widget _buildBottomButtons() {
     // 플레이스 추가 플로우에서는 hasPlace 체크 무시 (기존 관리자가 추가 플레이스를 등록하는 경우 허용)
     final isValid = _isFormValid();
-    // 이미지 업로드 중이어도 이미지가 선택되어 있으면 진행 가능
-    final canProceed = isValid;
+    // 이미지 등록 중에는 다음 버튼 비활성화
+    final canProceed = isValid && !_isUploading;
 
     debugPrint(
       '[AdminPlaceRegistration] 버튼 상태: isValid=$isValid, canProceed=$canProceed',
@@ -524,23 +525,27 @@ class _AdminPlaceRegistrationScreenState
         Expanded(
           flex: 2,
           child: FilledButton(
-            onPressed: canProceed
-                ? () {
-                    _removeFocus();
-                    Navigator.of(context).pushReplacement(
-                      MaterialPageRoute(
-                        builder: (context) => AdminGreetingSettingScreen(
-                          placeName: _nameController.text.trim(),
-                          placeDescription: _descriptionController.text.trim(),
-                          placeImage: _uploadedImageUrl == null
-                              ? _selectedImage
-                              : null, // 업로드 완료된 경우 null
-                          placeImageUrl: _uploadedImageUrl, // 업로드된 URL 전달
+            onPressed:
+                canProceed
+                    ? () {
+                      _removeFocus();
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder:
+                              (context) => AdminGreetingSettingScreen(
+                                placeName: _nameController.text.trim(),
+                                placeDescription:
+                                    _descriptionController.text.trim(),
+                                placeImage:
+                                    _uploadedImageUrl == null
+                                        ? _selectedImage
+                                        : null, // 업로드 완료된 경우 null
+                                placeImageUrl: _uploadedImageUrl, // 업로드된 URL 전달
+                              ),
                         ),
-                      ),
-                    );
-                  }
-                : null,
+                      );
+                    }
+                    : null,
             style: FilledButton.styleFrom(
               backgroundColor: AppColors.primaryGreen,
               disabledBackgroundColor: AppColors.borderLight,

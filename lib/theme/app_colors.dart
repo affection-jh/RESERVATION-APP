@@ -98,8 +98,8 @@ class AppColors {
 
   // Reserved Colors (예약 완료 색상)
   static const Color reservedGrey = Color.fromARGB(255, 226, 226, 226);
-  static const Color reservedTextGrey = Color(0xFF424242);
-  static const Color reservedIconGrey = Color(0xFF757575);
+  static const Color reservedTextGrey = Color.fromARGB(255, 44, 44, 44);
+  static const Color reservedIconGrey = Color.fromARGB(255, 60, 60, 60);
 
   // Border & Divider
   static const Color borderLight = Color(0xFFE0E0E0);

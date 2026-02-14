@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:reservation/screens/admin/widgets/admin_shared_widgets.dart';
 import '../../../theme/app_colors.dart';
 import '../../../models/admin_models.dart';
 import '../../../utils/snackbar_util.dart';
@@ -115,9 +114,8 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
         });
 
         // 모든 이미지를 병렬로 업로드 시작 (파일 경로를 사용하여 추적)
-        final uploadFutures = newFiles
-            .map((file) => _uploadImageByFile(file))
-            .toList();
+        final uploadFutures =
+            newFiles.map((file) => _uploadImageByFile(file)).toList();
         await Future.wait(uploadFutures);
       }
     } catch (e) {
@@ -172,9 +170,10 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
 
       // 임시 파일에 저장 (원본 확장자 유지)
       final originalPath = imageFile.path;
-      final extension = originalPath.contains('.')
-          ? originalPath.substring(originalPath.lastIndexOf('.'))
-          : '.jpg';
+      final extension =
+          originalPath.contains('.')
+              ? originalPath.substring(originalPath.lastIndexOf('.'))
+              : '.jpg';
       final resizedFile = File('${originalPath}_resized$extension');
       await resizedFile.writeAsBytes(byteData.buffer.asUint8List());
 
@@ -403,56 +402,61 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
     // 선택한 로컬 이미지들을 저장 시에만 업로드 (병렬로)
     if (_selectedImages.isNotEmpty) {
       // 모든 이미지를 병렬로 업로드
-      final uploadFutures = _selectedImages.asMap().entries.map((entry) async {
-        final index = entry.key;
-        final file = entry.value;
+      final uploadFutures =
+          _selectedImages.asMap().entries.map((entry) async {
+            final index = entry.key;
+            final file = entry.value;
 
-        try {
-          // 이미지 리사이징 (필요한 경우)
-          final resizedFile = await _resizeImageIfNeeded(file);
-          final fileToUpload = resizedFile ?? file;
-
-          final storageService = firebase_storage.StorageService();
-          final imageUrl = await storageService.uploadImage(
-            imageFile: fileToUpload,
-            folder: 'stories',
-          );
-
-          // 리사이징된 임시 파일 삭제
-          if (resizedFile != null && resizedFile.path != file.path) {
             try {
-              await resizedFile.delete();
+              // 이미지 리사이징 (필요한 경우)
+              final resizedFile = await _resizeImageIfNeeded(file);
+              final fileToUpload = resizedFile ?? file;
+
+              final storageService = firebase_storage.StorageService();
+              final imageUrl = await storageService.uploadImage(
+                imageFile: fileToUpload,
+                folder: 'stories',
+              );
+
+              // 리사이징된 임시 파일 삭제
+              if (resizedFile != null && resizedFile.path != file.path) {
+                try {
+                  await resizedFile.delete();
+                } catch (e) {
+                  debugPrint('임시 파일 삭제 실패: $e');
+                }
+              }
+              return {
+                'success': true,
+                'url': imageUrl,
+                'index': index,
+                'file': file,
+              };
             } catch (e) {
-              debugPrint('임시 파일 삭제 실패: $e');
+              // 업로드 실패 시 파일 삭제
+              try {
+                if (await file.exists()) {
+                  await file.delete();
+                }
+              } catch (deleteError) {
+                debugPrint('파일 삭제 실패: $deleteError');
+              }
+              if (mounted) {
+                SnackbarUtil.showError(context, '이미지 업로드에 실패했습니다');
+              }
+              return {
+                'success': false,
+                'url': null,
+                'index': index,
+                'file': file,
+              };
             }
-          }
-          return {
-            'success': true,
-            'url': imageUrl,
-            'index': index,
-            'file': file,
-          };
-        } catch (e) {
-          // 업로드 실패 시 파일 삭제
-          try {
-            if (await file.exists()) {
-              await file.delete();
-            }
-          } catch (deleteError) {
-            debugPrint('파일 삭제 실패: $deleteError');
-          }
-          if (mounted) {
-            SnackbarUtil.showError(context, '이미지 업로드에 실패했습니다');
-          }
-          return {'success': false, 'url': null, 'index': index, 'file': file};
-        }
-      }).toList();
+          }).toList();
 
       try {
         final results = await Future.wait(uploadFutures);
-        final failedUploads = results
-            .where((r) => r['success'] == false)
-            .toList();
+        final failedUploads =
+            results.where((r) => r['success'] == false).toList();
 
         if (failedUploads.isNotEmpty) {
           // 실패한 이미지들을 _selectedImages에서 제거
@@ -468,10 +472,11 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
           return;
         }
 
-        final uploadedUrls = results
-            .where((r) => r['success'] == true)
-            .map((r) => r['url'] as String)
-            .toList();
+        final uploadedUrls =
+            results
+                .where((r) => r['success'] == true)
+                .map((r) => r['url'] as String)
+                .toList();
         allImageUrls.addAll(uploadedUrls);
       } catch (e) {
         // 모든 이미지 파일 삭제 시도
@@ -494,9 +499,8 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
     }
 
     // 배경 이미지는 첫 번째 첨부 이미지를 자동으로 사용
-    final String? finalBackgroundImageUrl = allImageUrls.isNotEmpty
-        ? allImageUrls[0]
-        : null;
+    final String? finalBackgroundImageUrl =
+        allImageUrls.isNotEmpty ? allImageUrls[0] : null;
 
     final story = StoryData(
       title: title,
@@ -554,13 +558,19 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
               Padding(
                 padding: const EdgeInsets.only(right: 8),
                 child: OutlinedButton(
-                  onPressed: () {
-                    confirmDelete(
-                      context,
+                  onPressed: () async {
+                    final confirmed = await CommonDialog.show(
+                      context: context,
                       title: '스토리 삭제',
                       message: '이 스토리를 삭제할까요?',
-                      onConfirm: () => widget.onDelete?.call(),
+                      cancelText: '취소',
+                      confirmText: '삭제',
+                      confirmButtonColor: Colors.red,
                     );
+                    if (confirmed == true && mounted) {
+                      widget.onDelete?.call();
+                      Navigator.of(context).pop();
+                    }
                   },
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.red,
@@ -618,25 +628,26 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
                   ),
                   elevation: 0,
                 ),
-                child: _isSaving
-                    ? SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            AppColors.primaryGreen,
+                child:
+                    _isSaving
+                        ? SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 1,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              AppColors.primaryGreen,
+                            ),
+                          ),
+                        )
+                        : Text(
+                          widget.existingStory == null ? '게시하기' : '수정하기',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
                           ),
                         ),
-                      )
-                    : Text(
-                        widget.existingStory == null ? '게시하기' : '수정하기',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
-                        ),
-                      ),
               ),
             ),
           ],
@@ -652,62 +663,61 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
                     curve: Curves.easeInOut,
                     child:
                         (_uploadedImageUrls.isNotEmpty ||
-                            _selectedImages.isNotEmpty)
-                        ? Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                height: 204, // 180 + padding
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 12,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: AppColors.backgroundWhite,
-                                ),
-                                child: ReorderableListView.builder(
-                                  scrollDirection: Axis.horizontal,
+                                _selectedImages.isNotEmpty)
+                            ? Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  height: 204, // 180 + padding
                                   padding: const EdgeInsets.symmetric(
-                                    horizontal: 16,
+                                    vertical: 12,
                                   ),
-                                  onReorder: _reorderImages,
-                                  buildDefaultDragHandles: false,
-                                  proxyDecorator: (child, index, animation) {
-                                    return AnimatedBuilder(
-                                      animation: animation,
-                                      builder: (context, _) {
-                                        final t = Curves.easeOut.transform(
-                                          animation.value,
-                                        );
-                                        final scale = 1.0 + (0.1 * t);
-                                        return Transform.scale(
-                                          scale: scale,
-                                          child: Material(
-                                            color: Colors.transparent,
-                                            elevation: 8 * t,
-                                            borderRadius: BorderRadius.circular(
-                                              12,
+                                  decoration: BoxDecoration(
+                                    color: AppColors.backgroundWhite,
+                                  ),
+                                  child: ReorderableListView.builder(
+                                    scrollDirection: Axis.horizontal,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                    ),
+                                    onReorder: _reorderImages,
+                                    buildDefaultDragHandles: false,
+                                    proxyDecorator: (child, index, animation) {
+                                      return AnimatedBuilder(
+                                        animation: animation,
+                                        builder: (context, _) {
+                                          final t = Curves.easeOut.transform(
+                                            animation.value,
+                                          );
+                                          final scale = 1.0 + (0.1 * t);
+                                          return Transform.scale(
+                                            scale: scale,
+                                            child: Material(
+                                              color: Colors.transparent,
+                                              elevation: 8 * t,
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              shadowColor: Colors.black
+                                                  .withOpacity(0.2),
+                                              child: child,
                                             ),
-                                            shadowColor: Colors.black
-                                                .withOpacity(0.2),
-                                            child: child,
-                                          ),
-                                        );
-                                      },
-                                    );
-                                  },
-                                  itemCount:
-                                      _uploadedImageUrls.length +
-                                      _selectedImages.length,
-                                  itemBuilder: (contxt, index) {
-                                    final isUploaded =
-                                        index < _uploadedImageUrls.length;
-                                    return _buildImageItem(index, isUploaded);
-                                  },
+                                          );
+                                        },
+                                      );
+                                    },
+                                    itemCount:
+                                        _uploadedImageUrls.length +
+                                        _selectedImages.length,
+                                    itemBuilder: (contxt, index) {
+                                      final isUploaded =
+                                          index < _uploadedImageUrls.length;
+                                      return _buildImageItem(index, isUploaded);
+                                    },
+                                  ),
                                 ),
-                              ),
-                            ],
-                          )
-                        : const SizedBox.shrink(),
+                              ],
+                            )
+                            : const SizedBox.shrink(),
                   ),
                   // 텍스트 입력 부분
                   Padding(
@@ -833,38 +843,41 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
           children: [
             ClipRRect(
               borderRadius: BorderRadius.circular(16),
-              child: isUploaded
-                  ? CachedNetworkImage(
-                      imageUrl: _uploadedImageUrls[index],
-                      cacheKey: _uploadedImageUrls[index],
-                      fit: BoxFit.cover,
-                      maxWidthDiskCache: 1000,
-                      maxHeightDiskCache: 1000,
-                      memCacheWidth: 1000,
-                      memCacheHeight: 1000,
-                      fadeInDuration: const Duration(milliseconds: 0),
-                      fadeOutDuration: const Duration(milliseconds: 0),
-                      placeholder: (context, url) => Container(
-                        color: AppColors.backgroundLight,
-                        child: Center(
-                          child: CircularProgressIndicator(
-                            color: AppColors.primaryGreen,
-                            strokeWidth: 2,
-                          ),
-                        ),
+              child:
+                  isUploaded
+                      ? CachedNetworkImage(
+                        imageUrl: _uploadedImageUrls[index],
+                        cacheKey: _uploadedImageUrls[index],
+                        fit: BoxFit.cover,
+                        maxWidthDiskCache: 1000,
+                        maxHeightDiskCache: 1000,
+                        memCacheWidth: 1000,
+                        memCacheHeight: 1000,
+                        fadeInDuration: const Duration(milliseconds: 0),
+                        fadeOutDuration: const Duration(milliseconds: 0),
+                        placeholder:
+                            (context, url) => Container(
+                              color: AppColors.backgroundLight,
+                              child: Center(
+                                child: CircularProgressIndicator(
+                                  color: AppColors.primaryGreen,
+                                  strokeWidth: 1,
+                                ),
+                              ),
+                            ),
+                        errorWidget:
+                            (context, url, error) => Container(
+                              color: AppColors.backgroundLight,
+                              child: Icon(
+                                Icons.error_outline,
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
+                      )
+                      : Image.file(
+                        _selectedImages[index - _uploadedImageUrls.length],
+                        fit: BoxFit.cover,
                       ),
-                      errorWidget: (context, url, error) => Container(
-                        color: AppColors.backgroundLight,
-                        child: Icon(
-                          Icons.error_outline,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                    )
-                  : Image.file(
-                      _selectedImages[index - _uploadedImageUrls.length],
-                      fit: BoxFit.cover,
-                    ),
             ),
             // 업로드 중 표시 (선택된 이미지이고 업로드 중인 경우)
             if (!isUploaded &&
@@ -884,7 +897,7 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
                         child: Center(
                           child: CircularProgressIndicator(
                             color: AppColors.primaryGreen,
-                            strokeWidth: 3,
+                            strokeWidth: 1,
                             backgroundColor: Colors.white,
                           ),
                         ),

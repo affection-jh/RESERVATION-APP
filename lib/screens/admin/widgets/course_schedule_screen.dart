@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../../../theme/app_colors.dart';
 import '../../../models/course.dart' as reservation_models;
@@ -333,31 +334,29 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
                   }).toList(),
                 ),
               ),
-              // 각 요일의 캘린더 (가로 스크롤만)
+              // 각 요일의 캘린더 (세로 스크롤은 바깥 SingleChildScrollView 하나만 사용 → 롱프레스 드래그 인식 보장)
               Expanded(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.vertical,
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: selectedDaysList.map((day) {
-                      return SizedBox(
-                        width:
-                            (MediaQuery.of(context).size.width - 35) /
-                            selectedDaysList.length,
-                        child: _buildDayScheduleEditor(
-                          day,
-                          hourSlotHeight: hourSlotHeight,
-                          totalHeight: totalHeight,
-                          scrollController: _calendarScrollController!,
-                          onDragStateChanged: (isDragging) {
-                            setState(() {
-                              _isAnyDragging = isDragging;
-                            });
-                          },
-                        ),
-                      );
-                    }).toList(),
-                  ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: selectedDaysList.map((day) {
+                    return SizedBox(
+                      width:
+                          (MediaQuery.of(context).size.width - 35) /
+                          selectedDaysList.length,
+                      child: _buildDayScheduleEditor(
+                        day,
+                        hourSlotHeight: hourSlotHeight,
+                        totalHeight: totalHeight,
+                        scrollController: _calendarScrollController!,
+                        onDragStateChanged: (isDragging) {
+                          debugPrint('[CourseScheduleScreen] onDragStateChanged($isDragging)');
+                          setState(() {
+                            _isAnyDragging = isDragging;
+                          });
+                        },
+                      ),
+                    );
+                  }).toList(),
                 ),
               ),
             ],
@@ -424,6 +423,7 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
         hourSlotHeight: hourSlotHeight,
         totalHeight: totalHeight,
         scrollController: scrollController,
+        isEditMode: true, // 드래그 영역(Listener) 렌더링 → 길게 눌러서 세션 추가
         onSessionsChanged: (newSessions) {
           setState(() {
             _daySessions[dayOfWeek] = newSessions;
@@ -432,6 +432,12 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
           });
         },
         onDragStateChanged: onDragStateChanged,
+        onScrollBlockRequested: (block) {
+          debugPrint('[CourseScheduleScreen] onScrollBlockRequested($block) → _isAnyDragging=$block');
+          setState(() {
+            _isAnyDragging = block;
+          });
+        },
         onDragEnd: (startTime, endTime, day) {
           // 미리보기 초기화
           setState(() {

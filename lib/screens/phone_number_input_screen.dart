@@ -92,16 +92,20 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
         return;
       }
 
-      // 에러 메시지 정리 (플랫폼 채널 에러인 경우 더 친화적인 메시지)
-      String errorMessage = e.toString();
-      if (errorMessage.contains('channel-error') ||
+      // 에러 메시지 정리 (Firebase/플랫폼 응답 기반, 기술 문구 노출 최소화)
+      String errorMessage =
+          e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '').trim();
+      if (errorMessage.contains('캡챠') ||
+          errorMessage.contains('reCAPTCHA') ||
+          errorMessage.contains('팝업')) {
+        // AuthService에서 이미 사용자 친화 메시지로 변환된 케이스
+      } else if (errorMessage.contains('channel-error') ||
           errorMessage.contains('PlatformException')) {
         errorMessage = '인증 서비스 초기화 중입니다.\n앱을 완전히 재시작하거나 잠시 후 다시 시도해주세요.';
-      } else if (errorMessage.contains('인증 서비스 초기화')) {
-        // 이미 친화적인 메시지인 경우 그대로 사용
-        errorMessage = errorMessage.replaceAll('Exception: ', '');
-      } else {
-        // 기타 에러는 간단하게 표시
+      } else if (errorMessage.contains('too-many-requests') ||
+          errorMessage.contains('너무 많은 요청')) {
+        errorMessage = '인증번호 발송 횟수 제한을 초과했습니다.\n잠시 후 다시 시도해주세요.';
+      } else if (errorMessage.isEmpty) {
         errorMessage = '인증번호 발송에 실패했습니다.';
       }
       setState(() {
@@ -142,17 +146,18 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
         automaticallyImplyLeading: false,
         backgroundColor: AppColors.backgroundWhite,
         elevation: 0,
-        leading: Navigator.of(context).canPop()
-            ? IconButton(
-                onPressed: _onBackPressed,
-                icon: const Icon(
-                  Icons.arrow_back_ios,
-                  color: AppColors.textPrimary,
-                ),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-              )
-            : null,
+        leading:
+            Navigator.of(context).canPop()
+                ? IconButton(
+                  onPressed: _onBackPressed,
+                  icon: const Icon(
+                    Icons.arrow_back_ios,
+                    color: AppColors.textPrimary,
+                  ),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                )
+                : null,
       ),
       body: SafeArea(
         child: Column(
@@ -164,7 +169,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const SizedBox(height: 40),
+                    const SizedBox(height: 20),
                     // 제목
                     Text(
                       '휴대폰 번호를 입력해주세요.',
@@ -175,7 +180,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
                         letterSpacing: -0.5,
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 6),
                     // 안내 문구
                     Text.rich(
                       TextSpan(
@@ -193,16 +198,17 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
                               decoration: TextDecoration.underline,
                               fontWeight: FontWeight.w600,
                             ),
-                            recognizer: TapGestureRecognizer()
-                              ..onTap = () {
-                                Navigator.of(context).pushNamed(
-                                  '/webview',
-                                  arguments: {
-                                    'url': AppConstants.termsAndPrivacyUrl,
-                                    'title': '개인정보처리방침 및 이용약관',
+                            recognizer:
+                                TapGestureRecognizer()
+                                  ..onTap = () {
+                                    Navigator.of(context).pushNamed(
+                                      '/webview',
+                                      arguments: {
+                                        'url': AppConstants.termsAndPrivacyUrl,
+                                        'title': '개인정보처리방침 및 이용약관',
+                                      },
+                                    );
                                   },
-                                );
-                              },
                           ),
                           const TextSpan(
                             text: ' 및 ',
@@ -215,16 +221,17 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
                               decoration: TextDecoration.underline,
                               fontWeight: FontWeight.w600,
                             ),
-                            recognizer: TapGestureRecognizer()
-                              ..onTap = () {
-                                Navigator.of(context).pushNamed(
-                                  '/webview',
-                                  arguments: {
-                                    'url': AppConstants.termsAndPrivacyUrl,
-                                    'title': '개인정보처리방침 및 이용약관',
+                            recognizer:
+                                TapGestureRecognizer()
+                                  ..onTap = () {
+                                    Navigator.of(context).pushNamed(
+                                      '/webview',
+                                      arguments: {
+                                        'url': AppConstants.termsAndPrivacyUrl,
+                                        'title': '개인정보처리방침 및 이용약관',
+                                      },
+                                    );
                                   },
-                                );
-                              },
                           ),
                           const TextSpan(
                             text: '에 동의합니다.',
@@ -234,6 +241,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
                       ),
                     ),
                     const SizedBox(height: 30),
+
                     // 전화번호 입력 필드
                     Stack(
                       children: [
@@ -295,42 +303,44 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
               ),
             ), // 인증번호 받기 버튼
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
               child: SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: (_isButtonEnabled && !_isLoading)
-                      ? _onGetVerificationCode
-                      : null,
+                  onPressed:
+                      (_isButtonEnabled && !_isLoading)
+                          ? _onGetVerificationCode
+                          : null,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primaryGreen,
                     foregroundColor: Colors.white,
                     disabledBackgroundColor: AppColors.borderLight,
                     disabledForegroundColor: AppColors.textLight,
-                    padding: const EdgeInsets.symmetric(vertical: 18),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(20),
                     ),
                     elevation: 0,
                   ),
-                  child: _isLoading
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              AppColors.primaryGreen,
+                  child:
+                      _isLoading
+                          ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                AppColors.primaryGreen,
+                              ),
+                            ),
+                          )
+                          : const Text(
+                            '인증번호 받기',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
-                        )
-                      : const Text(
-                          '인증번호 받기',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
                 ),
               ),
             ),

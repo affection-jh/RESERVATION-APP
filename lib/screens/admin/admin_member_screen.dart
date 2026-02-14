@@ -525,13 +525,10 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
 
           if (filteredMembers.isEmpty) {
             return Center(
-              child: Text(
+              child: _buildEmptyMemberState(
+                context,
                 _searchQuery.isNotEmpty ? '검색 결과가 없어요.' : '등록된 멤버가 없어요.',
-                style: TextStyle(
-                  color: AppColors.textSecondary.withOpacity(0.8),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
+                showCta: _searchQuery.isEmpty,
               ),
             );
           }
@@ -641,13 +638,10 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
 
           if (filteredMembers.isEmpty) {
             return Center(
-              child: Text(
+              child: _buildEmptyMemberState(
+                context,
                 _searchQuery.isNotEmpty ? '검색 결과가 없어요.' : '등록된 멤버가 없어요.',
-                style: TextStyle(
-                  color: AppColors.textSecondary.withOpacity(0.8),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
+                showCta: _searchQuery.isEmpty,
               ),
             );
           }
@@ -804,13 +798,10 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
 
         if (filteredMembers.isEmpty) {
           return Center(
-            child: Text(
+            child: _buildEmptyMemberState(
+              context,
               _searchQuery.isNotEmpty ? '검색 결과가 없어요.' : '활성 멤버가 없어요.',
-              style: TextStyle(
-                color: AppColors.textSecondary.withOpacity(0.8),
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
+              showCta: _searchQuery.isEmpty,
             ),
           );
         }
@@ -887,13 +878,10 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
 
     if (filteredMembers.isEmpty) {
       return Center(
-        child: Text(
+        child: _buildEmptyMemberState(
+          context,
           _searchQuery.isNotEmpty ? '검색 결과가 없어요.' : '등록된 멤버가 없어요.',
-          style: TextStyle(
-            color: AppColors.textSecondary.withOpacity(0.8),
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-          ),
+          showCta: _searchQuery.isEmpty,
         ),
       );
     }
@@ -920,6 +908,56 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
           ),
         );
       },
+    );
+  }
+
+  /// 멤버 없음/검색 결과 없음 빈 상태 (member_detail_bottom_sheet CTA 디자인과 동일)
+  Widget _buildEmptyMemberState(
+    BuildContext context,
+    String message, {
+    bool showCta = false,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            message,
+            style: TextStyle(
+              fontSize: 16,
+              color: AppColors.textSecondary,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          if (showCta) ...[
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () => _showMemberEditor(context),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primaryGreen,
+                  padding: const EdgeInsets.symmetric(vertical: 18),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  elevation: 0,
+                ),
+                child: Text(
+                  '멤버 등록 하기',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 

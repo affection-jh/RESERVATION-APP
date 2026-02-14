@@ -471,9 +471,10 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
   // 미리보기 헤더 (이미지와 플레이스 설명)
   Widget _buildPreviewHeader() {
     final currentImageUrl = _uploadedImageUrl ?? _existingImageUrl;
-    final placeName = _nameController.text.trim().isEmpty
-        ? (widget.place?.name ?? '플레이스 이름')
-        : _nameController.text.trim();
+    final placeName =
+        _nameController.text.trim().isEmpty
+            ? (widget.place?.name ?? '플레이스 이름')
+            : _nameController.text.trim();
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 30),
@@ -492,23 +493,28 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
                     borderRadius: BorderRadius.circular(16),
                     color: AppColors.backgroundLight,
                   ),
-                  child: _selectedImage != null
-                      ? ClipRRect(
-                          borderRadius: BorderRadius.circular(16),
-                          child: Image.file(_selectedImage!, fit: BoxFit.cover),
-                        )
-                      : (currentImageUrl != null && currentImageUrl.isNotEmpty)
-                      ? PlaceImageWidget(
-                          imageUrl: currentImageUrl,
-                          width: 46,
-                          height: 46,
-                          borderRadius: BorderRadius.circular(16),
-                        )
-                      : Icon(
-                          Icons.add_photo_alternate_outlined,
-                          size: 24,
-                          color: AppColors.textSecondary,
-                        ),
+                  child:
+                      _selectedImage != null
+                          ? ClipRRect(
+                            borderRadius: BorderRadius.circular(16),
+                            child: Image.file(
+                              _selectedImage!,
+                              fit: BoxFit.cover,
+                            ),
+                          )
+                          : (currentImageUrl != null &&
+                              currentImageUrl.isNotEmpty)
+                          ? PlaceImageWidget(
+                            imageUrl: currentImageUrl,
+                            width: 46,
+                            height: 46,
+                            borderRadius: BorderRadius.circular(16),
+                          )
+                          : Icon(
+                            Icons.add_photo_alternate_outlined,
+                            size: 24,
+                            color: AppColors.textSecondary,
+                          ),
                 ),
                 if (_isUploadingImage)
                   Positioned.fill(
@@ -586,9 +592,10 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
 
   // 미리보기 제목 섹션 (인라인 편집)
   Widget _buildPreviewTitleSection() {
-    final placeName = _nameController.text.trim().isEmpty
-        ? (widget.place?.name ?? '플레이스 이름')
-        : _nameController.text.trim();
+    final placeName =
+        _nameController.text.trim().isEmpty
+            ? (widget.place?.name ?? '플레이스 이름')
+            : _nameController.text.trim();
     final currentGreeting = widget.place?.greetingText ?? '';
 
     return Padding(
@@ -611,9 +618,10 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
             height: 1.4,
           ),
           decoration: InputDecoration(
-            hintText: currentGreeting.isNotEmpty
-                ? currentGreeting
-                : '안녕하세요,\n$placeName입니다',
+            hintText:
+                currentGreeting.isNotEmpty
+                    ? currentGreeting
+                    : '안녕하세요,\n$placeName입니다',
             hintStyle: TextStyle(
               fontSize: 26,
               fontWeight: FontWeight.w600,
@@ -684,7 +692,7 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
   // 하단 버튼
   Widget _buildBottomButtons() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
       child: SizedBox(
         width: double.infinity,
         child: FilledButton(
@@ -697,25 +705,26 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
               borderRadius: BorderRadius.circular(16),
             ),
           ),
-          child: _isSaving
-              ? const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    valueColor: AlwaysStoppedAnimation<Color>(
-                      AppColors.primaryGreen,
+          child:
+              _isSaving
+                  ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        AppColors.primaryGreen,
+                      ),
+                    ),
+                  )
+                  : Text(
+                    widget.place != null ? '수정 완료' : '등록 완료',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
                     ),
                   ),
-                )
-              : Text(
-                  widget.place != null ? '수정 완료' : '등록 완료',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white,
-                  ),
-                ),
         ),
       ),
     );
@@ -753,15 +762,18 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         // 새로 등록
         final newPlace = await placeProvider.createPlace(
           name: _nameController.text.trim(),
-          description: _descriptionController.text.trim().isEmpty
-              ? null
-              : _descriptionController.text.trim(),
-          appBarText: _appBarTextController.text.trim().isEmpty
-              ? null
-              : _appBarTextController.text.trim(),
-          greetingText: _greetingTextController.text.trim().isEmpty
-              ? null
-              : _greetingTextController.text.trim(),
+          description:
+              _descriptionController.text.trim().isEmpty
+                  ? null
+                  : _descriptionController.text.trim(),
+          appBarText:
+              _appBarTextController.text.trim().isEmpty
+                  ? null
+                  : _appBarTextController.text.trim(),
+          greetingText:
+              _greetingTextController.text.trim().isEmpty
+                  ? null
+                  : _greetingTextController.text.trim(),
           imageUrl: _uploadedImageUrl,
           adminId: currentAdmin.userId,
         );
@@ -787,15 +799,18 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         final updatedPlace = widget.place!.copyWith(
           name: _nameController.text.trim(),
           location: _locationController.text.trim(),
-          description: _descriptionController.text.trim().isEmpty
-              ? null
-              : _descriptionController.text.trim(),
-          appBarText: _appBarTextController.text.trim().isEmpty
-              ? null
-              : _appBarTextController.text.trim(),
-          greetingText: _greetingTextController.text.trim().isEmpty
-              ? null
-              : _greetingTextController.text.trim(),
+          description:
+              _descriptionController.text.trim().isEmpty
+                  ? null
+                  : _descriptionController.text.trim(),
+          appBarText:
+              _appBarTextController.text.trim().isEmpty
+                  ? null
+                  : _appBarTextController.text.trim(),
+          greetingText:
+              _greetingTextController.text.trim().isEmpty
+                  ? null
+                  : _greetingTextController.text.trim(),
           imageUrl: _uploadedImageUrl ?? widget.place!.imageUrl,
         );
 

@@ -9,7 +9,6 @@ import '../../../services/firestore_service.dart';
 import '../../../theme/app_colors.dart';
 import '../../../utils/snackbar_util.dart';
 import '../../../utils/timezone_utils.dart';
-import '../../../widgets/common_dialog.dart';
 
 /// 코스 예약 정책 설정 화면
 class CoursePolicyEditScreen extends StatefulWidget {
@@ -332,18 +331,8 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
       return;
     }
 
-    // 2) 정책 저장 후 코스 등록까지 진행
-    final confirmed = await CommonDialog.show(
-      context: context,
-      title: '코스 등록',
-      message: '코스를 등록하시겠습니까?',
-      secondaryMessage: '등록 후에는 수정이 필요할 수 있습니다.',
-      cancelText: '취소',
-      confirmText: '등록',
-      confirmButtonColor: AppColors.primaryGreen,
-    );
-
-    if (confirmed != true || !mounted) return;
+    // 2) 정책 저장 후 코스 등록까지 바로 진행
+    if (!mounted) return;
 
     final courseProvider = Provider.of<CourseProvider>(context, listen: false);
     final placeProvider = Provider.of<PlaceProvider>(context, listen: false);

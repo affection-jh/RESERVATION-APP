@@ -146,6 +146,8 @@ class _VerificationCodeScreenState extends State<VerificationCodeScreen> {
 
         // 사용자 정보 설정 (관리자도 멤버로 로그인할 수 있으므로 일단 user 세팅)
         authProvider.setCurrentUser(result.user);
+        // ✅ 인증 직후에는 무조건 일반(멤버) 모드로 진입 (이전 세션의 관리자 선택이 남지 않도록)
+        authProvider.clearCurrentAdmin();
 
         if (mounted) {
           // 플레이스 추가 플로우인 경우 관리자 등록 여부 확인
@@ -288,10 +290,34 @@ class _VerificationCodeScreenState extends State<VerificationCodeScreen> {
       debugPrint('[VerificationCodeScreen._onResendCode] 스택 트레이스: $stackTrace');
 
       if (mounted) {
+        // 에러 메시지를 사용자 친화적인 에러 텍스트로 통일
+        final raw =
+            e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '').trim();
+        String message;
+        if (raw.contains('캡챠') ||
+            raw.contains('reCAPTCHA') ||
+            raw.contains('팝업') ||
+            raw.contains('인증이 취소') ||
+            raw.contains('취소되었습니다')) {
+          // AuthService에서 이미 사용자 친화 메시지로 변환된 케이스
+          message = raw;
+        } else if (raw.contains('too-many-requests') ||
+            raw.contains('너무 많은 요청')) {
+          message =
+              '인증번호 발송 횟수 제한을 초과했습니다. 잠시 후 다시 시도해주세요.';
+        } else if (raw.contains('internal-error') ||
+            raw.contains('internal error') ||
+            raw.contains('An internal error has occurred')) {
+          message = '일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
+        } else if (raw.isEmpty) {
+          message = '인증번호 재발송에 실패했습니다.';
+        } else {
+          message = '인증번호 재발송에 실패했습니다. 잠시 후 다시 시도해주세요.';
+        }
         setState(() {
           _isResending = false;
+          _errorMessage = message;
         });
-        SnackbarUtil.showError(context, '인증번호 재발송에 실패했습니다: ${e.toString()}');
       }
     }
   }
@@ -301,33 +327,32 @@ class _VerificationCodeScreenState extends State<VerificationCodeScreen> {
     return Scaffold(
       backgroundColor: AppColors.backgroundWhite,
       body: SafeArea(
-        child: SingleChildScrollView(
-          child: Column(
-            children: [
-              // 뒤로가기 버튼
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: IconButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(
-                      Icons.arrow_back_ios,
-                      color: AppColors.textPrimary,
-                    ),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
+        child: Column(
+          children: [
+            // 뒤로가기 버튼
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: IconButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(
+                    Icons.arrow_back_ios,
+                    color: AppColors.textPrimary,
                   ),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
                 ),
               ),
+            ),
 
-              // 메인 콘텐츠
-              Padding(
+            // 메인 콘텐츠 (스크롤 가능)
+            Expanded(
+              child: SingleChildScrollView(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const SizedBox(height: 30),
                     // 제목
                     Text(
                       '인증번호를 입력해주세요.',
@@ -338,7 +363,7 @@ class _VerificationCodeScreenState extends State<VerificationCodeScreen> {
                         letterSpacing: -0.5,
                       ),
                     ),
-                    const SizedBox(height: 12),
+
                     // 안내 문구
                     Text(
                       '휴대폰 번호로 발송된 인증번호를 입력해주세요.',
@@ -348,7 +373,7 @@ class _VerificationCodeScreenState extends State<VerificationCodeScreen> {
                         height: 1.5,
                       ),
                     ),
-                    const SizedBox(height: 40),
+                    const SizedBox(height: 30),
                     // 전화번호 표시 필드 (읽기 전용)
                     TextField(
                       readOnly: true,
@@ -360,44 +385,43 @@ class _VerificationCodeScreenState extends State<VerificationCodeScreen> {
                         color: AppColors.textPrimary,
                         fontWeight: FontWeight.w500,
                       ),
-                      decoration:
-                          TextFieldDecorationUtil.readOnlyDecoration(
-                            prefixIcon: Padding(
-                              padding: const EdgeInsets.only(
-                                top: 10,
-                                left: 12,
-                                right: 6,
-                                bottom: 6,
-                              ),
-                              child: SvgPicture.asset(
-                                'assets/icons/phone-icon.svg',
-                                width: 24,
-                                height: 24,
-                                colorFilter: ColorFilter.mode(
-                                  AppColors.textSecondary,
-                                  BlendMode.srcIn,
-                                ),
-                              ),
-                            ),
-                          ).copyWith(
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(16),
-                              borderSide: BorderSide.none,
-                            ),
-
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(16),
-                              borderSide: BorderSide.none,
-                            ),
-                            errorBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(16),
-                              borderSide: BorderSide.none,
-                            ),
-                            focusedErrorBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(16),
-                              borderSide: BorderSide.none,
+                      decoration: TextFieldDecorationUtil.readOnlyDecoration(
+                        prefixIcon: Padding(
+                          padding: const EdgeInsets.only(
+                            top: 10,
+                            left: 12,
+                            right: 6,
+                            bottom: 6,
+                          ),
+                          child: SvgPicture.asset(
+                            'assets/icons/phone-icon.svg',
+                            width: 24,
+                            height: 24,
+                            colorFilter: ColorFilter.mode(
+                              AppColors.textSecondary,
+                              BlendMode.srcIn,
                             ),
                           ),
+                        ),
+                      ).copyWith(
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          borderSide: BorderSide.none,
+                        ),
+
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          borderSide: BorderSide.none,
+                        ),
+                        errorBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          borderSide: BorderSide.none,
+                        ),
+                        focusedErrorBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
                     ),
                     const SizedBox(height: 10),
                     // 인증번호 입력 필드
@@ -469,16 +493,18 @@ class _VerificationCodeScreenState extends State<VerificationCodeScreen> {
                             ' 인증번호 재발송',
                             style: TextStyle(
                               fontSize: 14,
-                              color: _isResending
-                                  ? AppColors.textLight
-                                  : Colors.white,
+                              color:
+                                  _isResending
+                                      ? AppColors.textLight
+                                      : Colors.white,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: _isResending
-                                ? AppColors.borderLight
-                                : AppColors.primaryGreen,
+                            backgroundColor:
+                                _isResending
+                                    ? AppColors.borderLight
+                                    : AppColors.primaryGreen,
                             disabledBackgroundColor: AppColors.borderLight,
                             foregroundColor: Colors.white,
                             disabledForegroundColor: AppColors.textLight,
@@ -494,61 +520,58 @@ class _VerificationCodeScreenState extends State<VerificationCodeScreen> {
                         ),
                       ],
                     ),
-
-                    // 인증하기 버튼
-                    const SizedBox(height: 32),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 0,
-                        vertical: 12,
-                      ),
-                      child: SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed:
-                              (_isButtonEnabled &&
-                                  !_isVerifying &&
-                                  _remainingSeconds > 0)
-                              ? _onVerify
-                              : null,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.primaryGreen,
-                            foregroundColor: Colors.white,
-                            disabledBackgroundColor: AppColors.borderLight,
-                            disabledForegroundColor: AppColors.textLight,
-                            padding: const EdgeInsets.symmetric(vertical: 18),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            elevation: 0,
-                          ),
-                          child: _isVerifying
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                      AppColors.primaryGreen,
-                                    ),
-                                  ),
-                                )
-                              : const Text(
-                                  '인증하기',
-                                  style: TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 24),
                   ],
                 ),
               ),
-            ],
-          ),
+            ),
+
+            // 인증하기 버튼 (하단 고정)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed:
+                      (_isButtonEnabled &&
+                              !_isVerifying &&
+                              _remainingSeconds > 0)
+                          ? _onVerify
+                          : null,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryGreen,
+                    foregroundColor: Colors.white,
+                    disabledBackgroundColor: AppColors.borderLight,
+                    disabledForegroundColor: AppColors.textLight,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    elevation: 0,
+                  ),
+                  child:
+                      _isVerifying
+                          ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                AppColors.primaryGreen,
+                              ),
+                            ),
+                          )
+                          : const Text(
+                            '인증하기',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

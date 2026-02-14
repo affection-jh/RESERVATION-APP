@@ -518,7 +518,6 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
   }
 
   Future<void> _handleDeleteMember() async {
-    // 바텀시트가 닫혀도 안전하게 사용할 상위 Navigator context 확보
     final rootNavigator = Navigator.of(context, rootNavigator: true);
     final rootContext = rootNavigator.context;
 
@@ -549,7 +548,6 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     );
     final placeId = placeProvider.currentPlace?.id;
     if (placeId == null) {
-      SnackbarUtil.showError(rootContext, '플레이스를 찾을 수 없습니다.');
       // 바텀시트 다시 열기
       MemberDetailBottomSheet.show(context: rootContext, member: widget.member);
       return;
@@ -579,11 +577,7 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
 
       // 스트림으로 자동 반영되지만, 즉시 갱신이 필요하면 재로드
       await memberProvider.loadMembers(placeId);
-
-      // 성공 시 바텀시트 다시 열지 않음
-      SnackbarUtil.showSuccess(rootContext, '멤버가 삭제되었습니다.');
     } catch (e) {
-      SnackbarUtil.showError(rootContext, '멤버 삭제 중 오류가 발생했습니다: $e');
       // 에러 발생 시 바텀시트 다시 열기
       MemberDetailBottomSheet.show(context: rootContext, member: widget.member);
     }

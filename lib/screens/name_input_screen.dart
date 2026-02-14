@@ -149,7 +149,7 @@ class _NameInputScreenState extends State<NameInputScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const SizedBox(height: 40),
+                    const SizedBox(height: 20),
                     // 제목
                     Text(
                       '이름을 입력해주세요',
@@ -160,17 +160,8 @@ class _NameInputScreenState extends State<NameInputScreen> {
                         letterSpacing: -0.5,
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    // 안내 문구
-                    Text(
-                      '원활한 관리를 위해 실명을 입력해주세요.',
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: AppColors.textSecondary,
-                        height: 1.5,
-                      ),
-                    ),
-                    const SizedBox(height: 34),
+
+                    const SizedBox(height: 20),
 
                     TextField(
                       controller: _nameController,
@@ -200,9 +191,10 @@ class _NameInputScreenState extends State<NameInputScreen> {
                         labelText: '이름',
                         labelStyle: TextStyle(
                           fontSize: 18,
-                          color: _errorMessage != null
-                              ? Colors.red
-                              : AppColors.primaryGreen,
+                          color:
+                              _errorMessage != null
+                                  ? Colors.red
+                                  : AppColors.primaryGreen,
                           fontWeight: FontWeight.w500,
                         ),
                         floatingLabelBehavior: FloatingLabelBehavior.always,
@@ -218,27 +210,30 @@ class _NameInputScreenState extends State<NameInputScreen> {
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(16),
                           borderSide: BorderSide(
-                            color: _errorMessage != null
-                                ? Colors.red
-                                : AppColors.primaryGreen,
+                            color:
+                                _errorMessage != null
+                                    ? Colors.red
+                                    : AppColors.primaryGreen,
                             width: 1,
                           ),
                         ),
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(16),
                           borderSide: BorderSide(
-                            color: _errorMessage != null
-                                ? Colors.red
-                                : AppColors.primaryGreen,
+                            color:
+                                _errorMessage != null
+                                    ? Colors.red
+                                    : AppColors.primaryGreen,
                             width: 1,
                           ),
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(16),
                           borderSide: BorderSide(
-                            color: _errorMessage != null
-                                ? Colors.red
-                                : AppColors.primaryGreen,
+                            color:
+                                _errorMessage != null
+                                    ? Colors.red
+                                    : AppColors.primaryGreen,
                             width: 1,
                           ),
                         ),
@@ -264,42 +259,42 @@ class _NameInputScreenState extends State<NameInputScreen> {
               ),
             ), // 완료 버튼
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
               child: SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: (_isFormValid() && !_isSubmitting)
-                      ? _onSubmit
-                      : null,
+                  onPressed:
+                      (_isFormValid() && !_isSubmitting) ? _onSubmit : null,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primaryGreen,
                     foregroundColor: Colors.white,
                     disabledBackgroundColor: AppColors.borderLight,
                     disabledForegroundColor: AppColors.textLight,
-                    padding: const EdgeInsets.symmetric(vertical: 18),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(20),
                     ),
                     elevation: 0,
                   ),
-                  child: _isSubmitting
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              AppColors.primaryGreen,
+                  child:
+                      _isSubmitting
+                          ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                AppColors.primaryGreen,
+                              ),
+                            ),
+                          )
+                          : const Text(
+                            '완료',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
-                        )
-                      : const Text(
-                          '완료',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
                 ),
               ),
             ),

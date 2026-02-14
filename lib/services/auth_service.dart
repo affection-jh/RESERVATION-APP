@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../models/user.dart' as models;
 import '../models/admin_user.dart';
@@ -51,6 +52,11 @@ class AuthService {
 
   // 현재 Firebase 사용자 (외부 접근용)
   firebase_auth.User? get currentFirebaseUser => _auth.currentUser;
+
+  // Web PhoneAuth: signInWithPhoneNumber 결과(캡챠 완료 후 confirm에 필요)
+  ConfirmationResult? _webConfirmationResult;
+  // Web: 같은 번호로 이미 발송한 경우 재호출 시 리캡챠 없이 재사용 (이중 호출/재발송 시 리캡챠 중복 방지)
+  String? _webLastSentPhone;
 
   // 현재 선택된 플레이스
   Place? _currentPlace;
@@ -104,6 +110,60 @@ class AuthService {
       '[AuthService.sendVerificationCode] 포맷팅된 전화번호: "$formattedPhone"',
     );
 
+    // ✅ Web은 verifyPhoneNumber 미지원 → signInWithPhoneNumber만 사용 (매번 reCAPTCHA 표시).
+    //    앱 개발 시 리캡챠 없이 테스트하려면 iOS 시뮬레이터/Android 에뮬레이터 또는 실기기에서 실행하세요.
+    if (kIsWeb) {
+      try {
+        // 이미 같은 번호로 발송 완료된 경우 리캡챠 없이 기존 결과 재사용 (이중 호출/재발송 시 리캡챠 중복 방지)
+        if (_webConfirmationResult != null && _webLastSentPhone == formattedPhone) {
+          final verificationId = _webConfirmationResult!.verificationId;
+          debugPrint('[AuthService.sendVerificationCode] (web) 기존 발송 결과 재사용 (리캡챠 스킵)');
+          await _storageService.saveVerificationId(verificationId, phoneNumber);
+          return verificationId;
+        }
+
+        debugPrint(
+          '[AuthService.sendVerificationCode] (web) signInWithPhoneNumber 호출 시작...',
+        );
+        final confirmationResult = await _auth.signInWithPhoneNumber(
+          formattedPhone,
+        );
+        _webConfirmationResult = confirmationResult;
+        _webLastSentPhone = formattedPhone;
+
+        final verificationId = confirmationResult.verificationId;
+        debugPrint('[AuthService.sendVerificationCode] (web) ✅ 완료');
+        debugPrint(
+          '[AuthService.sendVerificationCode] (web) verificationId: "${verificationId.substring(0, verificationId.length > 20 ? 20 : verificationId.length)}..." (length: ${verificationId.length})',
+        );
+
+        // 다른 플로우와 일관성 유지 (저장소에도 보관)
+        await _storageService.saveVerificationId(verificationId, phoneNumber);
+        return verificationId;
+      } on FirebaseAuthException catch (e) {
+        debugPrint('[AuthService.sendVerificationCode] (web) ❌ 실패');
+        debugPrint('[AuthService.sendVerificationCode] (web) 에러 코드: ${e.code}');
+        debugPrint(
+          '[AuthService.sendVerificationCode] (web) 에러 메시지: ${e.message}',
+        );
+
+        // web 전용 사용자 친화 메시지
+        if (e.code == 'web-context-cancelled') {
+          throw Exception('캡챠(인증) 창이 닫혔습니다. 다시 시도해주세요.');
+        }
+        if (e.code == 'popup-blocked') {
+          throw Exception('팝업이 차단되어 인증을 진행할 수 없습니다. 팝업 차단을 해제해주세요.');
+        }
+        if (e.code == 'too-many-requests') {
+          throw Exception('너무 많은 요청이 발생했습니다. 잠시 후 다시 시도해주세요.');
+        }
+        if (e.code == 'invalid-phone-number') {
+          throw Exception('전화번호 형식이 올바르지 않습니다.');
+        }
+        throw Exception('인증 실패: ${e.message ?? e.code}');
+      }
+    }
+
     // Completer를 사용하여 비동기 콜백을 Future로 변환
     final completer = Completer<String>();
 
@@ -139,10 +199,16 @@ class AuthService {
           );
 
           if (!completer.isCompleted) {
-            // 플랫폼 채널 에러인 경우 더 친화적인 메시지
+            // 플랫폼/사용자 취소 등 사용자 친화 메시지
             if (e.code == 'channel-error') {
               completer.completeError(
                 Exception('인증 서비스 초기화 중입니다. 잠시 후 다시 시도해주세요.'),
+              );
+            } else if (e.code == 'web-context-cancelled' ||
+                (e.message != null &&
+                    e.message!.toLowerCase().contains('cancelled by the user'))) {
+              completer.completeError(
+                Exception('인증이 취소되었습니다. 다시 시도해주세요.'),
               );
             } else if (e.code == 'invalid-phone-number') {
               completer.completeError(Exception('전화번호 형식이 올바르지 않습니다.'));
@@ -212,7 +278,7 @@ class AuthService {
     // 타임아웃 설정 (60초 후 완료되지 않으면 에러)
     Future.delayed(const Duration(seconds: 65), () {
       if (!completer.isCompleted) {
-        completer.completeError(Exception('인증 코드 발송 시간이 초과되었습니다. 다시 시도해주세요.'));
+        completer.completeError(Exception('인증 코드 발송 시간이 초과되었습니다.\n다시 시도해주세요.'));
       }
     });
 
@@ -253,46 +319,53 @@ class AuthService {
     );
 
     if (firebaseUser == null) {
-      // 로그인되지 않은 경우에만 인증 코드로 로그인
-      // verificationId가 없으면 저장된 것 사용
-      final finalVerificationId =
-          verificationId ?? await _storageService.getVerificationId();
-
-      debugPrint(
-        '[AuthService.verifyCodeAndSignIn] finalVerificationId: "${finalVerificationId?.substring(0, finalVerificationId.length > 20 ? 20 : finalVerificationId.length)}..." (length: ${finalVerificationId?.length ?? 0})',
-      );
-
-      if (finalVerificationId == null) {
-        debugPrint(
-          '[AuthService.verifyCodeAndSignIn] ❌ verificationId를 찾을 수 없음',
-        );
-        throw Exception('인증 ID를 찾을 수 없습니다. 인증 코드를 다시 요청해주세요.');
-      }
-
-      // PhoneAuthCredential 생성
-      final credential = PhoneAuthProvider.credential(
-        verificationId: finalVerificationId,
-        smsCode: smsCode,
-      );
-
-      debugPrint('[AuthService.verifyCodeAndSignIn] PhoneAuthCredential 생성 완료');
-      debugPrint(
-        '[AuthService.verifyCodeAndSignIn] signInWithCredential 호출 시작...',
-      );
-
-      // Firebase Auth에 로그인 (자동으로 인증 상태 저장)
-      UserCredential userCredential;
       try {
-        userCredential = await _auth.signInWithCredential(credential);
-        debugPrint(
-          '[AuthService.verifyCodeAndSignIn] ✅ signInWithCredential 성공',
-        );
-        debugPrint(
-          '[AuthService.verifyCodeAndSignIn] userCredential.user.uid: ${userCredential.user?.uid}',
-        );
-        debugPrint(
-          '[AuthService.verifyCodeAndSignIn] userCredential.user.phoneNumber: ${userCredential.user?.phoneNumber}',
-        );
+        // ✅ Web: ConfirmationResult.confirm()
+        if (kIsWeb) {
+          final confirmationResult = _webConfirmationResult;
+          if (confirmationResult == null) {
+            throw Exception('인증 ID를 찾을 수 없습니다. 인증 코드를 다시 요청해주세요.');
+          }
+          debugPrint(
+            '[AuthService.verifyCodeAndSignIn] (web) confirm 호출 시작...',
+          );
+          final userCredential = await confirmationResult.confirm(smsCode);
+          debugPrint('[AuthService.verifyCodeAndSignIn] (web) ✅ confirm 성공');
+          firebaseUser = userCredential.user;
+        } else {
+          // Native: verificationId + smsCode로 credential 생성
+          final finalVerificationId =
+              verificationId ?? await _storageService.getVerificationId();
+
+          final preview =
+              (finalVerificationId == null || finalVerificationId.isEmpty)
+                  ? 'null/empty'
+                  : '${finalVerificationId.substring(0, finalVerificationId.length > 20 ? 20 : finalVerificationId.length)}...';
+          debugPrint(
+            '[AuthService.verifyCodeAndSignIn] finalVerificationId: "$preview" (length: ${finalVerificationId?.length ?? 0})',
+          );
+
+          if (finalVerificationId == null || finalVerificationId.isEmpty) {
+            debugPrint(
+              '[AuthService.verifyCodeAndSignIn] ❌ verificationId를 찾을 수 없음',
+            );
+            throw Exception('인증 ID를 찾을 수 없습니다. 인증 코드를 다시 요청해주세요.');
+          }
+
+          final credential = PhoneAuthProvider.credential(
+            verificationId: finalVerificationId,
+            smsCode: smsCode,
+          );
+
+          debugPrint(
+            '[AuthService.verifyCodeAndSignIn] signInWithCredential 호출 시작...',
+          );
+          final userCredential = await _auth.signInWithCredential(credential);
+          debugPrint(
+            '[AuthService.verifyCodeAndSignIn] ✅ signInWithCredential 성공',
+          );
+          firebaseUser = userCredential.user;
+        }
       } on FirebaseAuthException catch (e) {
         debugPrint(
           '[AuthService.verifyCodeAndSignIn] ❌ FirebaseAuthException 발생',
@@ -305,13 +378,20 @@ class AuthService {
             '[AuthService.verifyCodeAndSignIn] 스택 트레이스: ${e.stackTrace}',
           );
         }
-        // 세션 만료 또는 잘못된 인증 코드 에러 처리
+        // 잘못된 인증 코드: 재입력 가능하도록 verificationId 유지
+        if (e.code == 'invalid-verification-code') {
+          throw Exception('인증번호가 올바르지 않습니다.');
+        }
+        // 세션 만료(또는 verificationId 무효): 재발송 필요
         if (e.code == 'session-expired' ||
-            e.code == 'invalid-verification-code') {
-          // 저장된 verificationId 삭제 (재발송 필요)
+            e.code == 'invalid-verification-id') {
           await _storageService.clearVerificationData();
-          debugPrint('[AuthService.verifyCodeAndSignIn] verificationId 삭제 완료');
-          throw Exception('인증 코드가 만료되었거나 올바르지 않습니다. 인증 코드를 다시 요청해주세요.');
+          _webConfirmationResult = null;
+          _webLastSentPhone = null;
+          debugPrint(
+            '[AuthService.verifyCodeAndSignIn] verificationId 삭제 완료 (세션 만료/무효)',
+          );
+          throw Exception('인증 시간이 만료되었습니다. 인증번호를 다시 요청해주세요.');
         }
         rethrow;
       } catch (e, stackTrace) {
@@ -321,8 +401,6 @@ class AuthService {
         debugPrint('[AuthService.verifyCodeAndSignIn] 스택 트레이스: $stackTrace');
         rethrow;
       }
-
-      firebaseUser = userCredential.user;
     }
 
     if (firebaseUser == null) {
@@ -386,6 +464,8 @@ class AuthService {
 
     // 인증 정보 삭제
     await _storageService.clearVerificationData();
+    _webConfirmationResult = null;
+    _webLastSentPhone = null;
 
     // 인증 완료 처리
     return await _completeAuthentication(user);
@@ -399,6 +479,8 @@ class AuthService {
   /// 인증 정보 초기화 (뒤로가기 등으로 취소 시 사용)
   Future<void> clearVerificationData() async {
     await _storageService.clearVerificationData();
+    _webConfirmationResult = null;
+    _webLastSentPhone = null;
   }
 
   /// (관리자 플로우용) SMS 인증코드만 검증하고 바로 로그아웃.
@@ -630,8 +712,18 @@ class AuthService {
 
   /// 관리자 로그아웃
   Future<void> logoutAdmin() async {
-    await _storageService.clearAdminData();
-    _adminService.logout();
+    debugPrint('[AuthService.logoutAdmin] 시작');
+    try {
+      debugPrint('[AuthService.logoutAdmin] clearAdminData 호출');
+      await _storageService.clearAdminData();
+      debugPrint('[AuthService.logoutAdmin] _adminService.logout() 호출');
+      _adminService.logout();
+      debugPrint('[AuthService.logoutAdmin] 완료');
+    } catch (e, stackTrace) {
+      debugPrint('[AuthService.logoutAdmin] ❌ 에러: $e');
+      debugPrint('[AuthService.logoutAdmin] 스택: $stackTrace');
+      rethrow;
+    }
   }
 
   /// 최근 접속한 플레이스 업데이트
@@ -1403,26 +1495,41 @@ class AuthService {
     await _storageService.saveLastEntryMode('member');
   }
 
-  /// 로그아웃
+  /// 로그아웃 (일반 로그아웃 및 회원탈퇴 완료 후 호출)
   Future<void> logout() async {
-    // Firebase Auth 세션 정리
-    await _auth.signOut();
+    debugPrint('[AuthService.logout] 시작');
+    try {
+      // Firebase Auth 세션 정리
+      debugPrint('[AuthService.logout] Firebase Auth signOut 호출');
+      await _auth.signOut();
+      debugPrint('[AuthService.logout] Firebase Auth signOut 완료');
 
-    _currentPlace = null;
-    _userService.logout();
-    _adminService.logout();
+      _currentPlace = null;
+      debugPrint('[AuthService.logout] _userService.logout() 호출');
+      _userService.logout();
+      debugPrint('[AuthService.logout] _adminService.logout() 호출');
+      _adminService.logout();
 
-    // 사용자 데이터 삭제
-    await _storageService.clearUserData();
+      // 사용자 데이터 삭제
+      debugPrint('[AuthService.logout] clearUserData 호출');
+      await _storageService.clearUserData();
 
-    // 관리자 데이터도 삭제 (일반 사용자 로그아웃 시에도 관리자 자동 로그인 방지)
-    await _storageService.clearAdminData();
+      // 관리자 데이터도 삭제 (일반 사용자 로그아웃 시에도 관리자 자동 로그인 방지)
+      debugPrint('[AuthService.logout] clearAdminData 호출');
+      await _storageService.clearAdminData();
 
-    // 마지막 접속 모드 삭제 (완전 로그아웃)
-    await _storageService.clearLastEntryMode();
+      // 마지막 접속 모드 삭제 (완전 로그아웃)
+      debugPrint('[AuthService.logout] clearLastEntryMode 호출');
+      await _storageService.clearLastEntryMode();
 
-    // 인증 상태 스트림 초기화
-    _authStateStream = null;
+      // 인증 상태 스트림 초기화
+      _authStateStream = null;
+      debugPrint('[AuthService.logout] 완료');
+    } catch (e, stackTrace) {
+      debugPrint('[AuthService.logout] ❌ 에러: $e');
+      debugPrint('[AuthService.logout] 스택: $stackTrace');
+      rethrow;
+    }
   }
 }
 

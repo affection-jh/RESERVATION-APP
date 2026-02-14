@@ -171,11 +171,12 @@ class _AdminPinRegisterScreenState extends State<AdminPinRegisterScreen> {
         // 모든 이전 화면을 제거하고 플레이스 등록 화면으로 이동
         Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(
-            builder: (context) => AdminPlaceRegistrationScreen(
-              phoneNumber: widget.phoneNumber,
-              verificationCode: widget.verificationCode,
-              isFromRegistration: true, // 회원가입 플로우
-            ),
+            builder:
+                (context) => AdminPlaceRegistrationScreen(
+                  phoneNumber: widget.phoneNumber,
+                  verificationCode: widget.verificationCode,
+                  isFromRegistration: true, // 회원가입 플로우
+                ),
           ),
           (route) => false, // 모든 이전 화면 제거
         );
@@ -202,11 +203,12 @@ class _AdminPinRegisterScreenState extends State<AdminPinRegisterScreen> {
         // 에러만 보여주고 재시도 가능하게 유지
         setState(() {
           _isLoading = false;
-          _errorMessage = msg.isNotEmpty
-              ? msg
-              : msg.contains('이미 등록된')
-              ? '이미 등록된 관리자입니다. 이전 화면으로 돌아가서 다시 시도해주세요.'
-              : '관리자 코드 등록에 실패했습니다. 다시 시도해주세요.';
+          _errorMessage =
+              msg.isNotEmpty
+                  ? msg
+                  : msg.contains('이미 등록된')
+                  ? '이미 등록된 관리자입니다. 이전 화면으로 돌아가서 다시 시도해주세요.'
+                  : '관리자 코드 등록에 실패했습니다. 다시 시도해주세요.';
           _isPinVerified = false;
         });
         _pinController.clear();
@@ -217,11 +219,12 @@ class _AdminPinRegisterScreenState extends State<AdminPinRegisterScreen> {
           // UnimplementedError는 무시하고 플레이스 생성 화면으로 이동
           Navigator.of(context).pushAndRemoveUntil(
             MaterialPageRoute(
-              builder: (context) => AdminPlaceRegistrationScreen(
-                phoneNumber: widget.phoneNumber,
-                verificationCode: widget.verificationCode,
-                isFromRegistration: true,
-              ),
+              builder:
+                  (context) => AdminPlaceRegistrationScreen(
+                    phoneNumber: widget.phoneNumber,
+                    verificationCode: widget.verificationCode,
+                    isFromRegistration: true,
+                  ),
             ),
             (route) => false, // 모든 이전 화면 제거
           );
@@ -263,29 +266,28 @@ class _AdminPinRegisterScreenState extends State<AdminPinRegisterScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const SizedBox(height: 20),
                     // 제목
                     _isConfirming
                         ? Text(
-                            '다시 한번 입력해주세요',
-                            style: TextStyle(
-                              fontSize: 26,
-                              fontWeight: FontWeight.bold,
-                              color: AppColors.textPrimary,
-                              letterSpacing: -0.5,
-                            ),
-                          )
-                        : Text(
-                            '관리자코드를 설정합니다',
-                            style: TextStyle(
-                              fontSize: 26,
-                              fontWeight: FontWeight.bold,
-                              color: AppColors.textPrimary,
-                              letterSpacing: -0.5,
-                            ),
+                          '다시 한번 입력해주세요',
+                          style: TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.textPrimary,
+                            letterSpacing: -0.5,
                           ),
+                        )
+                        : Text(
+                          '관리자코드를 설정합니다',
+                          style: TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.textPrimary,
+                            letterSpacing: -0.5,
+                          ),
+                        ),
 
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 4),
                     Text(
                       _isConfirming
                           ? '확인을 위해 동일한 코드를 다시 입력해주세요.'
@@ -309,40 +311,40 @@ class _AdminPinRegisterScreenState extends State<AdminPinRegisterScreen> {
             ),
             // 하단 버튼 (키보드 위에 붙음)
             Padding(
-              padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
               child: SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: (_isFormValid() && !_isLoading)
-                      ? _onRegister
-                      : null,
+                  onPressed:
+                      (_isFormValid() && !_isLoading) ? _onRegister : null,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primaryGreen,
                     disabledBackgroundColor: AppColors.borderLight,
-                    padding: const EdgeInsets.symmetric(vertical: 18),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
+                      borderRadius: BorderRadius.circular(20),
                     ),
                   ),
-                  child: _isLoading
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              AppColors.primaryGreen,
+                  child:
+                      _isLoading
+                          ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                AppColors.primaryGreen,
+                              ),
+                            ),
+                          )
+                          : Text(
+                            _isConfirming ? '관리자 코드 등록' : '다음',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white,
                             ),
                           ),
-                        )
-                      : Text(
-                          _isConfirming ? '관리자 코드 등록' : '다음',
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
-                          ),
-                        ),
                 ),
               ),
             ),
@@ -372,9 +374,8 @@ class _AdminPinRegisterScreenState extends State<AdminPinRegisterScreen> {
         color: AppColors.backgroundWhite,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: showGreenBorder
-              ? AppColors.primaryGreen
-              : AppColors.borderLight,
+          color:
+              showGreenBorder ? AppColors.primaryGreen : AppColors.borderLight,
           width: showGreenBorder ? 2 : 1,
         ),
       ),
@@ -389,9 +390,8 @@ class _AdminPinRegisterScreenState extends State<AdminPinRegisterScreen> {
     final filledPinTheme = defaultPinTheme.copyWith(
       decoration: defaultPinTheme.decoration!.copyWith(
         border: Border.all(
-          color: showGreenBorder
-              ? AppColors.primaryGreen
-              : AppColors.borderLight,
+          color:
+              showGreenBorder ? AppColors.primaryGreen : AppColors.borderLight,
           width: 2,
         ),
       ),
@@ -412,15 +412,12 @@ class _AdminPinRegisterScreenState extends State<AdminPinRegisterScreen> {
             length: 6,
             controller: _pinController,
             focusNode: _pinFocusNode,
-            defaultPinTheme: _errorMessage.isNotEmpty
-                ? errorPinTheme
-                : defaultPinTheme,
-            focusedPinTheme: _errorMessage.isNotEmpty
-                ? errorPinTheme
-                : focusedPinTheme,
-            submittedPinTheme: _errorMessage.isNotEmpty
-                ? errorPinTheme
-                : filledPinTheme,
+            defaultPinTheme:
+                _errorMessage.isNotEmpty ? errorPinTheme : defaultPinTheme,
+            focusedPinTheme:
+                _errorMessage.isNotEmpty ? errorPinTheme : focusedPinTheme,
+            submittedPinTheme:
+                _errorMessage.isNotEmpty ? errorPinTheme : filledPinTheme,
             errorPinTheme: errorPinTheme,
             pinputAutovalidateMode: PinputAutovalidateMode.onSubmit,
             showCursor: true,

@@ -311,21 +311,23 @@ class _CourseBasicInfoScreenState extends State<CourseBasicInfoScreen> {
               child: SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: (_isFormValid() && !_isUploading)
-                      ? () {
-                          widget.onNext(
-                            CourseBasicInfoData(
-                              name: _nameController.text.trim(),
-                              description: _descriptionController.text.trim(),
-                              imageUrl: _uploadedImageUrl,
-                            ),
-                          );
-                        }
-                      : null,
+                  onPressed:
+                      (_isFormValid() && !_isUploading)
+                          ? () {
+                            widget.onNext(
+                              CourseBasicInfoData(
+                                name: _nameController.text.trim(),
+                                description: _descriptionController.text.trim(),
+                                imageUrl: _uploadedImageUrl,
+                              ),
+                            );
+                          }
+                          : null,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: (_isFormValid() && !_isUploading)
-                        ? AppColors.primaryGreen
-                        : AppColors.borderLight,
+                    backgroundColor:
+                        (_isFormValid() && !_isUploading)
+                            ? AppColors.primaryGreen
+                            : AppColors.borderLight,
                     disabledBackgroundColor: AppColors.borderLight,
                     padding: const EdgeInsets.symmetric(vertical: 18),
                     shape: RoundedRectangleBorder(
@@ -338,9 +340,10 @@ class _CourseBasicInfoScreenState extends State<CourseBasicInfoScreen> {
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
-                      color: (_isFormValid() && !_isUploading)
-                          ? Colors.white
-                          : AppColors.textSecondary,
+                      color:
+                          (_isFormValid() && !_isUploading)
+                              ? Colors.white
+                              : AppColors.textSecondary,
                     ),
                   ),
                 ),
@@ -478,7 +481,7 @@ class _CourseBasicInfoScreenState extends State<CourseBasicInfoScreen> {
               color: Colors.black.withOpacity(0.5),
               child: const Center(
                 child: CircularProgressIndicator(
-                  color: AppColors.primaryGreen,
+                  color: Colors.white,
                   strokeWidth: 2,
                 ),
               ),

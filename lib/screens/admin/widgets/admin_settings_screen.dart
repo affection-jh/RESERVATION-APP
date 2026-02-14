@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../../theme/app_colors.dart';
 import '../../../services/auth_service.dart';
 import '../../../widgets/common_dialog.dart';
+import '../../../providers/auth_provider.dart';
 
 /// 관리자 설정 화면
 class AdminSettingsScreen extends StatelessWidget {
@@ -121,34 +123,55 @@ class AdminSettingsScreen extends StatelessWidget {
           ),
           const SizedBox(height: 16),
 
-          // 4. 계정 관리
+          // 4. 계정 관리 (로그인 시: 로그아웃 / 비로그인 시: 로그인하기)
           _buildSection(
             context,
             title: '계정 관리',
             children: [
-              _SettingTile(
-                icon: Icons.logout,
-                label: '로그아웃',
-                textColor: Colors.red,
-                onTap: () async {
-                  final confirmed = await CommonDialog.show(
-                    context: context,
-                    title: '로그아웃',
-                    message: '로그아웃 하시겠습니까?',
-                    confirmText: '로그아웃',
-                    cancelText: '취소',
-                  );
+              Builder(
+                builder: (context) {
+                  final isLoggedIn =
+                      Provider.of<AuthProvider>(context).isAuthenticated;
+                  if (isLoggedIn) {
+                    return _SettingTile(
+                      icon: Icons.logout,
+                      label: '로그아웃',
+                      textColor: Colors.red,
+                      onTap: () async {
+                        final confirmed = await CommonDialog.show(
+                          context: context,
+                          title: '로그아웃',
+                          message: '로그아웃 하시겠습니까?',
+                          confirmText: '로그아웃',
+                          cancelText: '취소',
+                        );
 
-                  if (confirmed == true && context.mounted) {
-                    final authService = AuthService();
-                    await authService.logout();
-                    // 앱 시작 화면으로 이동 (자동 로그인 확인)
-                    Navigator.pushNamedAndRemoveUntil(
-                      context,
-                      '/',
-                      (route) => false,
+                        if (confirmed == true && context.mounted) {
+                          final authService = AuthService();
+                          await authService.logout();
+                          if (context.mounted) {
+                            Navigator.pushNamedAndRemoveUntil(
+                              context,
+                              '/',
+                              (route) => false,
+                            );
+                          }
+                        }
+                      },
                     );
                   }
+                  return _SettingTile(
+                    icon: Icons.login,
+                    label: '로그인하기',
+                    textColor: AppColors.primaryGreen,
+                    onTap: () {
+                      Navigator.pushNamedAndRemoveUntil(
+                        context,
+                        '/',
+                        (route) => false,
+                      );
+                    },
+                  );
                 },
               ),
             ],

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:reservation/utils/timezone_utils.dart';
 import '../../../theme/app_colors.dart';
@@ -18,6 +19,8 @@ class DragCalendarEditor extends StatefulWidget {
   final ScrollController? scrollController;
   final Function(List<SessionDraft>) onSessionsChanged;
   final Function(bool)? onDragStateChanged;
+  /// 빈 영역 터치 시 스크롤 막기 요청( true ), 손 떼면 해제( false ). 롱프레스 인식 전에 스크롤이 제스처를 가져가는 것 방지.
+  final Function(bool)? onScrollBlockRequested;
   final Function(String startTime, String endTime, int dayOfWeek)? onDragEnd;
   final VoidCallback? onClearSelection;
   final Function(SessionDraft session)? onEditSession; // 기존 세션 편집 콜백
@@ -38,6 +41,7 @@ class DragCalendarEditor extends StatefulWidget {
     this.scrollController,
     required this.onSessionsChanged,
     this.onDragStateChanged,
+    this.onScrollBlockRequested,
     this.onDragEnd,
     this.onClearSelection,
     this.onEditSession,
@@ -434,37 +438,45 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
         // 세션 블록의 클릭을 통과시키기 위해 translucent 사용
         behavior: HitTestBehavior.translucent,
         onPointerDown: (event) {
-          // 세션 블록 위인지 확인
           final y = event.localPosition.dy;
           final isOnSession = _isPointerOnSession(
             y,
             rangeStartMinutes,
             yForMinute,
           );
+          debugPrint(
+            '[DragCalendarEditor] onPointerDown day=${widget.dayOfWeek} dy=$y isOnSession=$isOnSession',
+          );
 
-          // 세션 블록 위가 아니면 드래그 시작
           if (!isOnSession) {
-          _longPressStartPosition = event.localPosition;
-          _longPressTimer?.cancel();
-          _longPressTimer = Timer(const Duration(milliseconds: 500), () {
-            if (_longPressStartPosition != null) {
-              final slot = _getSlotFromPosition(
-                _longPressStartPosition!.dy,
-                rangeStartMinutes,
-                yForMinute,
-              );
-              setState(() {
-                _isDragging = true;
-                _dragStartSlot = slot;
-                _dragEndSlot = slot;
-              });
-              widget.onDragStateChanged?.call(true);
-            }
-          });
+            debugPrint(
+              '[DragCalendarEditor] 빈 영역 터치 → 500ms 타이머만 시작 (스크롤은 롱프레스 인식 후에만 막음)',
+            );
+            _longPressStartPosition = event.localPosition;
+            _longPressTimer?.cancel();
+            _longPressTimer = Timer(const Duration(milliseconds: 500), () {
+              if (_longPressStartPosition != null) {
+                debugPrint('[DragCalendarEditor] 롱프레스 500ms 완료 → 드래그 시작');
+                final slot = _getSlotFromPosition(
+                  _longPressStartPosition!.dy,
+                  rangeStartMinutes,
+                  yForMinute,
+                );
+                setState(() {
+                  _isDragging = true;
+                  _dragStartSlot = slot;
+                  _dragEndSlot = slot;
+                });
+                widget.onDragStateChanged?.call(true);
+              }
+            });
           }
         },
         onPointerMove: (event) {
           if (_isDragging && _longPressStartPosition != null) {
+            debugPrint(
+              '[DragCalendarEditor] onPointerMove (드래그 중) dy=${event.localPosition.dy}',
+            );
             final slot = _getSlotFromPosition(
               event.localPosition.dy,
               rangeStartMinutes,
@@ -496,18 +508,26 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
               _dragEndSlot = slot;
             });
           } else if (!_isDragging) {
+            debugPrint(
+              '[DragCalendarEditor] onPointerMove (드래그 아님) → 타이머 취소',
+            );
             _longPressTimer?.cancel();
             _longPressStartPosition = null;
           }
         },
         onPointerUp: (event) {
+          debugPrint(
+            '[DragCalendarEditor] onPointerUp _isDragging=$_isDragging',
+          );
           _longPressTimer?.cancel();
           if (_isDragging) {
             _endDrag(rangeStartMinutes, yForMinute);
           }
           _longPressStartPosition = null;
+          widget.onScrollBlockRequested?.call(false);
         },
         onPointerCancel: (event) {
+          debugPrint('[DragCalendarEditor] onPointerCancel');
           _longPressTimer?.cancel();
           setState(() {
             _isDragging = false;
@@ -516,6 +536,7 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
           });
           widget.onDragStateChanged?.call(false);
           _longPressStartPosition = null;
+          widget.onScrollBlockRequested?.call(false);
         },
         child: Container(color: Colors.transparent),
       ),

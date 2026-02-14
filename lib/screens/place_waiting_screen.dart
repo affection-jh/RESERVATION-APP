@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:provider/provider.dart';
 import 'package:reservation/services/user_service.dart';
+import 'package:reservation/utils/snackbar_util.dart';
 import '../theme/app_colors.dart';
 import '../models/place.dart';
 import '../models/place_membership.dart';
@@ -16,10 +17,13 @@ import '../providers/story_provider.dart';
 import '../services/firestore_service.dart';
 import '../services/member_service.dart';
 import '../services/auth_service.dart';
+import '../utils/storage_service.dart';
 import '../widgets/common_dialog.dart';
 import '../widgets/cached_image_widget.dart';
-import '../constants/app_constants.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:shimmer/shimmer.dart';
+import 'admin/admin_pin_input_screen.dart';
+import 'admin/admin_pin_register_screen.dart';
 
 /// 플레이스 대기 화면
 ///
@@ -40,16 +44,23 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
   final AuthService _authService = AuthService();
   final UserService _userService = UserService();
   final TextEditingController _searchController = TextEditingController();
+  bool _searchListenerAttached = false;
   String? _userId;
   StreamSubscription<List<PlaceMembership>>? _membershipSubscription;
-  StreamSubscription<List<Place>>? _allPlacesSubscription;
   List<PlaceMembership> _memberships = [];
   Map<String, Place> _placesMap = {};
-  List<Place> _allPlaces = []; // 실시간 검색용 전체 플레이스 목록
   bool _isLoading = true;
   bool _hasAutoNavigated = false;
   bool _requireManualEntrySelection = false;
   bool _isEnteringPlace = false;
+  String? _enteringPlaceId; // 진입 중인 플레이스 ID (해당 카드에 로딩 표시)
+  List<Place>? _serverSearchResults; // 서버 검색 결과 (null = 미요청)
+  bool _isSearchingServer = false;
+  Timer? _searchDebounce; // 실시간 검색 디바운스 (SearchService와 동일 300ms)
+  bool _linkedAdminLoaded = false; // 관리자 정보(linkedAdmin + managedIds) 최초 1회만 조회
+  List<Place> _visitHistoryPlaces = []; // 로컬 방문 기록 (검색어 없을 때 노출)
+  String? _lastSearchQuery; // 마지막으로 서버에 보낸 쿼리 (동일 쿼리 재요청 방지)
+  int _lastSearchCount = -1; // 마지막 검색 결과 개수 (접두사 확장 시 스킵 판단용)
 
   /// AuthProvider.currentUser를 보장한다.
   ///
@@ -89,14 +100,156 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
   void initState() {
     super.initState();
     _initializeUser();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadVisitHistory();
+    });
+    // 검색 입력 트리거는 컨트롤러 리스너 1곳으로 통일
+    _attachSearchListenerIfNeeded();
+  }
+
+  void _attachSearchListenerIfNeeded() {
+    if (_searchListenerAttached) return;
+    _searchController.addListener(_onSearchControllerChanged);
+    _searchListenerAttached = true;
+  }
+
+  void _onSearchControllerChanged() {
+    _onSearchChanged();
   }
 
   @override
   void dispose() {
+    if (_searchListenerAttached) {
+      _searchController.removeListener(_onSearchControllerChanged);
+      _searchListenerAttached = false;
+    }
+    _searchDebounce?.cancel();
     _membershipSubscription?.cancel();
-    _allPlacesSubscription?.cancel();
     _searchController.dispose();
     super.dispose();
+  }
+
+  /// 검색어 변경 (SearchService.onSearchChanged와 동일 패턴)
+  /// - 빈 값: 상태 초기화 + 방문 기록 로드
+  /// - 값 있음: 디바운스 300ms 후 서버 검색
+  void _onSearchChanged() {
+    final query = _searchController.text.trim();
+    _searchDebounce?.cancel();
+    debugPrint('[PlaceWaitingScreen] searchChanged: "$query"');
+
+    if (query.isEmpty) {
+      setState(() {
+        _serverSearchResults = null;
+        _isSearchingServer = false;
+        _lastSearchQuery = null;
+        _lastSearchCount = -1;
+      });
+      _loadVisitHistory();
+      return;
+    }
+
+    // 검색은 서버(searchPlaces) 전용. 전체 컬렉션 조회 사용 안 함.
+    _isSearchingServer = true;
+    if (mounted) setState(() {});
+
+    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+      _performRealTimeSearch(_searchController.text.trim());
+    });
+  }
+
+  /// 실시간 플레이스 검색 (SearchService._performRealTimeSearch와 동일 패턴)
+  /// - 접두사 확장 + 이전 결과 0~1개면 요청 스킵 (클라이언트 필터만)
+  /// - 사용자가 글자를 지우면 새로 요청
+  Future<void> _performRealTimeSearch(String q) async {
+    if (q.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _serverSearchResults = null;
+          _lastSearchQuery = null;
+          _lastSearchCount = -1;
+          _isSearchingServer = false;
+        });
+      }
+      return;
+    }
+
+    // 이전 검색 쿼리가 현재 쿼리의 접두사이고 결과가 0~1개면 서버 재요청 스킵 (서버 결과로 로컬 필터만)
+    final canUseLocalFilterOnly =
+        _serverSearchResults != null && _serverSearchResults!.isNotEmpty;
+    if (canUseLocalFilterOnly &&
+        _lastSearchQuery != null &&
+        _lastSearchQuery!.isNotEmpty &&
+        q.startsWith(_lastSearchQuery!) &&
+        _lastSearchCount <= 1) {
+      if (mounted) setState(() => _isSearchingServer = false);
+      return;
+    }
+
+    // 사용자가 텍스트를 삭제한 경우 → 새 검색 허용
+    if (_lastSearchQuery != null && q.length < _lastSearchQuery!.length) {
+      _lastSearchQuery = null;
+      _lastSearchCount = -1;
+    }
+
+    await _runServerSearch(q);
+  }
+
+  /// 서버 검색 단일 호출. 응답은 현재 검색어와 일치할 때만 반영(레이스 방지).
+  Future<void> _runServerSearch(String query) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return;
+    if (_lastSearchQuery == trimmed) return;
+    if (!mounted) return;
+
+    debugPrint('[PlaceWaitingScreen] runServerSearch: "$trimmed"');
+    setState(() => _isSearchingServer = true);
+    try {
+      final results = await _firestoreService.searchPlaces(trimmed);
+      if (!mounted) return;
+
+      final currentQuery = _searchController.text.trim();
+      if (currentQuery != trimmed) {
+        if (mounted) setState(() => _isSearchingServer = false);
+        return;
+      }
+
+      setState(() {
+        _serverSearchResults = results;
+        _lastSearchQuery = trimmed;
+        _lastSearchCount = results.length;
+        _isSearchingServer = false;
+      });
+      debugPrint(
+        '[PlaceWaitingScreen] 검색 결과 반영: "$trimmed" → ${results.length}건',
+      );
+    } catch (e) {
+      debugPrint('[PlaceWaitingScreen] 서버 검색 실패: $e');
+      if (mounted) {
+        final currentQuery = _searchController.text.trim();
+        if (currentQuery == trimmed) {
+          setState(() {
+            _lastSearchQuery = null;
+            _lastSearchCount = -1;
+            _serverSearchResults = null;
+            _isSearchingServer = false;
+          });
+        } else {
+          setState(() => _isSearchingServer = false);
+        }
+      }
+    }
+  }
+
+  /// 로컬 방문 기록 로드 (검색어 없을 때 노출용)
+  Future<void> _loadVisitHistory() async {
+    if (!mounted) return;
+    try {
+      final list = await StorageService().getVisitHistoryPlaces();
+      if (mounted) setState(() => _visitHistoryPlaces = list);
+    } catch (e) {
+      debugPrint('[PlaceWaitingScreen] 방문 기록 로드 실패: $e');
+      if (mounted) setState(() => _visitHistoryPlaces = []);
+    }
   }
 
   /// 사용자 초기화
@@ -108,13 +261,9 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
       // Firebase Auth에서 현재 사용자 확인
       final firebaseUser = _authService.currentFirebaseUser;
 
-      // ✅ 로그인 없이도 플레이스 브라우징 가능 (Apple App Store 가이드라인 준수)
+      // ✅ 로그인 없이도 플레이스 브라우징 가능 (추천만 서버에서 조회, 전체 컬렉션 조회 안 함)
       if (firebaseUser == null) {
-        // 로그인 안 된 경우 모든 플레이스 실시간 구독 시작
-        setState(() {
-          _isLoading = true;
-        });
-        _startAllPlacesSubscription();
+        setState(() => _isLoading = false);
         return;
       }
 
@@ -248,34 +397,6 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
     }
   }
 
-  /// 모든 플레이스 실시간 구독 시작 (로그인 없이도 가능)
-  void _startAllPlacesSubscription() {
-    _allPlacesSubscription?.cancel();
-
-    _allPlacesSubscription = _firestoreService.watchAllPlaces().listen(
-      (places) {
-        debugPrint('[PlaceWaitingScreen] 실시간 플레이스 업데이트: ${places.length}개');
-        if (mounted) {
-          setState(() {
-            _allPlaces = places;
-            _placesMap = {for (var place in places) place.id: place};
-            _isLoading = false;
-          });
-        }
-      },
-      onError: (e) {
-        debugPrint('[PlaceWaitingScreen] 실시간 플레이스 구독 에러: $e');
-        if (mounted) {
-          setState(() {
-            _allPlaces = [];
-            _placesMap = {};
-            _isLoading = false;
-          });
-        }
-      },
-    );
-  }
-
   /// 멤버십 실시간 구독 시작
   void _startMembershipSubscription() {
     if (_userId == null) return;
@@ -285,75 +406,114 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
       return;
     }
 
-    _membershipSubscription = _memberService
-        .watchUserMemberships(_userId!)
-        .listen((memberships) async {
-          // status 제거로 모든 멤버십이 승인된 것으로 처리
-          final approvedMemberships = memberships;
+    _membershipSubscription = _memberService.watchUserMemberships(_userId!).listen((
+      memberships,
+    ) async {
+      // status 제거로 모든 멤버십이 승인된 것으로 처리
+      final approvedMemberships = memberships;
 
-          // 플레이스 정보 가져오기 (배치 처리로 최적화)
-          final placesMap = <String, Place>{};
+      // 플레이스 정보 가져오기 (배치 처리로 최적화)
+      final placesMap = <String, Place>{};
 
-          // 이미 로드된 플레이스는 재사용
-          final placeIdsToLoad =
-              approvedMemberships
-                  .map((m) => m.placeId)
-                  .where((placeId) => !_placesMap.containsKey(placeId))
-                  .toList();
+      // 이미 로드된 플레이스는 재사용
+      final placeIdsToLoad =
+          approvedMemberships
+              .map((m) => m.placeId)
+              .where((placeId) => !_placesMap.containsKey(placeId))
+              .toList();
 
-          // 배치로 플레이스 로드 (병렬 처리)
-          if (placeIdsToLoad.isNotEmpty) {
-            final places = await Future.wait(
-              placeIdsToLoad.map((placeId) async {
-                try {
-                  return await _firestoreService.getPlace(placeId);
-                } catch (e) {
-                  return null;
-                }
-              }),
-            );
-
-            // 로드된 플레이스를 맵에 추가
-            for (int i = 0; i < placeIdsToLoad.length; i++) {
-              final place = places[i];
-              if (place != null) {
-                placesMap[placeIdsToLoad[i]] = place;
-              }
+      // 배치로 플레이스 로드 (병렬 처리)
+      if (placeIdsToLoad.isNotEmpty) {
+        final places = await Future.wait(
+          placeIdsToLoad.map((placeId) async {
+            try {
+              return await _firestoreService.getPlace(placeId);
+            } catch (e) {
+              return null;
             }
+          }),
+        );
+
+        // 로드된 플레이스를 맵에 추가
+        for (int i = 0; i < placeIdsToLoad.length; i++) {
+          final place = places[i];
+          if (place != null) {
+            placesMap[placeIdsToLoad[i]] = place;
           }
+        }
+      }
 
-          // 기존 플레이스 맵과 새로 로드한 플레이스 맵 병합
-          final updatedPlacesMap = <String, Place>{..._placesMap, ...placesMap};
+      // 기존 플레이스 맵과 새로 로드한 플레이스 맵 병합
+      final updatedPlacesMap = <String, Place>{..._placesMap, ...placesMap};
 
-          // 승인된 멤버십에 해당하는 플레이스만 필터링
-          final finalPlacesMap = <String, Place>{};
-          for (final membership in approvedMemberships) {
-            final place = updatedPlacesMap[membership.placeId];
-            if (place != null) {
-              finalPlacesMap[membership.placeId] = place;
-            }
-          }
+      // 승인된 멤버십에 해당하는 플레이스만 필터링
+      final finalPlacesMap = <String, Place>{};
+      for (final membership in approvedMemberships) {
+        final place = updatedPlacesMap[membership.placeId];
+        if (place != null) {
+          finalPlacesMap[membership.placeId] = place;
+        }
+      }
 
-          if (mounted) {
-            setState(() {
-              _memberships = approvedMemberships;
-              _placesMap = finalPlacesMap;
-              _isLoading = false;
-            });
-
-            // 자동 로그인 처리 (한 번만 실행)
-            // ✅ 명시적 재로그인 직후에는 자동 진입을 하지 않는다.
-            if (!_requireManualEntrySelection &&
-                !_hasAutoNavigated &&
-                approvedMemberships.length == 1) {
-              _hasAutoNavigated = true;
-              final place = finalPlacesMap[approvedMemberships.first.placeId];
-              if (place != null) {
-                _navigateToMain(place);
-              }
-            }
-          }
+      if (mounted) {
+        setState(() {
+          _memberships = approvedMemberships;
+          _placesMap = finalPlacesMap;
+          _isLoading = false;
         });
+
+        // ✅ PlaceSwitchWidget용: 서버에서 조회한 멤버십 목록을 AuthProvider에 반영 (emit마다)
+        final authProvider = Provider.of<AuthProvider>(context, listen: false);
+        final memberPlaceIds =
+            approvedMemberships.map((m) => m.placeId).toList();
+        authProvider.setApprovedPlaceIds(memberPlaceIds);
+        debugPrint(
+          '[PlaceWaitingScreen] AuthProvider.setApprovedPlaceIds: $memberPlaceIds (${memberPlaceIds.length}개)',
+        );
+
+        // ✅ linkedAdmin + adminManagedPlaceIds는 최초 1회만 조회 (스트림 재emit 시 중복 방지)
+        if (!_linkedAdminLoaded) {
+          _linkedAdminLoaded = true;
+          final user = authProvider.currentUser;
+          final phoneNumber = user?.phoneNumber;
+          if (phoneNumber != null && phoneNumber.trim().isNotEmpty) {
+            try {
+              final admin = await _authService.findAdminByPhone(phoneNumber);
+              if (admin != null && mounted) {
+                authProvider.setLinkedAdmin(admin);
+                final managedIds = await _firestoreService
+                    .getManagedPlaceIdsByAdminId(admin.userId);
+                authProvider.setAdminManagedPlaceIds(managedIds);
+                debugPrint(
+                  '[PlaceWaitingScreen] AuthProvider linkedAdmin + adminManagedPlaceIds: ${managedIds.length}개',
+                );
+              } else if (mounted) {
+                authProvider.setLinkedAdmin(null);
+                authProvider.setAdminManagedPlaceIds([]);
+              }
+            } catch (e) {
+              debugPrint('[PlaceWaitingScreen] 관리자 정보 로드 실패 (무시): $e');
+              if (mounted) {
+                authProvider.setLinkedAdmin(null);
+                authProvider.setAdminManagedPlaceIds([]);
+              }
+            }
+          }
+        }
+
+        // 자동 로그인 처리 (한 번만 실행)
+        // ✅ 명시적 재로그인 직후에는 자동 진입을 하지 않는다.
+        if (!_requireManualEntrySelection &&
+            !_hasAutoNavigated &&
+            approvedMemberships.length == 1) {
+          _hasAutoNavigated = true;
+          final place = finalPlacesMap[approvedMemberships.first.placeId];
+          if (place != null) {
+            _navigateToMain(place);
+          }
+        }
+      }
+    });
   }
 
   /// 승인된 플레이스 리스트 가져오기
@@ -376,6 +536,7 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
     if (_isEnteringPlace) return;
     setState(() {
       _isEnteringPlace = true;
+      _enteringPlaceId = place.id;
     });
 
     // 플레이스 이미지 프리로드 (이미지 URL이 있는 경우)
@@ -393,6 +554,8 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
     }
 
     try {
+      // 로컬 방문 기록에 추가 (비로그인 시 목록에 노출용)
+      await StorageService().addPlaceToVisitHistory(place);
       // 플레이스 선택 시 마지막 접속 플레이스로 저장
       await _authService.setCurrentPlace(place);
       // 명시적 진입 선택 완료 → 플래그 해제
@@ -404,8 +567,14 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
       final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
       placeProvider.setCurrentPlace(place);
 
-      // ✅ 이전 place 데이터가 남아있지 않도록 클리어 후, 새 place 데이터 로드
+      // ✅ Main 진입 전 PlaceSwitchWidget용 목록 한 번 더 동기화 (멤버십 구독 전 탭한 경우 대비)
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      final memberIds = _memberships.map((m) => m.placeId).toList();
+      if (memberIds.isNotEmpty) {
+        authProvider.setApprovedPlaceIds(memberIds);
+      }
+
+      // ✅ 이전 place 데이터가 남아있지 않도록 클리어 후, 새 place 데이터 로드
       final courseProvider = Provider.of<CourseProvider>(
         context,
         listen: false,
@@ -463,6 +632,7 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
       if (mounted) {
         setState(() {
           _isEnteringPlace = false;
+          _enteringPlaceId = null;
         });
       }
     }
@@ -532,6 +702,8 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // 핫리로드로 initState가 재호출되지 않아도 검색 리스너는 보장
+    _attachSearchListenerIfNeeded();
     return PopScope(
       canPop: false,
       onPopInvoked: (didPop) async {
@@ -542,9 +714,9 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
       child: Stack(
         children: [
           Scaffold(
-            backgroundColor: AppColors.backgroundLight,
+            backgroundColor: AppColors.backgroundWhite,
             appBar: AppBar(
-              backgroundColor: AppColors.backgroundLight,
+              backgroundColor: AppColors.backgroundWhite,
               elevation: 0,
               scrolledUnderElevation: 0,
               leading:
@@ -647,16 +819,7 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
                 const SizedBox(width: 12),
               ],
             ),
-            body: SafeArea(
-              child:
-                  _isLoading
-                      ? const Center(
-                        child: CircularProgressIndicator(
-                          color: AppColors.primaryGreen,
-                        ),
-                      )
-                      : _buildContent(),
-            ),
+            body: SafeArea(child: _buildContent()),
           ),
         ],
       ),
@@ -664,143 +827,259 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
   }
 
   Widget _buildContent() {
-    // ✅ 로그인 여부에 따라 다른 플레이스 목록 표시
+    // ✅ 로그인 여부에 따라 다른 플레이스 목록 (전체 컬렉션 조회 없음)
     final firebaseUser = _authService.currentFirebaseUser;
     List<Place> places;
     if (firebaseUser == null) {
-      // 로그인 안 된 경우: 모든 플레이스 표시
-      places = _allPlaces;
+      places = _visitHistoryPlaces; // 로컬 방문 기록
     } else {
-      // 로그인된 경우: 멤버십이 있는 플레이스만 표시
       places = _getApprovedPlaces();
     }
 
-    // 검색어 확인
-    final searchQuery = _searchController.text.trim();
-    final hasSearchQuery = searchQuery.isNotEmpty;
-
-    // 검색 필터링 적용
-    List<Place> filteredPlaces = _filterPlaces(places);
-
-    // 검색어가 없을 때는 최대 5개만 표시 (추천 플레이스)
-    if (!hasSearchQuery && filteredPlaces.length > 5) {
-      filteredPlaces = filteredPlaces.take(5).toList();
-    }
+    // 검색어 변경 시 이 블록만 리빌드 → setState 없이 카드가 사라졌다 나왔다 하지 않음
     return Column(
       children: [
-        // 검색바 (항상 표시)
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-          child: Container(
-            decoration: BoxDecoration(
-              color: AppColors.backgroundWhite,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: TextField(
-              controller: _searchController,
-              onChanged: (_) => setState(() {}),
-              decoration: InputDecoration(
-                hintText: '플레이스 이름 또는 위치로 검색',
-                hintStyle: TextStyle(
-                  color: AppColors.textSecondary.withOpacity(0.6),
-                  fontSize: 16,
-                ),
-                prefixIcon: Icon(
-                  Icons.search,
-                  color: AppColors.textSecondary.withOpacity(0.6),
-                ),
-                suffixIcon:
-                    _searchController.text.isNotEmpty
-                        ? IconButton(
-                          icon: Icon(
-                            Icons.clear,
+        Expanded(
+          child: ValueListenableBuilder<TextEditingValue>(
+            valueListenable: _searchController,
+            builder: (context, value, _) {
+              final searchQuery = value.text.trim();
+              final hasSearchQuery = searchQuery.isNotEmpty;
+              // 검색 시 서버 검색 결과만 사용 (전체 컬렉션 조회 안 함)
+              final searchPool =
+                  hasSearchQuery ? (_serverSearchResults ?? []) : places;
+              final localFiltered = _filterPlacesWithQuery(
+                searchPool,
+                searchQuery,
+              );
+
+              List<Place> filteredPlaces;
+              if (!hasSearchQuery) {
+                if (firebaseUser != null) {
+                  // 로그인된 경우: 접속 가능한(초대된) 플레이스만 표시
+                  filteredPlaces = places;
+                } else {
+                  // 비로그인: 로컬 방문 기록만 표시
+                  filteredPlaces = _visitHistoryPlaces;
+                }
+              } else if (_serverSearchResults != null &&
+                  _lastSearchQuery != null &&
+                  searchQuery.startsWith(_lastSearchQuery!)) {
+                if (searchQuery == _lastSearchQuery) {
+                  final serverIds =
+                      _serverSearchResults!.map((p) => p.id).toSet();
+                  final localOnly =
+                      localFiltered
+                          .where((p) => !serverIds.contains(p.id))
+                          .toList();
+                  filteredPlaces = [..._serverSearchResults!, ...localOnly];
+                } else {
+                  // 서버 결과만 필터하면(특히 서버 결과가 비어있는 경우) "검색 결과 없음"으로 떨어질 수 있어
+                  // 로컬 부분일치 결과를 항상 병합한다.
+                  final serverFiltered = _filterPlacesWithQuery(
+                    _serverSearchResults!,
+                    searchQuery,
+                  );
+                  final serverIds = serverFiltered.map((p) => p.id).toSet();
+                  final localOnly =
+                      localFiltered
+                          .where((p) => !serverIds.contains(p.id))
+                          .toList();
+                  filteredPlaces = [...serverFiltered, ...localOnly];
+                }
+              } else if (_serverSearchResults != null) {
+                final serverIds =
+                    _serverSearchResults!.map((p) => p.id).toSet();
+                final localOnly =
+                    localFiltered
+                        .where((p) => !serverIds.contains(p.id))
+                        .toList();
+                filteredPlaces = [..._serverSearchResults!, ...localOnly];
+              } else {
+                filteredPlaces = localFiltered;
+              }
+
+              // 검색 시 표시할 리스트 (로그인+초대 플레이스 없어도 서버 검색 결과는 반드시 표시)
+              List<Place> searchDisplayListRaw;
+              if (!hasSearchQuery) {
+                searchDisplayListRaw = [];
+              } else if (_isSearchingServer) {
+                searchDisplayListRaw = localFiltered;
+              } else if (filteredPlaces.isNotEmpty) {
+                searchDisplayListRaw = filteredPlaces;
+              } else if (_serverSearchResults != null &&
+                  _serverSearchResults!.isNotEmpty) {
+                // filteredPlaces가 비어있어도 서버 결과가 있으면 사용 (로그인 상태에서 분기 누락 방지)
+                if (_lastSearchQuery != null &&
+                    searchQuery.startsWith(_lastSearchQuery!)) {
+                  if (searchQuery == _lastSearchQuery) {
+                    searchDisplayListRaw = _serverSearchResults!;
+                  } else {
+                    searchDisplayListRaw = _filterPlacesWithQuery(
+                      _serverSearchResults!,
+                      searchQuery,
+                    );
+                  }
+                } else {
+                  searchDisplayListRaw = _serverSearchResults!;
+                }
+              } else {
+                searchDisplayListRaw = _serverSearchResults ?? [];
+              }
+              final searchDisplayList =
+                  hasSearchQuery ? searchDisplayListRaw : null;
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // 검색바 (value 기준으로 suffixIcon 갱신)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 16,
+                    ),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: AppColors.backgroundLight,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: TextField(
+                        controller: _searchController,
+                        decoration: InputDecoration(
+                          hintText: '플레이스 이름 또는 위치로 검색',
+                          hintStyle: TextStyle(
+                            color: AppColors.textSecondary.withOpacity(0.6),
+                            fontSize: 16,
+                          ),
+                          prefixIcon: Icon(
+                            Icons.search,
                             color: AppColors.textSecondary.withOpacity(0.6),
                           ),
-                          onPressed: () {
-                            _searchController.clear();
-                            setState(() {});
-                          },
-                        )
-                        : null,
-                border: InputBorder.none,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 16,
-                ),
-              ),
-              style: TextStyle(fontSize: 16, color: AppColors.textPrimary),
-            ),
-          ),
-        ),
-        // 플레이스 리스트 또는 빈 상태
-        Expanded(
-          child:
-              filteredPlaces.isEmpty && hasSearchQuery
-                  ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          '검색 결과가 없습니다',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: AppColors.textSecondary,
+                          suffixIcon:
+                              value.text.isNotEmpty
+                                  ? IconButton(
+                                    icon: Icon(
+                                      Icons.clear,
+                                      color: AppColors.textSecondary
+                                          .withOpacity(0.6),
+                                    ),
+                                    onPressed: () {
+                                      _searchController.clear();
+                                      _onSearchChanged();
+                                    },
+                                  )
+                                  : null,
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 16,
                           ),
                         ),
-                      ],
+                        style: TextStyle(
+                          fontSize: 16,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
                     ),
-                  )
-                  : filteredPlaces.isEmpty
-                  ? _buildEmptyState()
-                  : ListView.builder(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    itemCount: filteredPlaces.length,
-                    itemBuilder: (context, index) {
-                      return _buildPlaceCard(filteredPlaces[index]);
-                    },
                   ),
-        ),
-        // 로그인 안 된 경우 관리자 로그인 버튼 (화면 맨 아래)
-        if (firebaseUser == null)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-            decoration: BoxDecoration(
-              color: AppColors.backgroundLight,
-              border: Border(
-                top: BorderSide(
-                  color: AppColors.borderLight.withOpacity(0.5),
-                  width: 0.5,
-                ),
-              ),
-            ),
-            child: TextButton(
-              onPressed: () {
-                Navigator.of(context).pushNamed('/phone-number');
-              },
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.info_outline,
-                    size: 18,
-                    color: AppColors.textSecondary,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    '관리자로 계속하려면 로그인하세요',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: AppColors.textSecondary,
-                      decoration: TextDecoration.underline,
-                      decorationColor: AppColors.textSecondary,
-                    ),
+                  // 플레이스 리스트
+                  Expanded(
+                    child:
+                        _isLoading
+                            ? _buildPlaceCardShimmerList()
+                            : hasSearchQuery
+                            ? (_isSearchingServer
+                                ? _buildPlaceCardShimmerList()
+                                : (searchDisplayList != null &&
+                                        searchDisplayList.isNotEmpty
+                                    ? ListView.builder(
+                                      key: const PageStorageKey<String>(
+                                        'place_search_list',
+                                      ),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                      ),
+                                      itemCount: searchDisplayList.length,
+                                      itemBuilder: (context, index) {
+                                        return _buildPlaceCard(
+                                          searchDisplayList[index],
+                                        );
+                                      },
+                                    )
+                                    : _isSearchResponseReceivedForCurrentQuery(
+                                      searchQuery,
+                                    )
+                                    ? _buildSearchEmptyPlaceholder()
+                                    : _buildPlaceCardShimmerList()))
+                            : (filteredPlaces.isNotEmpty
+                                ? ListView.builder(
+                                  key: const PageStorageKey<String>(
+                                    'place_main_list',
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                  ),
+                                  itemCount: filteredPlaces.length,
+                                  itemBuilder: (context, index) {
+                                    return _buildPlaceCard(
+                                      filteredPlaces[index],
+                                    );
+                                  },
+                                )
+                                : firebaseUser != null
+                                ? _buildNoInvitedPlacesPlaceholder()
+                                : _buildNoVisitHistoryPlaceholder()),
                   ),
                 ],
+              );
+            },
+          ),
+        ),
+        // 로그인 안 된 경우 관리자 로그인 버튼 (화면 맨 아래) (화면 맨 아래)
+        if (firebaseUser == null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                color: AppColors.backgroundLight,
+                border: Border(
+                  top: BorderSide(
+                    color: AppColors.borderLight.withOpacity(0.5),
+                    width: 0.5,
+                  ),
+                ),
+              ),
+              child: TextButton(
+                onPressed: () {
+                  Navigator.of(context).pushNamed('/phone-number');
+                },
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      size: 18,
+                      color: AppColors.textSecondary,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      '관리자로 계속하려면 로그인하세요',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: AppColors.textSecondary,
+                        decoration: TextDecoration.underline,
+                        decorationColor: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -808,97 +1087,201 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
     );
   }
 
-  /// 플레이스 검색 필터링
-  List<Place> _filterPlaces(List<Place> places) {
-    final searchQuery = _searchController.text.trim().toLowerCase();
-    if (searchQuery.isEmpty) {
+  /// 플레이스 검색 필터링 (검색어 인자로 받음 → ValueListenableBuilder에서 사용)
+  List<Place> _filterPlacesWithQuery(List<Place> places, String searchQuery) {
+    final q = searchQuery.trim().toLowerCase();
+    if (q.isEmpty) {
       return places;
     }
-
     return places.where((place) {
-      // 플레이스 이름으로 검색
-      final nameMatch = place.name.toLowerCase().contains(searchQuery);
-      // 위치로 검색
+      final nameMatch = place.name.toLowerCase().contains(q);
       final locationMatch =
-          place.location != null &&
-          place.location!.toLowerCase().contains(searchQuery);
+          place.location != null && place.location!.toLowerCase().contains(q);
       return nameMatch || locationMatch;
     }).toList();
   }
 
-  /// 초대된 플레이스가 없을 때 표시
-  Widget _buildEmptyState() {
-    final firebaseUser = _authService.currentFirebaseUser;
-    final isLoggedIn = firebaseUser != null;
+  /// 현재 검색어에 대해 서버 응답을 이미 받은 상태인지 (응답 대기/디바운스 중이면 false)
+  /// 마지막 응답 검색어와 같거나, 그 뒤로만 입력된 경우도 true (클라이언트 필터로 결과 확정)
+  bool _isSearchResponseReceivedForCurrentQuery(String searchQuery) {
+    if (_lastSearchQuery == null || _serverSearchResults == null) {
+      return false;
+    }
+    return searchQuery == _lastSearchQuery ||
+        (searchQuery.startsWith(_lastSearchQuery!) &&
+            searchQuery.length > _lastSearchQuery!.length);
+  }
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          if (isLoggedIn) ...[
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  AppConstants.noInvitedPlacesTitle,
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
-                    letterSpacing: -0.5,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
+  /// 로그인된데 초대된 플레이스가 없을 때 표시
+  Widget _buildNoInvitedPlacesPlaceholder() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
             Text(
-              AppConstants.noInvitedPlacesMessage,
+              '초대된 플레이스가 없어요',
               style: TextStyle(
-                fontSize: 16,
-                color: AppColors.textSecondary,
-                height: 1.5,
+                fontSize: 22,
+                color: AppColors.textPrimary,
+                fontWeight: FontWeight.w700,
               ),
               textAlign: TextAlign.center,
             ),
-          ] else ...[
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  '등록된 플레이스가 없습니다',
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
-                    letterSpacing: -0.5,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 4),
             Text(
-              '플레이스를 검색하거나 로그인하여\n초대된 플레이스를 확인하세요',
+              '플레이스 관리자에게 초대를 문의해보세요',
               style: TextStyle(
                 fontSize: 16,
                 color: AppColors.textSecondary,
-                height: 1.5,
+                fontWeight: FontWeight.w500,
               ),
               textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 비로그인 + 방문 기록 없을 때 플레이스홀더
+  Widget _buildNoVisitHistoryPlaceholder() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '방문 기록이 없어요',
+              style: TextStyle(
+                fontSize: 22,
+                color: AppColors.textPrimary,
+                fontWeight: FontWeight.w700,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '검색해서 플레이스를 찾아보세요',
+              style: TextStyle(
+                fontSize: 16,
+                color: AppColors.textSecondary,
+                fontWeight: FontWeight.w500,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 검색어 입력 중 결과가 없을 때 표시하는 플레이스홀더
+  Widget _buildSearchEmptyPlaceholder() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '검색 결과가 없어요',
+              style: TextStyle(
+                fontSize: 16,
+                color: AppColors.textSecondary,
+                fontWeight: FontWeight.w500,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 플레이스 카드와 동일한 레이아웃의 쉬머 카드 (로딩/검색 중)
+  Widget _buildPlaceCardShimmer() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: AppColors.backgroundWhite,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Row(
+          children: [
+            Shimmer.fromColors(
+              baseColor: AppColors.textSecondary.withOpacity(0.12),
+              highlightColor: AppColors.textSecondary.withOpacity(0.06),
+              period: const Duration(milliseconds: 1200),
+              child: Container(
+                width: 100,
+                height: 100,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Shimmer.fromColors(
+                    baseColor: AppColors.textSecondary.withOpacity(0.12),
+                    highlightColor: AppColors.textSecondary.withOpacity(0.06),
+                    period: const Duration(milliseconds: 1200),
+                    child: Container(
+                      height: 20,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Shimmer.fromColors(
+                    baseColor: AppColors.textSecondary.withOpacity(0.12),
+                    highlightColor: AppColors.textSecondary.withOpacity(0.06),
+                    period: const Duration(milliseconds: 1200),
+                    child: Container(
+                      height: 16,
+                      width: 160,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
-        ],
+        ),
       ),
+    );
+  }
+
+  Widget _buildPlaceCardShimmerList() {
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      itemCount: 5,
+      itemBuilder: (context, index) => _buildPlaceCardShimmer(),
     );
   }
 
   /// 플레이스 카드
   Widget _buildPlaceCard(Place place) {
+    final isEnteringThis = _enteringPlaceId == place.id;
     return GestureDetector(
-      onTap: () => _onPlaceTap(place),
+      onTap: _isEnteringPlace ? null : () => _onPlaceTap(place),
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),
         decoration: BoxDecoration(
@@ -909,7 +1292,6 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
           padding: const EdgeInsets.all(8),
           child: Row(
             children: [
-              // 플레이스 이미지 (PlaceImageWidget 사용)
               PlaceImageWidget(
                 imageUrl: place.imageUrl,
                 width: 100,
@@ -917,7 +1299,6 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
                 borderRadius: BorderRadius.circular(12),
               ),
               const SizedBox(width: 16),
-              // 플레이스 정보
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -937,7 +1318,7 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
                       Text(
                         place.location!,
                         style: TextStyle(
-                          fontSize: 16,
+                          fontSize: 14,
                           color: AppColors.textSecondary,
                         ),
                       ),
@@ -945,11 +1326,21 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
                   ],
                 ),
               ),
-              // 오른쪽 화살표 아이콘
-              Icon(
-                Icons.arrow_forward_ios,
-                size: 16,
-                color: AppColors.textSecondary.withOpacity(0.6),
+              // 진입 중이면 로딩, 아니면 화살표
+              SizedBox(
+                width: 16,
+                height: 16,
+                child:
+                    isEnteringThis
+                        ? CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.primaryGreen,
+                        )
+                        : Icon(
+                          Icons.arrow_forward_ios,
+                          size: 16,
+                          color: AppColors.textSecondary.withOpacity(0.6),
+                        ),
               ),
             ],
           ),
@@ -1007,31 +1398,32 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
       if (mounted) {
         if (admin != null) {
           // 기존 관리자인 경우 PIN 입력 화면으로 이동
-          Navigator.of(context).pushNamed(
-            '/admin-pin-input',
-            arguments: {
-              'phoneNumber': phoneNumber,
-              'verificationCode': '', // 인증은 이미 완료된 상태이므로 불필요
-            },
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder:
+                  (context) => AdminPinInputScreen(
+                    phoneNumber: phoneNumber!,
+                    verificationCode: '',
+                  ),
+            ),
           );
         } else {
           // 관리자가 아니지만 관리자가 되고자 하는 경우 PIN 등록 화면으로 이동
-          // 전화번호가 인증되었으면 관리자 정보가 없어도 바로 등록으로 이동
-          Navigator.of(context).pushNamed(
-            '/admin-register',
-            arguments: {
-              'phoneNumber': phoneNumber,
-              'verificationCode': '', // 인증은 이미 완료된 상태이므로 불필요
-            },
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder:
+                  (context) => AdminPinRegisterScreen(
+                    phoneNumber: phoneNumber!,
+                    verificationCode: '',
+                  ),
+            ),
           );
         }
       }
     } catch (e) {
       // 에러 발생 시 에러 메시지 표시
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('관리자 정보를 불러올 수 없습니다: $e')));
+        SnackbarUtil.showInfo(context, '관리자 정보를 불러올 수 없습니다: $e');
       }
     }
   }

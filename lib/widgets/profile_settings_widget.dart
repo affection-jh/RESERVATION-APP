@@ -7,6 +7,7 @@ import '../constants/app_constants.dart';
 import '../screens/admin/widgets/admin_pin_verify_for_place_screen.dart';
 import '../screens/admin/admin_pin_register_screen.dart';
 import '../providers/auth_provider.dart';
+import '../services/auth_service.dart';
 
 /// 프로필 섹션 위젯 (공통)
 class ProfileSection extends StatelessWidget {
@@ -228,6 +229,13 @@ class SettingsItemsBuilder {
     Future<void> Function()? onLogout,
     Future<void> Function()? onWithdraw,
   }) {
+    // listen: true → 로그인/로그아웃 시 설정 목록(로그아웃·회원탈퇴·로그인하기) 갱신
+    final authProvider = Provider.of<AuthProvider>(context);
+    final isAdmin = authProvider.currentAdmin != null;
+    // 로그아웃/회원탈퇴는 Firebase Auth + currentUser 둘 다 있을 때만 표시 (로그아웃된 상태에서 로그아웃/회원탈퇴 노출 방지)
+    final hasFirebaseUser = AuthService().currentFirebaseUser != null;
+    final isUserLoggedIn = authProvider.currentUser != null && hasFirebaseUser;
+
     return [
       // 알림 설정
       SettingItem(
@@ -300,63 +308,76 @@ class SettingsItemsBuilder {
         },
       ),
 
-      // 플레이스 추가
-      SettingItem(
-        icon: Icons.add_business,
-        title: '플레이스 추가',
-        onTap: () {
-          _handlePlaceTap(context);
-        },
-      ),
-
-      // 로그아웃 (onLogout이 제공된 경우에만 표시)
-      if (onLogout != null)
+      // 플레이스 추가 (현재 관리자 모드일 때만 표시)
+      if (isAdmin)
         SettingItem(
-          icon: Icons.logout,
-          title: '로그아웃',
-          onTap: () async {
-            final confirmed = await CommonDialog.show(
-              context: context,
-              title: '로그아웃',
-              message: '로그아웃 하시겠습니까?',
-              confirmText: '로그아웃',
-              cancelText: '취소',
-            );
-
-            if (confirmed == true && context.mounted) {
-              await onLogout();
-              if (context.mounted) {
-                Navigator.pushNamedAndRemoveUntil(
-                  context,
-                  '/',
-                  (route) => false,
-                );
-              }
-            }
+          icon: Icons.add_business,
+          title: '플레이스 추가',
+          onTap: () {
+            _handlePlaceTap(context);
           },
-          textColor: Colors.red,
         ),
 
-      // 회원탈퇴 (onWithdraw가 제공된 경우에만 표시)
-      if (onWithdraw != null)
-        SettingItem(
-          icon: Icons.person_remove_outlined,
-          title: '회원탈퇴',
-          onTap: () async {
-            final confirmed = await CommonDialog.show(
-              context: context,
-              title: '회원탈퇴',
-              message: '정말 회원탈퇴를 하시겠습니까?\n탈퇴 후 모든 데이터가 삭제되며\n복구할 수 없습니다.',
-              confirmText: '탈퇴하기',
-              cancelText: '취소',
-              confirmButtonColor: Colors.red,
-            );
+      // 일반 사용자 로그인 시에만: 로그아웃·회원탈퇴 / 그 외: 로그인하기
+      if (isUserLoggedIn && (onLogout != null || onWithdraw != null)) ...[
+        if (onLogout != null)
+          SettingItem(
+            icon: Icons.logout,
+            title: '로그아웃',
+            onTap: () async {
+              final confirmed = await CommonDialog.show(
+                context: context,
+                title: '로그아웃',
+                message: '로그아웃 하시겠습니까?',
+                confirmText: '로그아웃',
+                cancelText: '취소',
+              );
 
-            if (confirmed == true && context.mounted) {
-              await onWithdraw();
-            }
+              if (confirmed == true && context.mounted) {
+                await onLogout();
+                if (context.mounted) {
+                  Navigator.pushNamedAndRemoveUntil(
+                    context,
+                    '/',
+                    (route) => false,
+                  );
+                }
+              }
+            },
+            textColor: Colors.red,
+          ),
+        if (onWithdraw != null)
+          SettingItem(
+            icon: Icons.person_remove_outlined,
+            title: '회원탈퇴',
+            onTap: () async {
+              final confirmed = await CommonDialog.show(
+                context: context,
+                title: '회원탈퇴',
+                message: '정말 회원탈퇴를 하시겠습니까?\n탈퇴 후 모든 데이터가 삭제되며\n복구할 수 없습니다.',
+                confirmText: '탈퇴하기',
+                cancelText: '취소',
+                confirmButtonColor: Colors.red,
+              );
+
+              if (confirmed == true && context.mounted) {
+                await onWithdraw();
+              }
+            },
+            textColor: Colors.red,
+          ),
+      ] else
+        SettingItem(
+          icon: Icons.login,
+          title: '로그인하기',
+          textColor: AppColors.primaryGreen,
+          onTap: () {
+            Navigator.pushNamedAndRemoveUntil(
+              context,
+              '/',
+              (route) => false,
+            );
           },
-          textColor: Colors.red,
         ),
     ];
   }
@@ -429,8 +450,10 @@ class UserProfileInfoSection extends StatelessWidget {
         // 설정 섹션
         SettingsSection(items: settingsItems),
 
-        // 회원탈퇴 버튼 (선택적)
-        if (showWithdrawButton && onWithdraw != null) ...[
+        // 회원탈퇴 버튼 (로그인 시에만 표시)
+        if (showWithdrawButton &&
+            onWithdraw != null &&
+            Provider.of<AuthProvider>(context).isAuthenticated) ...[
           const SizedBox(height: 10),
           _buildWithdrawButton(context),
         ],

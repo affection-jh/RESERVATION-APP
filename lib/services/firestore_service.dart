@@ -29,6 +29,20 @@ class FirestoreService {
 
   // ==================== Helper Methods ====================
 
+  /// 검색 응답 등에서 id/name/adminId를 안전히 문자열로 (null/다른 타입 → '')
+  static String _ensureString(dynamic value) {
+    if (value == null) return '';
+    if (value is String) return value;
+    return value.toString();
+  }
+
+  /// 선택 필드용: null이면 null, 아니면 문자열로
+  static String? _ensureStringOrNull(dynamic value) {
+    if (value == null) return null;
+    if (value is String) return value;
+    return value.toString();
+  }
+
   /// 날짜를 "YYYY-MM-DD" 형식 문자열로 변환
   String _formatDate(DateTime date) {
     return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
@@ -103,62 +117,6 @@ class FirestoreService {
     return snapshot.docs.map((d) => d.id).toList();
   }
 
-  /// 모든 플레이스 조회 (로그인 없이도 가능)
-  Future<List<Place>> getAllPlaces() async {
-    try {
-      debugPrint('[FirestoreService.getAllPlaces] 플레이스 목록 조회 시작');
-      final snapshot = await _firestore.collection('places').get();
-      debugPrint(
-        '[FirestoreService.getAllPlaces] 쿼리 결과: ${snapshot.docs.length}개 문서',
-      );
-
-      final places = <Place>[];
-      for (final doc in snapshot.docs) {
-        try {
-          final data = doc.data();
-          debugPrint(
-            '[FirestoreService.getAllPlaces] 문서 ID: ${doc.id}, 데이터: $data',
-          );
-          final place = Place.fromJson(data);
-          places.add(place);
-        } catch (e) {
-          debugPrint(
-            '[FirestoreService.getAllPlaces] 문서 파싱 실패 (ID: ${doc.id}): $e',
-          );
-          // 개별 문서 파싱 실패는 스킵하고 계속 진행
-        }
-      }
-
-      debugPrint(
-        '[FirestoreService.getAllPlaces] 성공: ${places.length}개 플레이스 로드',
-      );
-      return places;
-    } catch (e, stackTrace) {
-      debugPrint('[FirestoreService.getAllPlaces] 플레이스 목록 로드 실패: $e');
-      debugPrint('[FirestoreService.getAllPlaces] 스택 트레이스: $stackTrace');
-      rethrow;
-    }
-  }
-
-  /// 모든 플레이스 실시간 구독 (로그인 없이도 가능, 실시간 검색용)
-  Stream<List<Place>> watchAllPlaces() {
-    return _firestore.collection('places').snapshots().map((snapshot) {
-      final places = <Place>[];
-      for (final doc in snapshot.docs) {
-        try {
-          final data = doc.data();
-          final place = Place.fromJson(data);
-          places.add(place);
-        } catch (e) {
-          debugPrint(
-            '[FirestoreService.watchAllPlaces] 문서 파싱 실패 (ID: ${doc.id}): $e',
-          );
-        }
-      }
-      return places;
-    });
-  }
-
   /// 플레이스 실시간 구독
   Stream<Place?> watchPlace(String placeId) {
     return _firestore.collection('places').doc(placeId).snapshots().map((
@@ -188,6 +146,57 @@ class FirestoreService {
     } on FirebaseFunctionsException catch (e) {
       // 서버 에러를 그대로 전달
       throw Exception(e.message ?? '플레이스 삭제 중 오류가 발생했습니다.');
+    }
+  }
+
+  /// 플레이스 서버 검색 (이름/위치 포함 검색, Callable)
+  ///
+  /// [query] 검색어 (공백 trim 후 전달). 빈 문자열이면 빈 목록 반환.
+  Future<List<Place>> searchPlaces(String query) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return [];
+
+    debugPrint('[FirestoreService.searchPlaces] 호출: "$trimmed"');
+    final callable = FirebaseFunctions.instance.httpsCallable('searchPlaces');
+    try {
+      final result = await callable.call({'query': trimmed});
+      final data = result.data as Map<String, dynamic>?;
+      final list = data?['places'] as List<dynamic>?;
+      if (list == null) {
+        debugPrint('[FirestoreService.searchPlaces] 응답 places 필드 없음');
+        return [];
+      }
+      debugPrint('[FirestoreService.searchPlaces] 서버 응답 ${list.length}건 수신');
+      final places = <Place>[];
+      for (final raw in list) {
+        if (raw is! Map) continue;
+        try {
+          final item = Map<String, dynamic>.from(raw);
+          // 검색 결과: adminId 없어도 됨. id/name은 문자열로 통일, courses는 검색에서 미사용이라 빈 배열
+          final normalized = <String, dynamic>{
+            'id': _ensureString(item['id']),
+            'name': _ensureString(item['name']),
+            'adminId': _ensureString(item['adminId']),
+            'description': _ensureStringOrNull(item['description']),
+            'location': _ensureStringOrNull(item['location']),
+            'appBarText': _ensureStringOrNull(item['appBarText']),
+            'greetingText': _ensureStringOrNull(item['greetingText']),
+            'imageUrl': _ensureStringOrNull(item['imageUrl']),
+            'courses': [], // 검색 결과에서는 코스 파싱 생략(서버 형식 차이로 파싱 실패 방지)
+          };
+          places.add(Place.fromJson(normalized));
+        } catch (e) {
+          debugPrint('[FirestoreService.searchPlaces] 항목 파싱 스킵: $e');
+          debugPrint('[FirestoreService.searchPlaces] 수신 항목: $raw');
+        }
+      }
+      debugPrint('[FirestoreService.searchPlaces] 파싱 완료 ${places.length}건');
+      return places;
+    } on FirebaseFunctionsException catch (e) {
+      debugPrint(
+        '[FirestoreService.searchPlaces] Callable 오류: code=${e.code}, message=${e.message}',
+      );
+      rethrow;
     }
   }
 

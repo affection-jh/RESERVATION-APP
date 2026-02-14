@@ -915,16 +915,31 @@ class _CalendarScreenState extends State<CalendarScreen> {
                           // 요일 헤더
                           _buildDayHeaders(sessionDates),
 
-                          // 캘린더 그리드
+                          // 주차 변경 시 로딩 중이면 스피너만 표시, 완료 후 카드 표시
                           Expanded(
-                            child: LayoutBuilder(
-                              builder: (context, constraints) {
-                                return _buildCalendarGrid(
-                                  sessionDates,
-                                  viewportHeight: constraints.maxHeight,
-                                );
-                              },
-                            ),
+                            child:
+                                _isLoading
+                                    ? Center(
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          CircularProgressIndicator(
+                                            valueColor:
+                                                AlwaysStoppedAnimation<Color>(
+                                                  AppColors.primaryGreen,
+                                                ),
+                                          ),
+                                        ],
+                                      ),
+                                    )
+                                    : LayoutBuilder(
+                                      builder: (context, constraints) {
+                                        return _buildCalendarGrid(
+                                          sessionDates,
+                                          viewportHeight: constraints.maxHeight,
+                                        );
+                                      },
+                                    ),
                           ),
                         ],
                       ),

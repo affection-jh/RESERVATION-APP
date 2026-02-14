@@ -84,7 +84,9 @@ service cloud.firestore {
         )
       );
       // create는 서버(Callable Function)만
-      allow create, delete: if false;
+      allow create: if false;
+      // delete(회원탈퇴): 본인 문서만 삭제 가능
+      allow delete: if signedIn() && request.auth.uid == adminId;
 
       // update는 본인 문서에 대해서만, 안전한 필드만 허용
       allow update: if signedIn()

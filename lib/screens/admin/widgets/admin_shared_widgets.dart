@@ -825,9 +825,7 @@ class _AdminPlaceSelectorState extends State<AdminPlaceSelector> {
     } catch (e) {
       // 에러 처리
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('플레이스 전환 중 오류가 발생했습니다: $e')));
+        SnackbarUtil.showInfo(context, '플레이스 전환 중 오류가 발생했습니다: $e');
       }
     }
   }

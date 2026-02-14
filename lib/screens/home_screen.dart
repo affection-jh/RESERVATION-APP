@@ -13,7 +13,8 @@ import '../providers/auth_provider.dart';
 import '../providers/course_provider.dart';
 import '../providers/enrollment_provider.dart';
 import '../utils/timezone_utils.dart';
-import '../widgets/place_switch_widget.dart';
+import '../widgets/place_switch_widget.dart'
+    show PlaceSwitchWidget, navigateToPlaceWaitingScreen;
 import '../widgets/notification_icon_widget.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -239,29 +240,63 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildPlacesSection(BuildContext context) {
-    return Row(
-      children: [
-        // PlaceSwitchWidget
-        Expanded(
-          child: PlaceSwitchWidget(
-            enabled: false,
-            showDescription: false,
-            padding: EdgeInsets.zero,
-            heroTagSuffix: 'home',
-          ),
-        ),
-        // 알림 아이콘
-        const SizedBox(width: 12),
-        NotificationIconWidget(),
-        const SizedBox(width: 20),
-      ],
+    return Consumer2<PlaceProvider, AuthProvider>(
+      builder: (context, placeProvider, authProvider, _) {
+        final place = placeProvider.currentPlace;
+        final memberIds = authProvider.approvedPlaceIds;
+        final adminIds = authProvider.adminManagedPlaceIds;
+        final isUnregistered =
+            place != null &&
+            !memberIds.contains(place.id) &&
+            !adminIds.contains(place.id);
+        final isLoggedIn = authProvider.currentUser != null ||
+            authProvider.currentAdmin != null;
+        // 로그인 안 되어 있어도 나가기 버튼 표시
+        final showExitButton =
+            place != null && (!isLoggedIn || isUnregistered);
+
+        return Row(
+          children: [
+            Expanded(
+              child: PlaceSwitchWidget(
+                enabled: false,
+                showDescription: false,
+                padding: EdgeInsets.zero,
+                heroTagSuffix: 'home',
+              ),
+            ),
+            const SizedBox(width: 12),
+            if (showExitButton)
+              TextButton(
+                onPressed:
+                    () => navigateToPlaceWaitingScreen(context, authProvider),
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Icon(
+                  Icons.logout,
+                  size: 24,
+                  color: AppColors.primaryGreen,
+                ),
+              )
+            else
+              const NotificationIconWidget(),
+            const SizedBox(width: 20),
+          ],
+        );
+      },
     );
   }
 
   // 제목 섹션
   Widget _buildTitleSection(PlaceProvider placeProvider) {
     final place = placeProvider.currentPlace;
-    final greetingText = place?.greetingText ?? '안녕하세요,\n리퀘스트를 추천해 드려요';
+    final greetingText = place?.greetingText ?? '안녕하세요';
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
@@ -344,18 +379,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(
-                      Icons.notifications_outlined,
-                      size: 48,
-                      color: AppColors.textSecondary.withOpacity(0.5),
-                    ),
-                    const SizedBox(height: 16),
                     Text(
                       '새로운 스토리를\n기다리고 있어요',
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w500,
-                        color: AppColors.textSecondary,
+                        color: AppColors.textLight,
                       ),
                       textAlign: TextAlign.center,
                     ),

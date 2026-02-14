@@ -122,7 +122,6 @@ class _AdminPinVerifyForPlaceScreenState
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const SizedBox(height: 40),
                     // 제목
                     Text(
                       '관리자 인증 PIN을 입력해주세요',
@@ -176,8 +175,8 @@ class _AdminPinVerifyForPlaceScreenState
                   child: ElevatedButton(
                     onPressed:
                         (_isFormValid() && !_isLoading && _errorMessage.isEmpty)
-                        ? _onVerify
-                        : null,
+                            ? _onVerify
+                            : null,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primaryGreen,
                       foregroundColor: Colors.white,
@@ -189,24 +188,25 @@ class _AdminPinVerifyForPlaceScreenState
                       ),
                       elevation: 0,
                     ),
-                    child: _isLoading
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(
-                                AppColors.primaryGreen,
+                    child:
+                        _isLoading
+                            ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  AppColors.primaryGreen,
+                                ),
+                              ),
+                            )
+                            : const Text(
+                              '확인',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
-                          )
-                        : const Text(
-                            '확인',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
                   ),
                 ),
               ),
@@ -259,15 +259,12 @@ class _AdminPinVerifyForPlaceScreenState
             length: 6,
             controller: _pinController,
             focusNode: _pinFocusNode,
-            defaultPinTheme: _errorMessage.isNotEmpty
-                ? errorPinTheme
-                : defaultPinTheme,
-            focusedPinTheme: _errorMessage.isNotEmpty
-                ? errorPinTheme
-                : focusedPinTheme,
-            submittedPinTheme: _errorMessage.isNotEmpty
-                ? errorPinTheme
-                : filledPinTheme,
+            defaultPinTheme:
+                _errorMessage.isNotEmpty ? errorPinTheme : defaultPinTheme,
+            focusedPinTheme:
+                _errorMessage.isNotEmpty ? errorPinTheme : focusedPinTheme,
+            submittedPinTheme:
+                _errorMessage.isNotEmpty ? errorPinTheme : filledPinTheme,
             errorPinTheme: errorPinTheme,
             pinputAutovalidateMode: PinputAutovalidateMode.onSubmit,
             showCursor: true,

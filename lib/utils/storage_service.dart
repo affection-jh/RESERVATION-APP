@@ -1,3 +1,6 @@
+import 'dart:convert';
+
+import 'package:reservation/models/place.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 로컬 저장소 서비스
@@ -249,5 +252,50 @@ class StorageService {
   Future<bool> isFavoriteCourse(String courseId) async {
     final favorites = await getFavoriteCourses();
     return favorites.contains(courseId);
+  }
+
+  // ---------- 방문 기록 (로컬, 추천 대신 사용) ----------
+  static const String _keyVisitHistory = 'visit_history_places';
+  static const int _maxVisitHistory = 20;
+
+  /// 방문 기록에 플레이스 추가 (최근 방문 순, 중복 시 맨 앞으로)
+  Future<void> addPlaceToVisitHistory(Place place) async {
+    final prefs = await SharedPreferences.getInstance();
+    final list = await getVisitHistoryPlaces();
+    final filtered =
+        list.where((p) => p.id != place.id).toList();
+    final json = place.toJson();
+    json['courses'] = []; // 저장 용량 절감
+    final updated = [Place.fromJson(json), ...filtered];
+    final toSave = updated.take(_maxVisitHistory).toList();
+    final encoded = jsonEncode(toSave.map((p) {
+      final m = p.toJson();
+      m['courses'] = [];
+      return m;
+    }).toList());
+    await prefs.setString(_keyVisitHistory, encoded);
+  }
+
+  /// 방문 기록 플레이스 목록 로드 (최근 방문 순)
+  Future<List<Place>> getVisitHistoryPlaces() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_keyVisitHistory);
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      final list = jsonDecode(raw) as List<dynamic>?;
+      if (list == null) return [];
+      final places = <Place>[];
+      for (final item in list) {
+        if (item is! Map<String, dynamic>) continue;
+        try {
+          places.add(Place.fromJson(item));
+        } catch (_) {
+          // skip invalid entry
+        }
+      }
+      return places;
+    } catch (_) {
+      return [];
+    }
   }
 }

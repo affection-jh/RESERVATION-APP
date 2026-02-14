@@ -1,0 +1,15 @@
+rules_version = '2';
+
+// Firebase Storage 보안 규칙
+// - 읽기: 모든 사용자 (이미지 URL로 노출되는 콘텐츠)
+// - 쓰기: 로그인한 사용자만 (업로드 화면은 앱에서 관리자만 접근)
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // 이미지 폴더: places, courses, stories, promotions, greetings 등
+    match /{folder}/{fileName} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+  }
+}
