@@ -57,6 +57,8 @@ class DragCalendarEditor extends StatefulWidget {
 class _DragCalendarEditorState extends State<DragCalendarEditor> {
   static const double _minHourSlotHeight = 60.0;
   static const double _sessionPadding = 2.0;
+  /// 롱프레스 인식 전: 이 거리(px) 이상 움직이면 롱프레스 취소(스크롤로 간주). 실기기 미세 떨림은 무시.
+  static const double _longPressMoveThreshold = 14.0;
 
   bool _isDragging = false;
   int? _dragStartSlot;
@@ -506,12 +508,16 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
             setState(() {
               _dragEndSlot = slot;
             });
-          } else if (!_isDragging) {
-            debugPrint(
-              '[DragCalendarEditor] onPointerMove (드래그 아님) → 타이머 취소',
-            );
-            _longPressTimer?.cancel();
-            _longPressStartPosition = null;
+          } else if (!_isDragging && _longPressStartPosition != null) {
+            final dx = event.localPosition.dx - _longPressStartPosition!.dx;
+            final dy = event.localPosition.dy - _longPressStartPosition!.dy;
+            final distanceSquared = dx * dx + dy * dy;
+            final thresholdSquared =
+                _longPressMoveThreshold * _longPressMoveThreshold;
+            if (distanceSquared > thresholdSquared) {
+              _longPressTimer?.cancel();
+              _longPressStartPosition = null;
+            }
           }
         },
         onPointerUp: (event) {
