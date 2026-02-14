@@ -2,7 +2,21 @@ import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import { logFunctionStart, logFunctionSuccess, logFunctionError } from './logger';
 import { assertAdminForPlaceUid } from './admin_auth';
-import { getPlaceOrThrow, getCourseName } from './course_catalog';
+
+/** 알림 본문용 날짜 포맷: "2026년 2월 17일" */
+function formatDateKr(dateStr: string): string {
+    const [yRaw, mRaw, dRaw] = (dateStr || '').split('-');
+    const y = Number(yRaw);
+    const mo = Number(mRaw);
+    const d = Number(dRaw);
+    if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) return dateStr;
+    return `${y}년 ${mo}월 ${d}일`;
+}
+
+/** 알림 본문용 날짜+시간 포맷: "2026년 2월 17일 16:00시" */
+function formatDateTimeKr(dateStr: string, timeStr: string): string {
+    return `${formatDateKr(dateStr)} ${timeStr}시`;
+}
 
 /**
  * 비정기 일정 생성/수정/삭제 (관리자)
@@ -213,15 +227,12 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
         // 알림 전송 (예약자가 있었고, sendNotification이 true일 때만)
         if (reservationIds.length > 0 && sendNotification) {
             try {
-                const place = await getPlaceOrThrow(placeId);
-                const courseName = getCourseName(place, courseId);
-
                 for (const userId of userIds) {
                     await createNotification({
                         userId,
                         type: 'reservation',
-                        title: '세션이 취소되었습니다',
-                        body: `${courseName} - ${effDate} ${effStartTime} 세션이 취소되었습니다`,
+                        title: '세션 취소',
+                        body: `${formatDateTimeKr(effDate, effStartTime)} 세션이 취소되었습니다`,
                         placeId,
                         data: {
                             courseId,
@@ -376,15 +387,12 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
         // 알림 전송 (트랜잭션 외부, sendNotification이 true일 때만)
         if (reservationIds.length > 0 && sendNotification) {
             try {
-                const place = await getPlaceOrThrow(placeId);
-                const courseName = getCourseName(place, courseId);
-
                 for (const userId of userIds) {
                     await createNotification({
                         userId,
                         type: 'reservation',
-                        title: '세션이 취소되었습니다',
-                        body: `${courseName} - ${date} ${startTime} 세션이 취소되었습니다`,
+                        title: '세션 취소',
+                        body: `${formatDateTimeKr(date, startTime)} 세션이 취소되었습니다`,
                         placeId,
                         data: {
                             courseId,
@@ -447,9 +455,6 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
                     .where('status', '==', 'active')
                     .get();
 
-                const place = await getPlaceOrThrow(placeId);
-                const courseName = getCourseName(place, courseId);
-
                 const notificationPromises = enrollmentsSnapshot.docs.map(async (doc) => {
                     const enrollment = doc.data();
                     const userId = enrollment.userId;
@@ -457,8 +462,8 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
                     return createNotification({
                         userId,
                         type: 'system',
-                        title: '새로운 수업 일정이 추가되었습니다',
-                        body: `${courseName} - ${date} ${startTime}-${endTime} (${capacity}명)`,
+                        title: '새 수업 일정',
+                        body: `${formatDateKr(date)} ${startTime} (${capacity}명)`,
                         placeId,
                         data: {
                             courseId,

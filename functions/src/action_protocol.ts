@@ -72,7 +72,7 @@ export type RequiresBulkMoveDetails = {
 export function throwRequiresBulkMove(details: Omit<RequiresBulkMoveDetails, 'requiresBulkMove'>): never {
   throw new functions.https.HttpsError(
     'failed-precondition',
-    '예약이 있는 세션은 삭제/변경할 수 없습니다. 먼저 예약을 이동하거나 세션을 취소해주세요.',
+    '먼저 예약을 이동하거나 세션을 취소해주세요.',
     {
       requiresBulkMove: true,
       ...details,

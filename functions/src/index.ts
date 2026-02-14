@@ -136,6 +136,12 @@ function parseYYYYMMDD(dateString: string): { y: number; mo: number; d: number }
     return { y, mo, d };
 }
 
+/** 알림 본문용 날짜+시간 포맷: "2026년 2월 17일 16:00시" */
+function formatDateTimeKr(dateStr: string, timeStr: string): string {
+    const { y, mo, d } = parseYYYYMMDD(dateStr);
+    return `${y}년 ${mo}월 ${d}일 ${timeStr}시`;
+}
+
 /**
  * "서울 로컬 시각"을 UTC 기반 Date로 만든다.
  * 예: 2026-01-07 10:00(서울) -> 내부적으로 UTC Date로 변환되어 비교 가능
@@ -1851,9 +1857,8 @@ export const createReservation = functions.https.onCall(async (data, context) =>
             logFunctionSuccess(functionName, { reservationId: reservationRef.id, courseId, reservedDateString });
 
             // 11) 예약 생성 성공 알림 전송 (트랜잭션 외부에서)
-            // 코스명을 포함한 알림 메시지 생성
             const courseName = getCourseName(place, courseId);
-            const notificationBody = `${courseName} - ${reservedDateString} ${startTime}`;
+            const notificationBody = formatDateTimeKr(reservedDateString, startTime);
 
             // 트랜잭션 완료 후 알림 생성 (트랜잭션 외부에서 실행)
             createNotification({
@@ -1866,6 +1871,9 @@ export const createReservation = functions.https.onCall(async (data, context) =>
                     reservationId: reservationRef.id,
                     courseId,
                     placeId,
+                    reservedDateString,
+                    dayOfWeek: String(dayOfWeek),
+                    startTime,
                 },
                 isAdmin: false,
             }).catch((error) => {
@@ -3744,11 +3752,7 @@ export const batchMoveReservations = functions.https.onCall(async (data, context
             try {
                 const place = await getPlaceOrThrow(placeId);
                 const courseName = getCourseName(place, Array.from(reservationsByCourse.keys())[0]) || '코스';
-                const formatDate = (dateStr: string): string => {
-                    const { y, mo, d } = parseYYYYMMDD(dateStr);
-                    return `${y}년 ${mo}월 ${d}일`;
-                };
-                const newDateFormatted = formatDate(newReservedDateString);
+                const newDateTimeKr = formatDateTimeKr(newReservedDateString, newStartTime);
 
                 // 각 사용자에게 알림 전송
                 for (const userId of userIds) {
@@ -3756,7 +3760,7 @@ export const batchMoveReservations = functions.https.onCall(async (data, context
                         userId,
                         type: 'reservation',
                         title: `${courseName} 예약이 변경되었습니다`,
-                        body: `${courseName} - ${newDateFormatted} ${newStartTime}로 변경되었습니다.`,
+                        body: `${newDateTimeKr}로 변경되었습니다.`,
                         placeId,
                         data: {
                             reservationIds: reservationIds,

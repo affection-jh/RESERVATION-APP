@@ -85,6 +85,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
     final userId = data['userId'] as String?;
     final courseId = data['courseId'] as String?;
     final placeId = data['placeId'] as String?;
+    final reservationId = data['reservationId'] as String?;
 
     // 알림 타입별 처리
     switch (notification.type) {
@@ -140,7 +141,36 @@ class _NotificationScreenState extends State<NotificationScreen> {
         break;
 
       case NotificationType.reservation:
-        // 예약 알림은 현재 특별한 처리 없음 (알림 화면에 머무름)
+        // 예약 완료/변경/취소 알림 → 마이페이지(예약 목록)로 이동 + 해당 주차 설정
+        if (courseId != null || placeId != null || reservationId != null) {
+          try {
+            final dateStr =
+                data['date'] as String? ?? data['reservedDateString'] as String?;
+            DateTime? reservedDate;
+            if (dateStr != null && dateStr.isNotEmpty) {
+              reservedDate = DateTime.tryParse(dateStr);
+            }
+            final dayOfWeekRaw = data['dayOfWeek'];
+            final dayOfWeek = dayOfWeekRaw is int
+                ? dayOfWeekRaw
+                : (dayOfWeekRaw != null ? int.tryParse('$dayOfWeekRaw') : null);
+            final startTime = data['startTime'] as String?;
+
+            Map<String, dynamic>? highlightReservation;
+            if (reservedDate != null) {
+              highlightReservation = {
+                'reservedDate': reservedDate,
+                'courseId': courseId,
+                'dayOfWeek': dayOfWeek,
+                'startTime': startTime,
+                'shouldShowBottomSheet': false,
+              };
+            }
+            await _navigateToMyPage(highlightReservation: highlightReservation);
+          } catch (e) {
+            debugPrint('[NotificationScreen] 마이페이지 이동 오류: $e');
+          }
+        }
         break;
     }
   }
@@ -183,6 +213,22 @@ class _NotificationScreenState extends State<NotificationScreen> {
     } catch (e) {
       debugPrint('[NotificationScreen] 스토리 상세 화면 이동 오류: $e');
       rethrow;
+    }
+  }
+
+  /// 마이페이지(예약 목록)로 이동 (해당 주차까지 설정)
+  Future<void> _navigateToMyPage({
+    Map<String, dynamic>? highlightReservation,
+  }) async {
+    if (mounted) {
+      Navigator.of(context).pushNamedAndRemoveUntil(
+        '/main',
+        (route) => false,
+        arguments: {
+          'initialIndex': 2, // 마이페이지 탭
+          if (highlightReservation != null) 'highlightReservation': highlightReservation,
+        },
+      );
     }
   }
 
@@ -481,7 +527,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
           ),
         ],
         if (monthNotifications.isNotEmpty) ...[
-          _buildSectionHeader('이번 달'),
+          _buildSectionHeader('최근 30일'),
           ...monthNotifications.map(
             (notification) => _buildNotificationItem(notification, provider),
           ),

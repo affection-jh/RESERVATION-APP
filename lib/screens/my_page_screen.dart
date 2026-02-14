@@ -41,13 +41,12 @@ class _MyPageScreenState extends State<MyPageScreen> {
   DateTime? _highlightedDate;
   int _selectedWeekTab = 0;
 
-  List<int> _computeAvailableWeekOffsets(List<Reservation> reservations) {
+  List<int> _computeAvailableWeekOffsets(
+    List<Reservation> reservations, {
+    DateTime? extraDateToInclude,
+  }) {
     // 현재 주차는 항상 포함 (예약이 없어도)
     final Set<int> weekOffsets = {0};
-
-    if (reservations.isEmpty) {
-      return [0]; // 예약이 없으면 현재 주차만 표시
-    }
 
     final now = TimezoneUtils.getSeoulDateTime();
     final thisWeekMonday = DateTime(
@@ -55,6 +54,22 @@ class _MyPageScreenState extends State<MyPageScreen> {
       now.month,
       now.day,
     ).subtract(Duration(days: now.weekday - DateTime.monday));
+
+    // highlightReservation 등으로 전달된 날짜의 주차도 포함 (예: 취소 알림으로 해당 주차 표시)
+    if (extraDateToInclude != null) {
+      final d = DateTime(
+        extraDateToInclude.year,
+        extraDateToInclude.month,
+        extraDateToInclude.day,
+      );
+      final diffDays = d.difference(thisWeekMonday).inDays;
+      final w = (diffDays / 7).floor();
+      if (w >= 0) weekOffsets.add(w);
+    }
+
+    if (reservations.isEmpty) {
+      return weekOffsets.toList()..sort();
+    }
 
     // 예약이 있는 주차 추출
     int maxWeekOffset = 0;
@@ -265,13 +280,18 @@ class _MyPageScreenState extends State<MyPageScreen> {
     final userReservations = reservationProvider.reservations;
 
     // 먼저 해당 예약의 주차로 탭 이동
-    final DateTime targetDate = reservationInfo['reservedDate'] as DateTime;
+    final targetDate = reservationInfo['reservedDate'] as DateTime?;
+    if (targetDate == null) return;
+
     final weekOffset = _calculateWeekOffset(targetDate);
 
-    // availableWeekOffsets 계산
-    final availableWeekOffsets = _computeAvailableWeekOffsets(userReservations);
+    // availableWeekOffsets 계산 (해당 주차 포함)
+    final availableWeekOffsets = _computeAvailableWeekOffsets(
+      userReservations,
+      extraDateToInclude: targetDate,
+    );
 
-    // 해당 주차의 탭 인덱스 찾기
+    // 해당 주차로 탭 이동
     final tabIndex = availableWeekOffsets.indexOf(weekOffset);
     if (tabIndex >= 0 && tabIndex != _selectedWeekTab) {
       setState(() {
@@ -279,12 +299,20 @@ class _MyPageScreenState extends State<MyPageScreen> {
       });
     }
 
+    // 예약 전체 정보가 없으면 주차만 설정하고 종료 (week-only 모드)
+    final courseId = reservationInfo['courseId'];
+    final dayOfWeek = reservationInfo['dayOfWeek'] as int?;
+    final startTime = reservationInfo['startTime'] as String?;
+    final hasFullInfo = courseId != null && dayOfWeek != null && startTime != null;
+
+    if (!hasFullInfo) return; // 주차 설정 완료
+
     final Reservation? match = userReservations.cast<Reservation?>().firstWhere(
       (r) =>
           r != null &&
-          r.courseId == reservationInfo['courseId'] &&
-          r.dayOfWeek == reservationInfo['dayOfWeek'] &&
-          r.startTime == reservationInfo['startTime'] &&
+          r.courseId == courseId &&
+          r.dayOfWeek == dayOfWeek &&
+          r.startTime == startTime &&
           r.reservedDate.year == targetDate.year &&
           r.reservedDate.month == targetDate.month &&
           r.reservedDate.day == targetDate.day,

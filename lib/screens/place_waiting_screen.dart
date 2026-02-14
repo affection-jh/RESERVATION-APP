@@ -1149,8 +1149,11 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
     );
   }
 
-  /// 비로그인 + 방문 기록 없을 때 플레이스홀더
+  /// 비로그인 + 방문 기록 없을 때 플레이스홀더 (키보드가 내려가 있을 때만 표시)
   Widget _buildNoVisitHistoryPlaceholder() {
+    if (MediaQuery.of(context).viewInsets.bottom > 0) {
+      return const SizedBox.shrink();
+    }
     return Center(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 32),
