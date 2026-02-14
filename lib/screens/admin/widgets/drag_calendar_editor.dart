@@ -449,9 +449,8 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
           );
 
           if (!isOnSession) {
-            debugPrint(
-              '[DragCalendarEditor] 빈 영역 터치 → 500ms 타이머만 시작 (스크롤은 롱프레스 인식 후에만 막음)',
-            );
+            // 빈 영역 터치 직후 스크롤 막기 요청 → 롱프레스/드래그 전에 스크롤이 제스처를 가져가는 것 방지
+            widget.onScrollBlockRequested?.call(true);
             _longPressStartPosition = event.localPosition;
             _longPressTimer?.cancel();
             _longPressTimer = Timer(const Duration(milliseconds: 500), () {

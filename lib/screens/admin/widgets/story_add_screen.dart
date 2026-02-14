@@ -793,7 +793,7 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
               ),
             ),
             Positioned(
-              bottom: 24,
+              bottom: 24 + MediaQuery.of(context).padding.bottom,
               right: 24,
               child: FloatingActionButton(
                 shape: RoundedRectangleBorder(

@@ -931,31 +931,6 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
               fontWeight: FontWeight.w500,
             ),
           ),
-          if (showCta) ...[
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () => _showMemberEditor(context),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primaryGreen,
-                  padding: const EdgeInsets.symmetric(vertical: 18),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  elevation: 0,
-                ),
-                child: Text(
-                  '멤버 등록 하기',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -968,6 +943,13 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
     // 기존 멤버 수정 모드인 경우 기존 로직 사용
     if (existing != null) {
       await _showSingleMemberEditor(context, existing: existing);
+      return;
+    }
+
+    // 새 멤버 등록 시 코스가 없으면 안내 후 리턴
+    final courseProvider = Provider.of<CourseProvider>(context, listen: false);
+    if (courseProvider.courses.isEmpty) {
+      SnackbarUtil.showInfo(context, '먼저 코스를 개설해주세요.');
       return;
     }
 
