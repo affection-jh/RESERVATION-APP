@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../models/course.dart';
-import '../../../models/course_enrollment.dart';
 import '../../../providers/course_provider.dart';
-import '../../../providers/member_provider.dart';
 import '../../../providers/place_provider.dart';
 import '../../../providers/auth_provider.dart';
 import '../../../theme/app_colors.dart';
@@ -14,9 +12,8 @@ import '../../../utils/snackbar_util.dart';
 import 'course_schedule_edit_screen.dart';
 import 'course_edit_screen.dart';
 import 'course_member_registration_screen.dart';
-import 'admin_shared_widgets.dart';
-import '../../../models/admin_models.dart';
-import '../../../models/user.dart';
+import 'course_member_list_content.dart';
+import '../../../providers/member_provider.dart';
 
 /// 코스 상세 페이지
 ///
@@ -62,7 +59,11 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                   Container(height: 12, color: AppColors.backgroundLight),
                   const SizedBox(height: 8),
 
-                  _buildStudentListSection(currentCourse),
+                  _buildStudentListSection(
+                    context,
+                    currentCourse,
+                    placeId: courseProvider.currentPlaceId,
+                  ),
                 ],
               ),
             );
@@ -124,8 +125,8 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
             onPressed: () async {
               final result = await Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (context) =>
-                      CourseScheduleEditScreen(course: course),
+                  builder:
+                      (context) => CourseScheduleEditScreen(course: course),
                 ),
               );
               // 일정 편집 후 돌아왔을 때 새로고침
@@ -237,8 +238,8 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
               // 세션 탭 시 편집 화면으로 이동
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (context) =>
-                      CourseScheduleEditScreen(course: course),
+                  builder:
+                      (context) => CourseScheduleEditScreen(course: course),
                 ),
               );
             },
@@ -248,152 +249,28 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     );
   }
 
-  // 수강생 리스트 섹션
-  Widget _buildStudentListSection(Course course) {
-    return Consumer<MemberProvider>(
-      builder: (context, memberProvider, child) {
-        // ✅ courseMembers 컬렉션을 직접 조회 (enrollments 생성 전에도 표시됨)
-        return StreamBuilder<List<User>>(
-          stream: memberProvider.watchCourseMembers(course.id),
-          builder: (context, courseMembersSnapshot) {
-            // PendingMembers도 필터링 (아직 로그인 안 한 멤버)
-            final enrolledPendingMembers = memberProvider.pendingMembers.where((
-              pending,
-            ) {
-              // ⚠️ courseIds 제거: courseEnrollments에서 유도
-              final courseIds = pending.derivedCourseIds;
-              return courseIds.contains(course.id);
-            }).toList();
-
-            // PendingMembers를 User로 변환
-            final pendingAsUsers = enrolledPendingMembers.map((pm) {
-              // ⚠️ courseIds 제거: courseEnrollments에서 유도
-              final courseIds = pm.derivedCourseIds;
-              final enrollments = courseIds.map((courseId) {
-                return CourseEnrollment(
-                  id: 'pending_${pm.id}_$courseId',
-                  userId: 'pending_${pm.id}',
-                  courseId: courseId.toString(),
-                  placeId: pm.placeId,
-                  enrolledAt: pm.createdAt,
-                  validFrom: pm.createdAt,
-                  validUntil: pm.createdAt.add(const Duration(days: 365)),
-                  totalReservations: 10,
-                  remainingReservations: 10,
-                );
-              }).toList();
-
-              return User(
-                userId: 'pending_${pm.id}',
-                name: pm.name ?? '이름 없음',
-                phoneNumber: pm.phoneNumber,
-                placeIds: [pm.placeId],
-                enrollments: enrollments,
-                reservations: [],
-                notificationsEnabled: false,
-                createdAt: pm.createdAt,
-                updatedAt: null,
-              );
-            }).toList();
-
-            // courseMembers에서 가져온 멤버 + pendingMembers 합치기
-            final courseMembers = courseMembersSnapshot.data ?? [];
-            final allMembers = [...courseMembers, ...pendingAsUsers];
-            final totalCount = allMembers.length;
-
-            return Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // 헤더
-                  Row(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.only(left: 8),
-                        child: Text(
-                          '멤버($totalCount명)',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.textPrimary,
-                          ),
-                        ),
-                      ),
-                      Spacer(),
-                      GestureDetector(
-                        onTap: () {
-                          _showMemberRegistration(course);
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.only(bottom: 2),
-                          child: Icon(
-                            Icons.add_circle,
-                            color: AppColors.primaryGreen,
-                            size: 30,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-
-                  // 멤버 리스트
-                  if (allMembers.isEmpty)
-                    Center(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 10),
-                        child: Text(
-                          '',
-                          style: TextStyle(
-                            color: AppColors.textSecondary.withOpacity(0.8),
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    )
-                  else
-                    ...allMembers.map((member) {
-                      final memberData = _userToMemberData(member);
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: MemberCard(
-                          member: memberData,
-                          backgroundColor: AppColors.backgroundLight
-                              .withOpacity(0.8),
-                          onMemberTapped: () {
-                            // 최근 본 멤버 추가는 필요 없음 (코스 상세 화면이므로)
-                          },
-                        ),
-                      );
-                    }).toList(),
-                  if (allMembers.isNotEmpty) const SizedBox(height: 60),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  // User를 MemberData로 변환
-  MemberData _userToMemberData(User user) {
-    final pendingRequests = user.pendingExtensionRequests.length;
-    final enrolledCourseIds = user.enrollments
-        .where((e) => e.isValid)
-        .map((e) => e.courseId)
-        .toList();
-
-    return MemberData(
-      userId: user.userId,
-      name: user.name,
-      phoneNumber: user.phoneNumber,
-      role: user.userId.startsWith('pending_') ? '대기중' : '일반',
-      isActive: !user.userId.startsWith('pending_'),
-      pendingExtensionRequests: pendingRequests,
-      enrolledCourseIds: enrolledCourseIds,
+  // 수강생 리스트 섹션 (코스별 보기와 동일: enrollments + pendingMembers)
+  // ⚠️ 코스 상세에서는 PlaceProvider.currentPlace와 코스 목록(placeId)이 일시적으로 어긋날 수 있어,
+  // CourseProvider가 로드한 placeId를 우선 사용합니다.
+  Widget _buildStudentListSection(
+    BuildContext context,
+    Course course, {
+    required String? placeId,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: CourseMemberListContent(
+            logLabel: 'CourseDetail',
+        courseId: course.id,
+        placeId: placeId,
+        emptyMessage: '등록된 멤버가 없어요.',
+        shrinkWrap: true,
+        showHeaderWithCount: true,
+        headerTitleBuilder: (count) => '멤버($count명)',
+        onAddTap: () => _showMemberRegistration(course),
+        listPadding: EdgeInsets.zero,
+        cardBackgroundColor: AppColors.backgroundLight,
+      ),
     );
   }
 
@@ -404,30 +281,31 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     final placeId = placeProvider.currentPlace?.id;
 
     if (placeId == null) {
-      SnackbarUtil.showError(context, '플레이스 정보를 불러올 수 없습니다.');
+      SnackbarUtil.showInfo(context, '플레이스 정보를 불러올 수 없습니다.');
       return;
     }
 
     if (!authProvider.isAuthenticated || authProvider.currentAdmin == null) {
-      SnackbarUtil.showError(context, '로그인이 필요합니다.');
+      SnackbarUtil.showInfo(context, '로그인이 필요합니다.');
       return;
     }
 
     await Navigator.of(context).push(
       PageRouteBuilder(
-        pageBuilder: (context, animation, secondaryAnimation) =>
-            CourseMemberRegistrationScreen(
-              onSave: (memberList) async {
-                await _registerMembers(
-                  context,
-                  memberList,
-                  placeId,
-                  authProvider,
-                );
-              },
-              courseId: course.id, // 특정 코스만 등록
-              placeId: placeId,
-            ),
+        pageBuilder:
+            (context, animation, secondaryAnimation) =>
+                CourseMemberRegistrationScreen(
+                  onSave: (memberList) async {
+                    await _registerMembers(
+                      context,
+                      memberList,
+                      placeId,
+                      authProvider,
+                    );
+                  },
+                  courseId: course.id, // 특정 코스만 등록
+                  placeId: placeId,
+                ),
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
           const begin = Offset(1.0, 0.0);
           const end = Offset.zero;
@@ -504,10 +382,11 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
         SnackbarUtil.showSuccess(context, '${successCount}명의 멤버가 등록되었습니다.');
       } else {
         // 실패 메시지를 친화적으로 표시
-        final failMessage = failCount == memberList.length
-            ? '이미 등록되어 있습니다.'
-            : '${successCount}명 성공, ${failCount}명 실패';
-        SnackbarUtil.showError(context, failMessage);
+        final failMessage =
+            failCount == memberList.length
+                ? '이미 등록되어 있습니다.'
+                : '${successCount}명 성공, ${failCount}명 실패';
+        SnackbarUtil.showInfo(context, failMessage);
       }
 
       // 멤버 등록 후 리스트 동기화
@@ -523,7 +402,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
       if (errorStr.contains('이미 등록되어 있습니다') || errorStr.contains('이미 등록된')) {
         errorMessage = '이미 등록되어 있습니다.';
       }
-      SnackbarUtil.showError(context, errorMessage);
+      SnackbarUtil.showInfo(context, errorMessage);
     }
   }
 }

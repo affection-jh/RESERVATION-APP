@@ -485,7 +485,7 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
           setState(() {
             _currentMemberName = currentName;
           });
-          SnackbarUtil.showError(context, '이름 수정에 실패했습니다.');
+          SnackbarUtil.showInfo(context, '이름 수정에 실패했습니다.');
         }
         return;
       }
@@ -520,7 +520,7 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
         setState(() {
           _currentMemberName = currentName;
         });
-        SnackbarUtil.showError(context, '이름 수정 중 오류가 발생했습니다: $e');
+        SnackbarUtil.showInfo(context, '이름 수정 중 오류가 발생했습니다: $e');
       }
     }
   }
@@ -816,7 +816,7 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                     );
                     final placeId = placeProvider.currentPlace?.id;
                     if (placeId == null) {
-                      SnackbarUtil.showError(context, '플레이스를 찾을 수 없습니다.');
+                      SnackbarUtil.showInfo(context, '플레이스를 찾을 수 없습니다.');
                       return;
                     }
 

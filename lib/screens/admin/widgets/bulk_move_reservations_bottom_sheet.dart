@@ -332,7 +332,7 @@ class _BulkMoveReservationsBottomSheetState
                           final isPastSession = sessionDateTime.isBefore(now);
 
                           if (isPastSession) {
-                            SnackbarUtil.showError(
+                            SnackbarUtil.showInfo(
                               widget.snackbarContext ?? context,
                               '지나간 세션으로는 이동할 수 없습니다.',
                             );
@@ -558,10 +558,7 @@ class _BulkMoveReservationsBottomSheetState
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color:
-            isSource
-                ? AppColors.backgroundLight
-                : AppColors.primaryGreen.withOpacity(0.1),
+        color: isSource ? AppColors.backgroundLight : AppColors.backgroundLight,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -619,7 +616,7 @@ class _BulkMoveReservationsBottomSheetState
         _selectedTargetDate!.year == widget.sourceDate.year &&
         _selectedTargetDate!.month == widget.sourceDate.month &&
         _selectedTargetDate!.day == widget.sourceDate.day) {
-      SnackbarUtil.showError(
+      SnackbarUtil.showInfo(
         widget.snackbarContext ?? context,
         '같은 세션으로는 이동할 수 없습니다.',
       );
@@ -711,7 +708,7 @@ class _BulkMoveReservationsBottomSheetState
         }
         final errorCtx = widget.snackbarContext ?? navigatorKey.currentContext;
         if (errorCtx != null && errorCtx.mounted) {
-          SnackbarUtil.showError(errorCtx, '예약 정보를 찾을 수 없습니다.');
+          SnackbarUtil.showInfo(errorCtx, '예약 정보를 찾을 수 없습니다.');
         }
         return;
       }
@@ -726,7 +723,7 @@ class _BulkMoveReservationsBottomSheetState
         }
         final errorCtx = widget.snackbarContext ?? navigatorKey.currentContext;
         if (errorCtx != null && errorCtx.mounted) {
-          SnackbarUtil.showError(errorCtx, '플레이스 정보를 찾을 수 없습니다.');
+          SnackbarUtil.showInfo(errorCtx, '플레이스 정보를 찾을 수 없습니다.');
         }
         return;
       }
@@ -750,45 +747,63 @@ class _BulkMoveReservationsBottomSheetState
       final resultsRaw = result['results'];
       final results =
           resultsRaw is List ? List<dynamic>.from(resultsRaw) : <dynamic>[];
-      final failedCount =
-          results.where((r) => r is Map && (r['success'] != true)).length;
+      final failedResults =
+          results.where((r) => r is Map && (r['success'] != true)).toList();
+      final failedCount = failedResults.length;
+      final firstError =
+          failedResults.isNotEmpty && failedResults.first is Map
+              ? (failedResults.first as Map)['error'] as String? ?? ''
+              : '';
 
-      // 각 예약 완료 알림
-      if (mounted) {
-        for (final r in results) {
-          if (r is! Map) continue;
-          if (r['success'] == true) {
-            final reservationId = r['reservationId'] as String?;
-            if (reservationId != null) {
-              widget.onMovingCompleted?.call(reservationId);
+      // 이후 UI/콜백에서 null 등 예외가 나도 이동 성공은 유지 (방어 코드)
+      try {
+        if (mounted) {
+          for (final r in results) {
+            if (r is! Map) continue;
+            if (r['success'] == true) {
+              final reservationId = r['reservationId'] as String?;
+              if (reservationId != null) {
+                widget.onMovingCompleted?.call(reservationId);
+              }
             }
+          }
+
+          setState(() {
+            _isMoving = false;
+            _loadingReservationIds.clear();
+          });
+
+          widget.onAllMovingCompleted?.call();
+        }
+
+        if (ctx != null && ctx.mounted) {
+          if (failedCount == 0) {
+            SnackbarUtil.showSuccess(
+              ctx,
+              _isSingleReservation
+                  ? '예약을 변경했습니다.'
+                  : '$movedCount명의 예약자가 이동되었습니다.',
+            );
+          } else {
+            final message =
+                firstError.isNotEmpty
+                    ? '$movedCount명 성공 $failedCount명 실패. ${firstError}'
+                    : '$movedCount명 성공, $failedCount명 실패';
+            SnackbarUtil.showInfo(ctx, message);
           }
         }
 
-        setState(() {
-          _isMoving = false;
-          _loadingReservationIds.clear();
-        });
-
-        widget.onAllMovingCompleted?.call();
-      }
-
-      // 결과 표시 (바텀시트가 닫혀있어도 스낵바는 표시)
-      if (ctx != null && ctx.mounted) {
-        if (failedCount == 0) {
-          SnackbarUtil.showSuccess(
-            ctx,
-            _isSingleReservation
-                ? '예약을 변경했습니다.'
-                : '$movedCount명의 예약자가 이동되었습니다.',
-          );
-        } else {
-          SnackbarUtil.showInfo(ctx, '$movedCount명 이동 완료, $failedCount명 이동 실패');
+        if (mounted) {
+          widget.onMoved?.call();
         }
-      }
-
-      if (mounted) {
-        widget.onMoved?.call();
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            _isMoving = false;
+            _loadingReservationIds.clear();
+          });
+        }
+        debugPrint('[BulkMove] 예약 이동은 성공했으나 이후 처리 중 오류: $e');
       }
     } catch (e) {
       // 에러 발생 시 로딩 상태 해제
@@ -825,7 +840,7 @@ class _BulkMoveReservationsBottomSheetState
                   : '일괄 이동 중 오류가 발생했습니다';
         }
         debugPrint(e.toString());
-        SnackbarUtil.showError(errorCtx, userMessage);
+        SnackbarUtil.showInfo(errorCtx, userMessage);
       }
     }
   }

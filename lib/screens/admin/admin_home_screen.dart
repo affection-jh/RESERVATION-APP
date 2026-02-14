@@ -250,13 +250,16 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
           .listen(
             (openedWeekStartDates) {
               if (!mounted) return;
-              setState(() {
-                _openedWeekStartDates = openedWeekStartDates;
+              // 스트림이 빌드 중에 즉시 emit될 수 있어, setState는 프레임 이후로 미룸.
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) return;
+                setState(() {
+                  _openedWeekStartDates = openedWeekStartDates;
+                });
+                if (_currentCoursePolicy != null) {
+                  _updateAvailableWeekOffsets(_currentCoursePolicy);
+                }
               });
-              // 정책이 로드되어 있으면 주차 범위 업데이트
-              if (_currentCoursePolicy != null) {
-                _updateAvailableWeekOffsets(_currentCoursePolicy);
-              }
             },
             onError: (e) {
               debugPrint('[AdminHomeScreen] bookingWeekOpens stream error: $e');
@@ -304,22 +307,37 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
                       });
                     },
                     availableWeekOffsets: _availableWeekOffsets,
-                    trailing: IconButton(
-                      icon: Icon(
-                        Icons.add_circle,
-                        color: AppColors.primaryGreen,
-                        size: 34,
-                      ),
-                      onPressed: () {
-                        final courseProvider = Provider.of<CourseProvider>(
-                          context,
-                          listen: false,
+                    trailing: Consumer<CourseProvider>(
+                      builder: (context, courseProvider, _) {
+                        final isEmpty = courseProvider.courses.isEmpty;
+                        return IconButton(
+                          icon:
+                              isEmpty
+                                  ? Icon(
+                                    Icons.add_circle,
+                                    color: AppColors.primaryGreen,
+                                    size: 34,
+                                  )
+                                  : Container(
+                                    padding: const EdgeInsets.all(6),
+                                    decoration: const BoxDecoration(
+                                      color: AppColors.primaryGreen,
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: Icon(
+                                      Icons.edit,
+                                      color: Colors.white,
+                                      size: 18,
+                                    ),
+                                  ),
+                          onPressed: () {
+                            if (isEmpty) {
+                              _showCourseAddFlow(context);
+                            } else {
+                              _showWeeklyOverrideSchedule(context);
+                            }
+                          },
                         );
-                        if (courseProvider.courses.isEmpty) {
-                          _showCourseAddFlow(context);
-                        } else {
-                          _showWeeklyOverrideSchedule(context);
-                        }
                       },
                     ),
                   ),
@@ -449,22 +467,24 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
                 );
               },
               onAddCourseTap: () => _showCourseAddFlow(context),
-              onCourseSelected: (Course? course) async {
-                // 선택된 코스 저장
-                setState(() {
-                  _selectedCourse = course;
-                });
-                // 선택된 코스의 정책에 따라 주차 범위 업데이트
+              onCourseSelected: (Course? course) {
+                // ⚠️ CompactCalendarWidget가 빌드 중에 이 콜백을 동기 호출할 수 있음.
+                // 빌드 중 setState/구독 갱신을 피하기 위해 프레임 이후로 미룸.
                 final placeId =
                     Provider.of<PlaceProvider>(
                       context,
                       listen: false,
                     ).currentPlace?.id;
-                if (placeId != null) {
-                  await _calculateWeekOffsetsForCourse(course, placeId);
-                  // 미리 열린 주차 구독 업데이트
-                  _subscribeBookingWeekOpens(course, placeId);
-                }
+                WidgetsBinding.instance.addPostFrameCallback((_) async {
+                  if (!mounted) return;
+                  setState(() {
+                    _selectedCourse = course;
+                  });
+                  if (placeId != null) {
+                    await _calculateWeekOffsetsForCourse(course, placeId);
+                    _subscribeBookingWeekOpens(course, placeId);
+                  }
+                });
               },
             ),
           ),

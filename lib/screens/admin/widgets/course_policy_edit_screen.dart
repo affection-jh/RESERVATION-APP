@@ -228,7 +228,7 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
     final windowDaysValue = int.tryParse(_windowDaysController.text);
     if (_type == BookingOpenStrategyType.rollingWindow) {
       if (windowDaysValue == null || windowDaysValue < 1) {
-        SnackbarUtil.showError(context, '기간 기준 일수는 1일 이상 입력해주세요.');
+        SnackbarUtil.showInfo(context, '기간 기준 일수는 1일 이상 입력해주세요.');
         return false;
       }
       _windowDays = windowDaysValue;
@@ -238,7 +238,7 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
       _closeBeforeHoursController.text,
     );
     if (closeBeforeHoursValue == null || closeBeforeHoursValue < 0) {
-      SnackbarUtil.showError(context, '세션 시작 전 시간은 0시간 이상 입력해주세요.');
+      SnackbarUtil.showInfo(context, '세션 시작 전 시간은 0시간 이상 입력해주세요.');
       return false;
     }
     _closeBeforeMinutes = closeBeforeHoursValue * 60;
@@ -311,7 +311,7 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
     } catch (e) {
       if (mounted) {
         debugPrint('저장 중 오류가 발생했습니다: $e');
-        SnackbarUtil.showError(context, '저장 중 오류가 발생했습니다');
+        SnackbarUtil.showInfo(context, '저장 중 오류가 발생했습니다');
       }
       return false;
     } finally {
@@ -338,7 +338,7 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
     final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
     final currentPlace = placeProvider.currentPlace;
     if (currentPlace == null) {
-      SnackbarUtil.showError(context, '플레이스를 찾을 수 없습니다.');
+      SnackbarUtil.showInfo(context, '플레이스를 찾을 수 없습니다.');
       return;
     }
 
@@ -352,7 +352,7 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
       Navigator.of(context).popUntil((route) => route.isFirst);
     } catch (e) {
       if (mounted) {
-        SnackbarUtil.showError(context, '코스 저장에 실패했습니다: ${e.toString()}');
+        SnackbarUtil.showInfo(context, '코스 저장에 실패했습니다: ${e.toString()}');
       }
     }
   }
@@ -798,7 +798,7 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
             ),
             // 하단 고정 버튼
             Container(
-              padding: const EdgeInsets.fromLTRB(24, 12, 24, 20),
+              padding: const EdgeInsets.fromLTRB(24, 12, 24, 10),
               decoration: BoxDecoration(color: AppColors.backgroundLight),
               child: SafeArea(
                 child: SizedBox(

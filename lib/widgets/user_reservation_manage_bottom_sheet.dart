@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../models/course.dart';
@@ -577,7 +578,7 @@ class _UserReservationManageBottomSheetState
       debugPrint(
         '[UserReservationManageBottomSheet] _createReservation abort: placeId or userId is null',
       );
-      SnackbarUtil.showError(context, '로그인이 필요합니다.');
+      SnackbarUtil.showInfo(context, '로그인이 필요합니다.');
       return false;
     }
 
@@ -617,7 +618,7 @@ class _UserReservationManageBottomSheetState
         '[UserReservationManageBottomSheet] _createReservation failed: $e',
       );
       if (!mounted) return false;
-      SnackbarUtil.showError(context, '예약 중 오류가 발생했습니다: $e');
+      SnackbarUtil.showInfo(context, '예약 중 오류가 발생했습니다.');
       return false;
     }
   }
@@ -628,7 +629,7 @@ class _UserReservationManageBottomSheetState
 
     // 취소 가능 여부 재확인
     if (!_canCancelReservation()) {
-      SnackbarUtil.showError(context, _getCancellationErrorMessage());
+      SnackbarUtil.showInfo(context, _getCancellationErrorMessage());
       return;
     }
 
@@ -651,10 +652,21 @@ class _UserReservationManageBottomSheetState
       await rp.cancelReservation(reservation);
       widget.onReservationCancelled?.call();
       // 성공 피드백은 CalendarScreen/MyPageScreen의 operationEvents에서 처리됨
-    } catch (e) {
+    } on FirebaseFunctionsException catch (e) {
+      debugPrint('[UserReservationManageBottomSheet] 예약 취소 실패: $e');
       final ctx = navigatorKey.currentContext;
       if (ctx != null) {
-        SnackbarUtil.showError(ctx, '예약 취소 중 오류가 발생했습니다: $e');
+        final msg =
+            e.code == 'permission-denied'
+                ? '예약 취소에 대한 권한이 없습니다.'
+                : '예약 취소 중 오류가 발생했습니다.';
+        SnackbarUtil.showInfo(ctx, msg);
+      }
+    } catch (e) {
+      debugPrint('[UserReservationManageBottomSheet] 예약 취소 실패: $e');
+      final ctx = navigatorKey.currentContext;
+      if (ctx != null) {
+        SnackbarUtil.showInfo(ctx, '예약 취소 중 오류가 발생했습니다.');
       }
     }
   }

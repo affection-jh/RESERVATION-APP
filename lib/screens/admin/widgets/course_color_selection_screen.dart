@@ -328,7 +328,7 @@ class _CourseColorSelectionScreenState
             ),
             // 하단 버튼
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
               child: SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
@@ -369,7 +369,7 @@ class _CourseColorSelectionScreenState
                             ? AppColors.primaryGreen
                             : AppColors.borderLight,
                     disabledBackgroundColor: AppColors.borderLight,
-                    padding: const EdgeInsets.symmetric(vertical: 18),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(20),
                     ),

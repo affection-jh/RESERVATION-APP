@@ -49,16 +49,10 @@ class EnrollmentProvider with ChangeNotifier {
     required String userId,
     String? placeId,
   }) async {
-    debugPrint(
-      '[EnrollmentProvider] loadUserEnrollments start userId=$userId placeId=$placeId',
-    );
     // 같은 userId/placeId로 이미 구독 중이면 재구독하지 않음
     if (_subscription != null &&
         _currentUserId == userId &&
         _currentPlaceId == placeId) {
-      debugPrint(
-        '[EnrollmentProvider] loadUserEnrollments skip (already subscribed) userId=$userId placeId=$placeId',
-      );
       return;
     }
 
@@ -72,7 +66,6 @@ class EnrollmentProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      debugPrint('[EnrollmentProvider] subscribe watchUserEnrollments start');
       _subscription = _enrollmentService
           .watchUserEnrollments(
             userId,
@@ -84,23 +77,12 @@ class EnrollmentProvider with ChangeNotifier {
               _enrollments = items;
               _isLoading = false;
               _error = null;
-              debugPrint(
-                '[EnrollmentProvider] enrollments updated count=${items.length}',
-              );
-              for (final e in items) {
-                debugPrint(
-                  '[EnrollmentProvider]  - courseId=${e.courseId} remaining=${e.remainingReservations} total=${e.totalReservations} validUntil=${e.validUntil}',
-                );
-              }
               notifyListeners();
             },
             onError: (e) {
               _enrollments = [];
               _isLoading = false;
               _error = e.toString();
-              debugPrint(
-                '[EnrollmentProvider] watchUserEnrollments error: $_error',
-              );
               notifyListeners();
             },
           );
@@ -108,15 +90,11 @@ class EnrollmentProvider with ChangeNotifier {
       _enrollments = [];
       _isLoading = false;
       _error = e.toString();
-      debugPrint('[EnrollmentProvider] loadUserEnrollments catch: $_error');
       notifyListeners();
     }
   }
 
   Future<void> clear() async {
-    debugPrint(
-      '[EnrollmentProvider] clear (cancel subscription + reset state)',
-    );
     await _subscription?.cancel();
     _subscription = null;
     _currentUserId = null;

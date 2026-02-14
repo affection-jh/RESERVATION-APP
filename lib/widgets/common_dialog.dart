@@ -39,16 +39,17 @@ class CommonDialog extends StatelessWidget {
     return showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => CommonDialog(
-        title: title,
-        message: message,
-        secondaryMessage: secondaryMessage,
-        cancelText: cancelText,
-        confirmText: confirmText,
-        onCancel: onCancel,
-        onConfirm: onConfirm,
-        confirmButtonColor: confirmButtonColor,
-      ),
+      builder:
+          (context) => CommonDialog(
+            title: title,
+            message: message,
+            secondaryMessage: secondaryMessage,
+            cancelText: cancelText,
+            confirmText: confirmText,
+            onCancel: onCancel,
+            onConfirm: onConfirm,
+            confirmButtonColor: confirmButtonColor,
+          ),
     );
   }
 
@@ -211,19 +212,20 @@ class CommonDialogWithTextField extends StatefulWidget {
     return showDialog<String>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => CommonDialogWithTextField(
-        title: title,
-        message: message,
-        secondaryMessage: secondaryMessage,
-        hintText: hintText,
-        cancelText: cancelText,
-        confirmText: confirmText,
-        onCancel: onCancel,
-        onConfirm: onConfirm,
-        confirmButtonColor: confirmButtonColor,
-        maxLines: maxLines,
-        expectedText: expectedText,
-      ),
+      builder:
+          (context) => CommonDialogWithTextField(
+            title: title,
+            message: message,
+            secondaryMessage: secondaryMessage,
+            hintText: hintText,
+            cancelText: cancelText,
+            confirmText: confirmText,
+            onCancel: onCancel,
+            onConfirm: onConfirm,
+            confirmButtonColor: confirmButtonColor,
+            maxLines: maxLines,
+            expectedText: expectedText,
+          ),
     );
   }
 
@@ -371,29 +373,32 @@ class _CommonDialogWithTextFieldState extends State<CommonDialogWithTextField> {
               ),
               Expanded(
                 child: InkWell(
-                  onTap: _isConfirmEnabled
-                      ? () {
-                          final text = _controller.text.trim();
-                          if (text.isEmpty) {
-                            SnackbarUtil.showError(
-                              context,
-                              '${widget.hintText}을(를) 입력해주세요.',
-                            );
-                            return;
+                  onTap:
+                      _isConfirmEnabled
+                          ? () {
+                            final text = _controller.text.trim();
+                            if (text.isEmpty) {
+                              SnackbarUtil.showInfo(
+                                context,
+                                '${widget.hintText}을(를) 입력해주세요.',
+                              );
+                              return;
+                            }
+                            Navigator.of(context).pop(text);
+                            widget.onConfirm?.call(text);
                           }
-                          Navigator.of(context).pop(text);
-                          widget.onConfirm?.call(text);
-                        }
-                      : null,
+                          : null,
                   borderRadius: const BorderRadius.only(
                     bottomRight: Radius.circular(20),
                   ),
                   child: Container(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     decoration: BoxDecoration(
-                      color: _isConfirmEnabled
-                          ? (widget.confirmButtonColor ?? AppColors.textPrimary)
-                          : AppColors.borderLight,
+                      color:
+                          _isConfirmEnabled
+                              ? (widget.confirmButtonColor ??
+                                  AppColors.textPrimary)
+                              : AppColors.borderLight,
                       borderRadius: const BorderRadius.only(
                         bottomRight: Radius.circular(20),
                       ),
@@ -403,9 +408,10 @@ class _CommonDialogWithTextFieldState extends State<CommonDialogWithTextField> {
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: _isConfirmEnabled
-                            ? AppColors.backgroundWhite
-                            : AppColors.textSecondary,
+                        color:
+                            _isConfirmEnabled
+                                ? AppColors.backgroundWhite
+                                : AppColors.textSecondary,
                       ),
                       textAlign: TextAlign.center,
                     ),

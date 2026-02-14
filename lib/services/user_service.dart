@@ -146,7 +146,7 @@ class UserService {
     }
 
     final data = doc.data()!;
-    // Timestamp를 DateTime으로 변환
+    data['userId'] = doc.id;
     data['createdAt'] =
         _timestampToDateTime(data['createdAt']).toIso8601String();
     if (data['updatedAt'] != null) {
@@ -184,6 +184,7 @@ class UserService {
 
         for (final doc in snapshot.docs) {
           final data = doc.data();
+          data['userId'] = doc.id;
           data['createdAt'] =
               _timestampToDateTime(data['createdAt']).toIso8601String();
           if (data['updatedAt'] != null) {

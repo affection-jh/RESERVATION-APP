@@ -111,7 +111,7 @@ class _AdminPlaceRegistrationScreenState
         _isUploading = false;
       });
       if (mounted) {
-        SnackbarUtil.showError(context, '이미지 업로드에 실패했습니다: ${e.toString()}');
+        SnackbarUtil.showInfo(context, '이미지 업로드에 실패했습니다: ${e.toString()}');
       }
     }
   }

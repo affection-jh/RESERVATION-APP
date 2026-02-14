@@ -119,6 +119,20 @@ class NotificationProvider with ChangeNotifier {
     }
   }
 
+  /// 모든 알림 삭제
+  Future<void> deleteAllNotifications() async {
+    if (_notifications.isEmpty) return;
+    try {
+      final ids = _notifications.map((n) => n.id).toList();
+      await _firestoreService.deleteNotifications(ids);
+      _notifications = [];
+      notifyListeners();
+    } catch (e) {
+      debugPrint('[NotificationProvider] deleteAllNotifications 오류: $e');
+      rethrow;
+    }
+  }
+
   /// 새 알림 추가 (FCM 수신 시 사용)
   Future<void> addNotificationFromId(
     String notificationId,

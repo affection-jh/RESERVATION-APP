@@ -279,9 +279,10 @@ class _MemberEditBottomSheetState extends State<MemberEditBottomSheet> {
                                   // 코스 선택 그리드 (코스 개수와 키보드 높이에 따라 동적 조정)
                                   Builder(
                                     builder: (context) {
-                                      final keyboardHeight = MediaQuery.of(
-                                        context,
-                                      ).viewInsets.bottom;
+                                      final keyboardHeight =
+                                          MediaQuery.of(
+                                            context,
+                                          ).viewInsets.bottom;
                                       final courseCount =
                                           courseProvider.courses.length;
                                       // 코스 개수에 따라 기본 높이 계산
@@ -294,11 +295,9 @@ class _MemberEditBottomSheetState extends State<MemberEditBottomSheet> {
                                         300.0, // 최대 높이
                                       );
                                       // 키보드가 올라왔을 때 높이를 줄임 (최소 60px)
-                                      final gridHeight =
-                                          (baseHeight - keyboardHeight).clamp(
-                                            60.0,
-                                            baseHeight,
-                                          );
+                                      final gridHeight = (baseHeight -
+                                              keyboardHeight)
+                                          .clamp(60.0, baseHeight);
                                       return SizedBox(
                                         height: gridHeight,
                                         child: GridView.builder(
@@ -342,19 +341,23 @@ class _MemberEditBottomSheetState extends State<MemberEditBottomSheet> {
                                                       vertical: 12,
                                                     ),
                                                 decoration: BoxDecoration(
-                                                  color: isSelected
-                                                      ? AppColors.textPrimary
-                                                      : AppColors
-                                                            .backgroundWhite,
+                                                  color:
+                                                      isSelected
+                                                          ? AppColors
+                                                              .textPrimary
+                                                          : AppColors
+                                                              .backgroundWhite,
                                                   borderRadius:
                                                       BorderRadius.circular(12),
-                                                  border: isSelected
-                                                      ? null
-                                                      : Border.all(
-                                                          color: AppColors
-                                                              .borderLight,
-                                                          width: 1,
-                                                        ),
+                                                  border:
+                                                      isSelected
+                                                          ? null
+                                                          : Border.all(
+                                                            color:
+                                                                AppColors
+                                                                    .borderLight,
+                                                            width: 1,
+                                                          ),
                                                 ),
                                                 child: Center(
                                                   child: Text(
@@ -363,11 +366,12 @@ class _MemberEditBottomSheetState extends State<MemberEditBottomSheet> {
                                                       fontSize: 16,
                                                       fontWeight:
                                                           FontWeight.bold,
-                                                      color: isSelected
-                                                          ? AppColors
-                                                                .backgroundWhite
-                                                          : AppColors
-                                                                .textPrimary,
+                                                      color:
+                                                          isSelected
+                                                              ? AppColors
+                                                                  .backgroundWhite
+                                                              : AppColors
+                                                                  .textPrimary,
                                                     ),
                                                     textAlign: TextAlign.center,
                                                     maxLines: 2,
@@ -405,23 +409,24 @@ class _MemberEditBottomSheetState extends State<MemberEditBottomSheet> {
                               return SizedBox(
                                 width: double.infinity,
                                 child: ElevatedButton(
-                                  onPressed: isEnabled
-                                      ? () async {
-                                          await _updateMember(
-                                            context,
-                                            nameCtrl.text.trim(),
-                                            phoneCtrl.text.trim(),
-                                            selectedCourseIds,
-                                          );
-                                          Navigator.of(context).pop();
-                                        }
-                                      : null,
+                                  onPressed:
+                                      isEnabled
+                                          ? () async {
+                                            await _updateMember(
+                                              context,
+                                              nameCtrl.text.trim(),
+                                              phoneCtrl.text.trim(),
+                                              selectedCourseIds,
+                                            );
+                                            Navigator.of(context).pop();
+                                          }
+                                          : null,
                                   style: ElevatedButton.styleFrom(
-                                    backgroundColor: isEnabled
-                                        ? AppColors.primaryGreen
-                                        : AppColors.textSecondary.withOpacity(
-                                            0.3,
-                                          ),
+                                    backgroundColor:
+                                        isEnabled
+                                            ? AppColors.primaryGreen
+                                            : AppColors.textSecondary
+                                                .withOpacity(0.3),
                                     foregroundColor: Colors.white,
                                     padding: const EdgeInsets.symmetric(
                                       vertical: 16,
@@ -471,7 +476,7 @@ class _MemberEditBottomSheetState extends State<MemberEditBottomSheet> {
     final placeId = placeProvider.currentPlace?.id;
 
     if (placeId == null) {
-      SnackbarUtil.showError(context, '플레이스를 선택해주세요.');
+      SnackbarUtil.showInfo(context, '플레이스를 선택해주세요.');
       return;
     }
 
@@ -486,7 +491,7 @@ class _MemberEditBottomSheetState extends State<MemberEditBottomSheet> {
       );
 
       if (updatedUser == null) {
-        SnackbarUtil.showError(context, '멤버를 찾을 수 없습니다.');
+        SnackbarUtil.showInfo(context, '멤버를 찾을 수 없습니다.');
         return;
       }
 
@@ -495,7 +500,7 @@ class _MemberEditBottomSheetState extends State<MemberEditBottomSheet> {
       // 멤버 목록 새로고침
       await memberProvider.loadMembers(placeId);
     } catch (e) {
-      SnackbarUtil.showError(context, '멤버 정보 업데이트 중 오류가 발생했습니다: $e');
+      SnackbarUtil.showInfo(context, '멤버 정보 업데이트 중 오류가 발생했습니다: $e');
     }
   }
 }

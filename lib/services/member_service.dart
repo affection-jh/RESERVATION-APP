@@ -791,6 +791,21 @@ class MemberService {
         });
   }
 
+  /// 플레이스별 placeMemberships에 속한 userId 목록 (실시간)
+  /// 수강 취소해도 플레이스 소속이면 멤버 목록에 유지됨
+  Stream<List<String>> watchPlaceMemberUserIds(String placeId) {
+    return _firestore
+        .collection('placeMemberships')
+        .where('placeId', isEqualTo: placeId)
+        .snapshots()
+        .map((snapshot) {
+          return snapshot.docs
+              .map((doc) => doc.data()['userId'] as String?)
+              .whereType<String>()
+              .toList();
+        });
+  }
+
   /// 플레이스별 placeMemberships의 관리자 표시 이름(displayName) 맵
   ///
   /// Returns: userId -> displayName

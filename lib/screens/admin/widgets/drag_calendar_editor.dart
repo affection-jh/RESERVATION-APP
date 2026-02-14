@@ -17,8 +17,11 @@ class DragCalendarEditor extends StatefulWidget {
   final double? hourSlotHeight;
   final double? totalHeight;
   final ScrollController? scrollController;
+  /// 드래그 영역(캘린더 그리드) RenderBox용 키 - 상하단 자동스크롤을 전역 화면이 아닌 이 영역 기준으로 함
+  final GlobalKey? dragAreaKey;
   final Function(List<SessionDraft>) onSessionsChanged;
   final Function(bool)? onDragStateChanged;
+
   /// 빈 영역 터치 시 스크롤 막기 요청( true ), 손 떼면 해제( false ). 롱프레스 인식 전에 스크롤이 제스처를 가져가는 것 방지.
   final Function(bool)? onScrollBlockRequested;
   final Function(String startTime, String endTime, int dayOfWeek)? onDragEnd;
@@ -39,6 +42,7 @@ class DragCalendarEditor extends StatefulWidget {
     this.hourSlotHeight,
     this.totalHeight,
     this.scrollController,
+    this.dragAreaKey,
     required this.onSessionsChanged,
     this.onDragStateChanged,
     this.onScrollBlockRequested,
@@ -57,10 +61,19 @@ class DragCalendarEditor extends StatefulWidget {
 class _DragCalendarEditorState extends State<DragCalendarEditor> {
   static const double _minHourSlotHeight = 60.0;
   static const double _sessionPadding = 2.0;
+
   /// 롱프레스 인식 전: 이 거리(px) 이상 움직이면 롱프레스 취소(스크롤로 간주). 실기기 미세 떨림은 무시.
   static const double _longPressMoveThreshold = 14.0;
+
   /// 롱프레스/드래그 시 터치 위치가 의도보다 아래로 쳐지므로, slot 계산 시 dy를 이만큼 위로 보정
   static const double _longPressDyUpwardOffset = 12.0;
+
+  /// 드래그 중 화면 끝 근처에서 자동 스크롤 (손 가만히 대도 안정적)
+  // enter/exit 히스테리시스: 임계값 근처에서 파르르 떨림 방지
+  static const double _autoScrollEnterZone = 60.0;
+  static const double _autoScrollExitZone = 90.0;
+  static const double _autoScrollStep = 8.0; // 8px / 16ms ≈ 500px/s
+  static const Duration _autoScrollInterval = Duration(milliseconds: 16);
 
   bool _isDragging = false;
   int? _dragStartSlot;
@@ -68,9 +81,14 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
   bool _isBottomSheetOpen = false;
   Timer? _longPressTimer;
   Offset? _longPressStartPosition;
+  Timer? _autoScrollTimer;
+  int _autoScrollDirection = 0; // -1: up, 0: none, 1: down
+  double? _lastFingerViewportY; // 손 가만히 둬도 사용 (매 틱마다 동일 값으로 슬롯 갱신)
 
   ScrollController? _scrollController;
   bool _didInitialJump = false;
+  int _dragRangeStartMinutes = 0;
+  double Function(int minute)? _dragYForMinute;
 
   @override
   void initState() {
@@ -84,7 +102,104 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
       _scrollController?.dispose();
     }
     _longPressTimer?.cancel();
+    _autoScrollTimer?.cancel();
     super.dispose();
+  }
+
+  /// 포인터 위치를 "드래그 영역(캘린더 그리드)" 기준 viewportY로 저장
+  /// - 전역 화면 기준이 아니라 dragAreaKey 기준
+  void _updateFingerViewportY(double fingerContentY, Offset pointerGlobalPosition) {
+    final controller = _scrollController;
+    if (controller == null || !controller.hasClients) return;
+
+    // 1) dragAreaKey가 있으면 그 RenderBox 기준
+    final dragCtx = widget.dragAreaKey?.currentContext;
+    final dragBox = dragCtx?.findRenderObject() as RenderBox?;
+    if (dragBox != null && dragBox.hasSize) {
+      final local = dragBox.globalToLocal(pointerGlobalPosition);
+      _lastFingerViewportY = local.dy.clamp(0.0, dragBox.size.height);
+      return;
+    }
+
+    // 2) fallback: contentY - scrollOffset
+    final vh = controller.position.viewportDimension;
+    final so = controller.offset;
+    _lastFingerViewportY = (fingerContentY - so).clamp(0.0, vh);
+  }
+
+  void _startAutoScrollLoopIfNeeded() {
+    if (_autoScrollTimer != null) return;
+    final controller = _scrollController;
+    if (controller == null) return;
+    _autoScrollTimer = Timer.periodic(_autoScrollInterval, (_) {
+      if (!mounted || !_isDragging || !controller.hasClients) return;
+      _autoScrollTick(controller);
+    });
+  }
+
+  int _computeAutoScrollDirection(double y, double h, int current) {
+    final yClamped = y.clamp(0.0, h);
+    // 반대 엣지로 들어가면 즉시 전환
+    if (yClamped < _autoScrollEnterZone) return -1;
+    if (yClamped > h - _autoScrollEnterZone) return 1;
+
+    // 엣지에서 벗어날 때는 exitZone까지는 유지(히스테리시스)
+    if (current == -1 && yClamped > _autoScrollExitZone) return 0;
+    if (current == 1 && yClamped < h - _autoScrollExitZone) return 0;
+    return current;
+  }
+
+  void _autoScrollTick(ScrollController controller) {
+    final y = _lastFingerViewportY;
+    if (y == null) return;
+
+    // 드래그 영역 높이(가능하면 dragAreaKey 기준), 없으면 viewportDimension
+    double h = controller.position.viewportDimension;
+    final dragCtx = widget.dragAreaKey?.currentContext;
+    final dragBox = dragCtx?.findRenderObject() as RenderBox?;
+    if (dragBox != null && dragBox.hasSize) h = dragBox.size.height;
+
+    final yClamped = y.clamp(0.0, h);
+
+    // 방향은 "손가락 위치"를 단일 소스로 사용 (틱에서도 동일 로직으로 안정화)
+    final dir = _computeAutoScrollDirection(yClamped, h, _autoScrollDirection);
+    _autoScrollDirection = dir;
+    if (dir == 0) return;
+
+    // 슬롯: 손가락 위치 그대로 따라감 (일반모드와 동일 - contentY = offset + viewportY)
+    if (_dragYForMinute != null && _dragStartSlot != null) {
+      final contentY = controller.offset + yClamped;
+      final dyAdjusted =
+          (contentY - _longPressDyUpwardOffset).clamp(0.0, double.infinity);
+      final slot = _getSlotFromPosition(
+        dyAdjusted,
+        _dragRangeStartMinutes,
+        _dragYForMinute!,
+      );
+      final startSlot = _dragStartSlot! < slot ? _dragStartSlot! : slot;
+      final endSlot = _dragStartSlot! > slot ? _dragStartSlot! : slot;
+      if (endSlot - startSlot >= 1) {
+        final startMinutes = _dragRangeStartMinutes + (startSlot * 30);
+        final endMinutes = _dragRangeStartMinutes + ((endSlot + 1) * 30);
+        if (!_hasOverlap(_minutesToTime(startMinutes), _minutesToTime(endMinutes))) {
+          setState(() => _dragEndSlot = slot);
+        }
+      }
+    }
+
+    final step = _autoScrollStep * dir;
+    var target = controller.offset + step;
+    target = target.clamp(
+      controller.position.minScrollExtent,
+      controller.position.maxScrollExtent,
+    );
+    controller.jumpTo(target);
+  }
+
+  void _cancelAutoScroll() {
+    _autoScrollTimer?.cancel();
+    _autoScrollTimer = null;
+    _autoScrollDirection = 0;
   }
 
   @override
@@ -238,30 +353,30 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
             child: IgnorePointer(
               ignoring: true,
               child: Container(
-      decoration: BoxDecoration(
-        border: Border(
-          left: BorderSide(color: AppColors.borderLight, width: 0.5),
-        ),
-      ),
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          ...timeSlots.asMap().entries.map((entry) {
-            final index = entry.key;
-            final isActiveSlot = isActive[index];
-            return Positioned(
-              top: slotTops[index] + 1.0,
-              left: 0,
-              right: 0,
-              child: Container(
-                height: 0.5,
-                color:
-                    isActiveSlot
-                        ? AppColors.borderLight
-                        : AppColors.borderLight.withOpacity(0.2),
-              ),
-            );
-          }).toList(),
+                decoration: BoxDecoration(
+                  border: Border(
+                    left: BorderSide(color: AppColors.borderLight, width: 0.5),
+                  ),
+                ),
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    ...timeSlots.asMap().entries.map((entry) {
+                      final index = entry.key;
+                      final isActiveSlot = isActive[index];
+                      return Positioned(
+                        top: slotTops[index] + 1.0,
+                        left: 0,
+                        right: 0,
+                        child: Container(
+                          height: 0.5,
+                          color:
+                              isActiveSlot
+                                  ? AppColors.borderLight
+                                  : AppColors.borderLight.withOpacity(0.2),
+                        ),
+                      );
+                    }).toList(),
                   ],
                 ),
               ),
@@ -269,12 +384,12 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
           ),
           // 드래그 영역을 먼저 배치 (세션 블록 아래)
           if (widget.isEditMode)
-          _buildDraggableArea(
-            date,
-            rangeStartMinutes: rangeStartMinutes,
-            yForMinute: yForMinute,
-            totalHeight: totalHeight,
-          ),
+            _buildDraggableArea(
+              date,
+              rangeStartMinutes: rangeStartMinutes,
+              yForMinute: yForMinute,
+              totalHeight: totalHeight,
+            ),
           ...widget.sessions.map((session) {
             return _buildSessionBlock(
               session,
@@ -440,7 +555,9 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
     return Positioned.fill(
       child: Listener(
         // 세션 블록의 클릭을 통과시키기 위해 translucent 사용
-        behavior: HitTestBehavior.translucent,
+        // 드래그 중에는 이벤트를 확실히 잡아 cancel/up 오판을 줄인다.
+        behavior:
+            _isDragging ? HitTestBehavior.opaque : HitTestBehavior.translucent,
         onPointerDown: (event) {
           final y = event.localPosition.dy;
           final isOnSession = _isPointerOnSession(
@@ -458,9 +575,13 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
             _longPressTimer = Timer(const Duration(milliseconds: 500), () {
               if (_longPressStartPosition != null) {
                 debugPrint('[DragCalendarEditor] 롱프레스 500ms 완료 → 드래그 시작');
+                _dragRangeStartMinutes = rangeStartMinutes;
+                _dragYForMinute = yForMinute;
                 // 롱프레스가 인식된 뒤에만 스크롤 막기 (그 전에는 스크롤 가능하도록)
                 widget.onScrollBlockRequested?.call(true);
-                final dy = (_longPressStartPosition!.dy - _longPressDyUpwardOffset).clamp(0.0, double.infinity);
+                final dy = (_longPressStartPosition!.dy -
+                        _longPressDyUpwardOffset)
+                    .clamp(0.0, double.infinity);
                 final slot = _getSlotFromPosition(
                   dy,
                   rangeStartMinutes,
@@ -472,6 +593,8 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
                   _dragEndSlot = slot;
                 });
                 widget.onDragStateChanged?.call(true);
+                // 자동 스크롤 루프는 드래그 시작 시부터 유지 (틱에서 방향 결정)
+                _startAutoScrollLoopIfNeeded();
               }
             });
           }
@@ -481,37 +604,67 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
             debugPrint(
               '[DragCalendarEditor] onPointerMove (드래그 중) dy=${event.localPosition.dy}',
             );
-            final dy = (event.localPosition.dy - _longPressDyUpwardOffset).clamp(0.0, double.infinity);
-            final slot = _getSlotFromPosition(
-              dy,
-              rangeStartMinutes,
-              yForMinute,
-            );
-            // 드래그 중에도 겹침 체크
-            final startSlot = _dragStartSlot! < slot ? _dragStartSlot! : slot;
-            final endSlot = _dragStartSlot! > slot ? _dragStartSlot! : slot;
-            if (endSlot - startSlot >= 1) {
-              final startMinutes = rangeStartMinutes + (startSlot * 30);
-              final endMinutes = rangeStartMinutes + ((endSlot + 1) * 30);
-              final startTime = _minutesToTime(startMinutes);
-              final endTime = _minutesToTime(endMinutes);
-
-              // 겹침이 있으면 드래그 중단
-              if (_hasOverlap(startTime, endTime)) {
-                setState(() {
-                  _isDragging = false;
-                  _dragStartSlot = null;
-                  _dragEndSlot = null;
-                });
-                widget.onDragStateChanged?.call(false);
-                _longPressTimer?.cancel();
-                _longPressStartPosition = null;
-                return;
+            // 드래그 영역(캘린더 그리드) 기준으로 마지막 손가락 위치만 갱신
+            _updateFingerViewportY(event.localPosition.dy, event.position);
+            // 방향 전환은 move에서 즉시 반영
+            final sc = _scrollController;
+            if (sc != null && sc.hasClients) {
+              double h = sc.position.viewportDimension;
+              final dragCtx = widget.dragAreaKey?.currentContext;
+              final dragBox = dragCtx?.findRenderObject() as RenderBox?;
+              if (dragBox != null && dragBox.hasSize) h = dragBox.size.height;
+              final yV = _lastFingerViewportY;
+              if (yV != null) {
+                _autoScrollDirection =
+                    _computeAutoScrollDirection(yV, h, _autoScrollDirection);
               }
             }
-            setState(() {
-              _dragEndSlot = slot;
-            });
+            // 1️⃣ 슬롯 계산 기준 통일: 항상 offset + viewportY (timer와 동일)
+            final controller = _scrollController;
+            final yV = _lastFingerViewportY;
+            int? slot;
+            if (controller != null && controller.hasClients && yV != null) {
+              final contentY = controller.offset + yV;
+              final dyAdjusted = (contentY - _longPressDyUpwardOffset)
+                  .clamp(0.0, double.infinity);
+              slot = _getSlotFromPosition(
+                dyAdjusted,
+                rangeStartMinutes,
+                yForMinute,
+              );
+            }
+            if (slot != null) {
+              // 드래그 중에도 겹침 체크
+              final startSlot = _dragStartSlot! < slot ? _dragStartSlot! : slot;
+              final endSlot = _dragStartSlot! > slot ? _dragStartSlot! : slot;
+              if (endSlot - startSlot >= 1) {
+                final startMinutes = rangeStartMinutes + (startSlot * 30);
+                final endMinutes = rangeStartMinutes + ((endSlot + 1) * 30);
+                final startTime = _minutesToTime(startMinutes);
+                final endTime = _minutesToTime(endMinutes);
+
+                // 겹침이 있으면 드래그 중단
+                if (_hasOverlap(startTime, endTime)) {
+                  setState(() {
+                    _isDragging = false;
+                    _dragStartSlot = null;
+                    _dragEndSlot = null;
+                  });
+                  widget.onDragStateChanged?.call(false);
+                  _longPressTimer?.cancel();
+                  _longPressStartPosition = null;
+                  return;
+                }
+              }
+              // 2️⃣ 자동스크롤 중에는 timer만 슬롯 갱신. 일반 모드(_autoScrollDirection==0)일 때만 move가 갱신
+              if (_autoScrollDirection == 0) {
+                if (_dragEndSlot != slot) {
+                  setState(() {
+                    _dragEndSlot = slot;
+                  });
+                }
+              }
+            }
           } else if (!_isDragging && _longPressStartPosition != null) {
             final dx = event.localPosition.dx - _longPressStartPosition!.dx;
             final dy = event.localPosition.dy - _longPressStartPosition!.dy;
@@ -531,15 +684,18 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
             '[DragCalendarEditor] onPointerUp _isDragging=$_isDragging',
           );
           _longPressTimer?.cancel();
+          _cancelAutoScroll();
           if (_isDragging) {
             _endDrag(rangeStartMinutes, yForMinute);
           }
           _longPressStartPosition = null;
+          _lastFingerViewportY = null;
           widget.onScrollBlockRequested?.call(false);
         },
         onPointerCancel: (event) {
           debugPrint('[DragCalendarEditor] onPointerCancel');
           _longPressTimer?.cancel();
+          _cancelAutoScroll();
           setState(() {
             _isDragging = false;
             _dragStartSlot = null;
@@ -547,6 +703,7 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
           });
           widget.onDragStateChanged?.call(false);
           _longPressStartPosition = null;
+          _lastFingerViewportY = null;
           widget.onScrollBlockRequested?.call(false);
         },
         child: Container(color: Colors.transparent),

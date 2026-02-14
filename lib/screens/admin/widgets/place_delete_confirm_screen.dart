@@ -189,7 +189,7 @@ class _PlaceDeleteConfirmScreenState extends State<PlaceDeleteConfirmScreen> {
             e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '').trim();
         final message =
             raw.isNotEmpty ? raw : '플레이스 삭제에 실패했습니다. 잠시 후 다시 시도해주세요.';
-        SnackbarUtil.showError(context, message);
+        SnackbarUtil.showInfo(context, message);
       }
     }
   }

@@ -15,6 +15,7 @@ import '../screens/admin/widgets/enrollment_detail_screen.dart';
 import '../models/admin_models.dart';
 import '../screens/story/story_detail_screen.dart';
 import '../providers/story_provider.dart';
+import '../widgets/common_dialog.dart';
 
 /// 알림 스크린
 class NotificationScreen extends StatefulWidget {
@@ -26,48 +27,37 @@ class NotificationScreen extends StatefulWidget {
 
 class _NotificationScreenState extends State<NotificationScreen> {
   final ScrollController _scrollController = ScrollController();
-  bool _hasLoaded = false;
 
   @override
   void initState() {
     super.initState();
-    // 화면이 열릴 때 데이터가 없으면 로드
+    // 알림 화면에 들어올 때마다 최신 목록 재로드 (포그라운드에서 onMessage 미수신 시에도 빨간 점/목록 동기화)
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _loadNotificationsIfNeeded();
+      _refreshNotifications();
     });
   }
 
-  void _loadNotificationsIfNeeded() {
-    if (_hasLoaded) return;
-
+  void _refreshNotifications() {
+    if (!mounted) return;
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
     final notificationProvider = Provider.of<NotificationProvider>(
       context,
       listen: false,
     );
+    final user = authProvider.currentUser;
+    final admin = authProvider.currentAdmin;
+    final currentPlace = placeProvider.currentPlace;
 
-    // 알림이 없고 로딩 중이 아니면 로드
-    if (notificationProvider.notifications.isEmpty &&
-        !notificationProvider.isLoading) {
-      final user = authProvider.currentUser;
-      final admin = authProvider.currentAdmin;
-      final currentPlace = placeProvider.currentPlace;
-
-      if (user != null || admin != null) {
-        _hasLoaded = true;
-
-        // 관리자인지 일반 사용자인지 확인
-        final isAdmin = admin != null;
-        final userId = isAdmin ? admin.userId : user!.userId;
-        final placeId = currentPlace?.id;
-
-        notificationProvider.loadNotifications(
-          userId,
-          isAdmin: isAdmin,
-          placeId: placeId,
-        );
-      }
+    if (user != null || admin != null) {
+      final isAdmin = admin != null;
+      final userId = isAdmin ? admin.userId : user!.userId;
+      final placeId = currentPlace?.id;
+      notificationProvider.loadNotifications(
+        userId,
+        isAdmin: isAdmin,
+        placeId: placeId,
+      );
     }
   }
 
@@ -353,11 +343,45 @@ class _NotificationScreenState extends State<NotificationScreen> {
                 ],
               ],
             ),
-            actions: [],
+            actions: [
+              if (notifications.isNotEmpty)
+                TextButton(
+                  onPressed: () async {
+                    final confirmed = await CommonDialog.show(
+                      context: context,
+                      title: '알림 모두 지우기',
+                      message: '모든 알림을 삭제하시겠습니까?',
+                      cancelText: '취소',
+                      confirmText: '모두 지우기',
+                      confirmButtonColor: const Color.fromARGB(
+                        255,
+                        255,
+                        79,
+                        67,
+                      ),
+                    );
+                    if (confirmed == true) {
+                      await notificationProvider.deleteAllNotifications();
+                    }
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Text(
+                      '모두 지우기',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary.withOpacity(0.8),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
           body: RefreshIndicator(
             onRefresh: () async {
-              // 새로고침은 하지 않음 (FCM으로 자동 갱신)
+              _refreshNotifications();
+              await Future.delayed(const Duration(milliseconds: 400));
             },
             child: _buildBody(
               notifications,
@@ -774,7 +798,9 @@ class _NotificationTile extends StatelessWidget {
     final now = TimezoneUtils.getSeoulDateTime();
     final difference = now.difference(dateTime);
 
-    if (difference.inMinutes < 60) {
+    if (difference.inMinutes < 1) {
+      return '방금';
+    } else if (difference.inMinutes < 60) {
       return '${difference.inMinutes}분 전';
     } else if (difference.inHours < 24) {
       return '${difference.inHours}시간 전';

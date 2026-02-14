@@ -57,18 +57,19 @@ class ReservationBottomSheet extends StatefulWidget {
       backgroundColor: Colors.transparent,
       barrierColor: Colors.black.withOpacity(0.7),
       useSafeArea: true,
-      builder: (context) => ReservationBottomSheet(
-        activityName: activityName,
-        date: date,
-        startTime: startTime,
-        endTime: endTime,
-        availableSeats: availableSeats,
-        totalSeats: totalSeats,
-        remainingReservations: remainingReservations,
-        course: course,
-        onConfirm: onConfirm,
-        onCancel: onCancel,
-      ),
+      builder:
+          (context) => ReservationBottomSheet(
+            activityName: activityName,
+            date: date,
+            startTime: startTime,
+            endTime: endTime,
+            availableSeats: availableSeats,
+            totalSeats: totalSeats,
+            remainingReservations: remainingReservations,
+            course: course,
+            onConfirm: onConfirm,
+            onCancel: onCancel,
+          ),
     );
   }
 
@@ -140,7 +141,7 @@ class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
       // 애플 스타일의 에러 메시지 표시
       final errorMessage = _getErrorMessage(e);
       debugPrint('[ReservationBottomSheet] 사용자에게 표시할 에러 메시지: $errorMessage');
-      SnackbarUtil.showError(context, errorMessage);
+      SnackbarUtil.showInfo(context, errorMessage);
     }
   }
 
@@ -376,9 +377,10 @@ class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
   // 등록 정보 위젯 (남은 횟수 + 유효기간)
   Widget _buildEnrollmentInfo(BuildContext context) {
     final enrollmentProvider = Provider.of<EnrollmentProvider>(context);
-    final enrollment = widget.course != null
-        ? enrollmentProvider.enrollmentsByCourseId[widget.course!.id]
-        : null;
+    final enrollment =
+        widget.course != null
+            ? enrollmentProvider.enrollmentsByCourseId[widget.course!.id]
+            : null;
 
     if (enrollment == null) {
       return const SizedBox.shrink();
@@ -509,12 +511,13 @@ class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
         Expanded(
           flex: 1,
           child: ElevatedButton(
-            onPressed: _isSubmitting
-                ? null
-                : () {
-                    Navigator.of(context).pop();
-                    widget.onCancel?.call();
-                  },
+            onPressed:
+                _isSubmitting
+                    ? null
+                    : () {
+                      Navigator.of(context).pop();
+                      widget.onCancel?.call();
+                    },
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.textPrimary.withOpacity(0.03),
               foregroundColor: AppColors.textPrimary,
@@ -538,33 +541,37 @@ class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
           child: ElevatedButton(
             onPressed: canReserve ? _handleConfirm : null,
             style: ElevatedButton.styleFrom(
-              backgroundColor: canReserve
-                  ? AppColors.primaryGreen
-                  : AppColors.textPrimary.withOpacity(0.1),
-              foregroundColor: canReserve
-                  ? Colors.white
-                  : AppColors.textSecondary,
+              backgroundColor:
+                  canReserve
+                      ? AppColors.primaryGreen
+                      : AppColors.textPrimary.withOpacity(0.1),
+              foregroundColor:
+                  canReserve ? Colors.white : AppColors.textSecondary,
               padding: const EdgeInsets.symmetric(vertical: 14),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(20),
               ),
               elevation: 0,
             ),
-            child: _isSubmitting
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        AppColors.primaryGreen,
+            child:
+                _isSubmitting
+                    ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          AppColors.primaryGreen,
+                        ),
+                      ),
+                    )
+                    : const Text(
+                      '예약하기',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                  )
-                : const Text(
-                    '예약하기',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                  ),
           ),
         ),
       ],

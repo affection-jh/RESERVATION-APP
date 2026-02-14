@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
 import '../theme/app_colors.dart';
 import '../utils/text_field_decoration_util.dart';
 import '../services/auth_service.dart';
@@ -97,208 +99,172 @@ class _NameInputScreenState extends State<NameInputScreen> {
           arguments: widget.phoneNumber,
         );
       }
-    } catch (e) {
-      if (mounted) {
-        // 세션 만료 에러인 경우 더 친화적인 메시지
-        String errorMessage = e.toString();
-        if (errorMessage.contains('session-expired') ||
-            errorMessage.contains('만료되었거나')) {
-          errorMessage = '인증 코드가 만료되었습니다. 인증 코드를 다시 요청해주세요.';
-          // 인증 코드 입력 화면으로 돌아가기
+    } catch (e, stackTrace) {
+      debugPrint('[NameInputScreen] 가입/인증 오류: $e');
+      debugPrint('[NameInputScreen] 스택: $stackTrace');
+      if (!mounted) return;
+      String userMessage;
+      if (e is firebase_auth.FirebaseAuthException) {
+        if (e.code == 'invalid-verification-code') {
+          userMessage = '인증번호가 올바르지 않습니다.';
+        } else if (e.code == 'session-expired' ||
+            e.code == 'invalid-verification-id') {
+          userMessage = '인증 시간이 만료되었습니다. 인증번호를 다시 요청해주세요.';
           Navigator.of(context).pop();
+          setState(() => _isSubmitting = false);
+          return;
         } else {
-          errorMessage = errorMessage.replaceAll('Exception: ', '');
-          // TextField에 에러 표시
-          setState(() {
-            _errorMessage = errorMessage;
-            _isSubmitting = false;
-          });
+          userMessage = '인증 중 오류가 발생했습니다. 다시 시도해주세요.';
+        }
+      } else if (e is FirebaseFunctionsException) {
+        if (e.code == 'permission-denied' || e.code == 'unauthenticated') {
+          userMessage = '일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
+        } else if (e.code == 'invalid-argument') {
+          userMessage = e.message ?? '입력값을 확인해주세요.';
+        } else {
+          userMessage = '처리 중 오류가 발생했습니다. 다시 시도해주세요.';
+        }
+      } else {
+        final raw = e.toString();
+        if (raw.contains('session-expired') ||
+            raw.contains('만료되었습니다') ||
+            raw.contains('만료되었거나')) {
+          userMessage = '인증 코드가 만료되었습니다. 인증 코드를 다시 요청해주세요.';
+          Navigator.of(context).pop();
+          setState(() => _isSubmitting = false);
+          return;
+        }
+        if (raw.contains('permission-denied') ||
+            raw.contains('cloud_firestore')) {
+          userMessage = '일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
+        } else if (raw.contains('network') || raw.contains('Connection')) {
+          userMessage = '네트워크 연결을 확인한 뒤 다시 시도해주세요.';
+        } else {
+          userMessage = '오류가 발생했습니다. 다시 시도해주세요.';
         }
       }
+      setState(() {
+        _errorMessage = userMessage;
+        _isSubmitting = false;
+      });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.backgroundWhite,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // 뒤로가기 버튼
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: IconButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  icon: const Icon(
-                    Icons.arrow_back_ios,
-                    color: AppColors.textPrimary,
-                  ),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                ),
-              ),
-            ),
+    return PopScope(
+      canPop: false, // 인증 완료 후 이름 입력 단계에서는 뒤로가기 차단
+      child: Scaffold(
+        backgroundColor: AppColors.backgroundWhite,
+        body: SafeArea(
+          child: Column(
+            children: [
+              const SizedBox(height: 16),
 
-            // 메인 콘텐츠
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const SizedBox(height: 20),
-                    // 제목
-                    Text(
-                      '이름을 입력해주세요',
-                      style: TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textPrimary,
-                        letterSpacing: -0.5,
-                      ),
-                    ),
-
-                    const SizedBox(height: 20),
-
-                    TextField(
-                      controller: _nameController,
-                      focusNode: _nameFocusNode,
-                      textInputAction: TextInputAction.done,
-                      onSubmitted: (_) => _onSubmit(),
-                      inputFormatters: [LengthLimitingTextInputFormatter(20)],
-                      style: TextStyle(
-                        fontSize: 18,
-                        color: AppColors.textPrimary,
-                        fontWeight: FontWeight.w500,
-                      ),
-                      decoration: InputDecoration(
-                        prefixIcon: Padding(
-                          padding: const EdgeInsets.only(
-                            top: 10,
-                            left: 12,
-                            right: 6,
-                            bottom: 6,
-                          ),
-                          child: Icon(
-                            Icons.person,
-                            color: AppColors.textSecondary,
-                            size: 20,
-                          ),
+              // 메인 콘텐츠
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 50),
+                      // 제목
+                      Text(
+                        '이름을 입력해주세요',
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.textPrimary,
+                          letterSpacing: -0.5,
                         ),
-                        labelText: '이름',
-                        labelStyle: TextStyle(
+                      ),
+
+                      const SizedBox(height: 10),
+
+                      TextField(
+                        controller: _nameController,
+                        focusNode: _nameFocusNode,
+                        textInputAction: TextInputAction.done,
+                        onSubmitted: (_) => _onSubmit(),
+                        inputFormatters: [LengthLimitingTextInputFormatter(20)],
+                        style: TextStyle(
                           fontSize: 18,
-                          color:
-                              _errorMessage != null
-                                  ? Colors.red
-                                  : AppColors.primaryGreen,
+                          color: AppColors.textPrimary,
                           fontWeight: FontWeight.w500,
                         ),
-                        floatingLabelBehavior: FloatingLabelBehavior.always,
-                        hintText: '이름을 입력해주세요',
-                        hintStyle: TextStyle(
-                          fontSize: 18,
-                          color: AppColors.textLight,
-                        ),
-                        errorText: _errorMessage,
-                        errorStyle: TextFieldDecorationUtil.defaultErrorStyle(),
-                        filled: true,
-                        fillColor: AppColors.backgroundWhite,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(16),
-                          borderSide: BorderSide(
-                            color:
-                                _errorMessage != null
-                                    ? Colors.red
-                                    : AppColors.primaryGreen,
-                            width: 1,
+                        decoration: TextFieldDecorationUtil.defaultDecoration(
+                          prefixIcon: Padding(
+                            padding: const EdgeInsets.only(
+                              top: 10,
+                              left: 12,
+                              right: 6,
+                              bottom: 6,
+                            ),
+                            child: Icon(
+                              Icons.person,
+                              color: AppColors.textSecondary,
+                              size: 20,
+                            ),
                           ),
+                          hintText: '이름을 입력해주세요',
+                          errorText: _errorMessage,
+                          hasError: _errorMessage != null,
+                          floatingLabelBehavior: FloatingLabelBehavior.always,
                         ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(16),
-                          borderSide: BorderSide(
-                            color:
-                                _errorMessage != null
-                                    ? Colors.red
-                                    : AppColors.primaryGreen,
-                            width: 1,
-                          ),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(16),
-                          borderSide: BorderSide(
-                            color:
-                                _errorMessage != null
-                                    ? Colors.red
-                                    : AppColors.primaryGreen,
-                            width: 1,
-                          ),
-                        ),
-                        errorBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(16),
-                          borderSide: BorderSide(color: Colors.red, width: 1),
-                        ),
-                        focusedErrorBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(16),
-                          borderSide: BorderSide(color: Colors.red, width: 1),
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 18,
-                        ),
+                        onChanged: (_) => _onNameChanged(),
                       ),
-                      onChanged: (_) => _onNameChanged(),
-                    ),
 
-                    const SizedBox(height: 32),
-                  ],
-                ),
-              ),
-            ), // 완료 버튼
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed:
-                      (_isFormValid() && !_isSubmitting) ? _onSubmit : null,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primaryGreen,
-                    foregroundColor: Colors.white,
-                    disabledBackgroundColor: AppColors.borderLight,
-                    disabledForegroundColor: AppColors.textLight,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    elevation: 0,
+                      const SizedBox(height: 32),
+                    ],
                   ),
-                  child:
-                      _isSubmitting
-                          ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(
-                                AppColors.primaryGreen,
+                ),
+              ), // 완료 버튼
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 12,
+                ),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed:
+                        (_isFormValid() && !_isSubmitting) ? _onSubmit : null,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primaryGreen,
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: AppColors.borderLight,
+                      disabledForegroundColor: AppColors.textLight,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      elevation: 0,
+                    ),
+                    child:
+                        _isSubmitting
+                            ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  AppColors.primaryGreen,
+                                ),
+                              ),
+                            )
+                            : const Text(
+                              '완료',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
-                          )
-                          : const Text(
-                            '완료',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

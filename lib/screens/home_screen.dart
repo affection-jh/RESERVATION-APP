@@ -249,11 +249,11 @@ class _HomeScreenState extends State<HomeScreen> {
             place != null &&
             !memberIds.contains(place.id) &&
             !adminIds.contains(place.id);
-        final isLoggedIn = authProvider.currentUser != null ||
+        final isLoggedIn =
+            authProvider.currentUser != null ||
             authProvider.currentAdmin != null;
         // 로그인 안 되어 있어도 나가기 버튼 표시
-        final showExitButton =
-            place != null && (!isLoggedIn || isUnregistered);
+        final showExitButton = place != null && (!isLoggedIn || isUnregistered);
 
         return Row(
           children: [
@@ -846,9 +846,9 @@ class _HomeScreenState extends State<HomeScreen> {
         // 시간 (크게)
         Text(
           timeText,
-          style: GoogleFonts.lato(
+          style: TextStyle(
             fontSize: 34,
-            fontWeight: FontWeight.w800,
+            fontWeight: FontWeight.w700,
             color: AppColors.textPrimary,
           ),
         ),

@@ -203,9 +203,10 @@ class _VerificationCodeScreenState extends State<VerificationCodeScreen> {
             e.toString().contains('회원가입을 위해')) {
           debugPrint('[VerificationCodeScreen._onVerify] 이름 입력 화면으로 이동');
           if (mounted) {
-            // 이름 입력 화면으로 이동
-            Navigator.of(context).pushNamed(
+            // 인증 관련 화면(전화번호·인증코드) 제거 후 이름 입력만 남김 → 뒤로가기 불가
+            Navigator.of(context).pushNamedAndRemoveUntil(
               '/name-input',
+              (route) => false,
               arguments: {'phoneNumber': widget.phoneNumber, 'smsCode': code},
             );
           }

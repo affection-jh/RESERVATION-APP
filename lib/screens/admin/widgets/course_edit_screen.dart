@@ -9,6 +9,7 @@ import '../../../theme/app_colors.dart';
 import '../../../models/course.dart' as reservation_models;
 import '../../../utils/text_field_decoration_util.dart';
 import '../../../services/storage_service.dart';
+import '../../../utils/navigator_key.dart';
 import '../../../utils/snackbar_util.dart';
 import '../../../widgets/cached_image_widget.dart';
 import '../../../widgets/course_color_picker_bottom_sheet.dart';
@@ -263,7 +264,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
         _isUploading = false;
       });
       if (mounted) {
-        SnackbarUtil.showError(context, '이미지 업로드에 실패했습니다: ${e.toString()}');
+        SnackbarUtil.showInfo(context, '이미지 업로드에 실패했습니다: ${e.toString()}');
       }
     }
   }
@@ -325,7 +326,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
       final currentPlace = placeProvider.currentPlace;
       if (currentPlace == null) {
         if (mounted) {
-          SnackbarUtil.showError(context, '플레이스 정보를 찾을 수 없습니다.');
+          SnackbarUtil.showInfo(context, '플레이스 정보를 찾을 수 없습니다.');
         }
         return;
       }
@@ -363,7 +364,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
       }
     } catch (e) {
       if (mounted) {
-        SnackbarUtil.showError(context, '저장에 실패했습니다: ${e.toString()}');
+        SnackbarUtil.showInfo(context, '저장에 실패했습니다: ${e.toString()}');
       }
     } finally {
       if (mounted) {
@@ -403,7 +404,9 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
       return;
     }
 
-    // 삭제 진행 (이미 _isDeleting이 true이므로 setState 불필요)
+    // 삭제 진행 - 스낵바로 로딩 표시
+    final ctx = navigatorKey.currentContext ?? context;
+    SnackbarUtil.showLoading(ctx, '코스 삭제중');
 
     try {
       final courseProvider = Provider.of<CourseProvider>(
@@ -433,6 +436,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
             confirmButtonColor: Colors.red,
           );
           if (confirmedCascade != true) {
+            if (mounted) setState(() => _isDeleting = false);
             return;
           }
 
@@ -442,19 +446,25 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
         }
       }
 
-      if (mounted) {
-        SnackbarUtil.showSuccess(context, '코스가 삭제되었습니다.');
-        // 빌드 단계 종료 후 pop (setState during build 방지)
+      // 삭제 완료 - navigatorKey 사용 (사용자가 뒤로가기로 나갔어도 동작)
+      // AdminScreen은 /admin 라우트가 아니라 AppStartupScreen(/)의 _targetScreen으로 표시되므로
+      // popUntil('/admin')은 매칭되지 않아 스택이 비어버림 → 고정 2번 pop (편집+상세)
+      final navCtx = navigatorKey.currentContext;
+      if (navCtx != null) {
+        final navigator = Navigator.of(navCtx);
+        if (navigator.canPop()) navigator.pop(); // CourseEditScreen
+        if (navigator.canPop()) navigator.pop(); // CourseDetailScreen
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          // 편집 화면 + 상세 화면 닫아서 관리자 홈(코스 목록)으로 복귀
-          if (Navigator.of(context).canPop()) Navigator.of(context).pop();
-          if (mounted && Navigator.of(context).canPop()) Navigator.of(context).pop();
+          final ctx = navigatorKey.currentContext;
+          if (ctx != null) {
+            SnackbarUtil.showSuccess(ctx, '코스가 삭제되었습니다.');
+          }
         });
       }
     } catch (e) {
-      if (mounted) {
-        SnackbarUtil.showError(context, '코스 삭제 중 문제가 발생했어요.\n잠시 후 다시 시도해주세요.');
+      final navCtx = navigatorKey.currentContext;
+      if (navCtx != null) {
+        SnackbarUtil.showInfo(navCtx, '코스 삭제 중 문제가 발생했어요.\n잠시 후 다시 시도해주세요.');
       }
     } finally {
       if (mounted) {
@@ -526,26 +536,15 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                                     shape: BoxShape.circle,
                                   ),
                                   child: Center(
-                                    child:
-                                        _isDeleting
-                                            ? const SizedBox(
-                                              width: 20,
-                                              height: 20,
-                                              child: CircularProgressIndicator(
-                                                strokeWidth: 2,
-                                                color: AppColors.primaryGreen,
-                                              ),
-                                            )
-                                            : SvgPicture.asset(
-                                              'assets/icons/delete.svg',
-                                              width: 20,
-                                              height: 20,
-                                              colorFilter:
-                                                  const ColorFilter.mode(
-                                                    Colors.red,
-                                                    BlendMode.srcIn,
-                                                  ),
-                                            ),
+                                    child: SvgPicture.asset(
+                                      'assets/icons/delete.svg',
+                                      width: 20,
+                                      height: 20,
+                                      colorFilter: const ColorFilter.mode(
+                                        Colors.red,
+                                        BlendMode.srcIn,
+                                      ),
+                                    ),
                                   ),
                                 ),
                               ),
@@ -723,16 +722,6 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
           ),
           onChanged: (_) => setState(() {}),
         ),
-        if (errorText != null) ...[
-          const SizedBox(height: 4),
-          Padding(
-            padding: const EdgeInsets.only(left: 16),
-            child: Text(
-              errorText,
-              style: const TextStyle(fontSize: 12, color: Colors.red),
-            ),
-          ),
-        ],
       ],
     );
   }

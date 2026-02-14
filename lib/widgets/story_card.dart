@@ -28,6 +28,22 @@ class StoryCard extends StatefulWidget {
 }
 
 class _StoryCardState extends State<StoryCard> {
+  bool _backgroundImageLoaded = false;
+
+  @override
+  void didUpdateWidget(StoryCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.backgroundImageUrl != widget.backgroundImageUrl) {
+      _backgroundImageLoaded = false;
+    }
+  }
+
+  bool get _hasBackgroundImage =>
+      widget.backgroundImageUrl != null &&
+      widget.backgroundImageUrl!.isNotEmpty;
+
+  bool get _showGradient => _hasBackgroundImage && _backgroundImageLoaded;
+
   @override
   Widget build(BuildContext context) {
     return AspectRatio(
@@ -46,8 +62,7 @@ class _StoryCardState extends State<StoryCard> {
               fit: StackFit.expand,
               children: [
                 // 배경 이미지
-                if (widget.backgroundImageUrl != null &&
-                    widget.backgroundImageUrl!.isNotEmpty)
+                if (_hasBackgroundImage)
                   CachedNetworkImage(
                     imageUrl: widget.backgroundImageUrl!,
                     fit: BoxFit.cover,
@@ -58,6 +73,19 @@ class _StoryCardState extends State<StoryCard> {
                     memCacheHeight: 1000,
                     fadeInDuration: const Duration(milliseconds: 0),
                     fadeOutDuration: const Duration(milliseconds: 0),
+                    imageBuilder: (context, imageProvider) {
+                      if (!_backgroundImageLoaded && mounted) {
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (mounted) {
+                            setState(() => _backgroundImageLoaded = true);
+                          }
+                        });
+                      }
+                      return Image(
+                        image: imageProvider,
+                        fit: BoxFit.cover,
+                      );
+                    },
                     placeholder: (context, url) =>
                         Container(color: AppColors.backgroundWhite),
                     errorWidget: (context, url, error) =>
@@ -75,8 +103,7 @@ class _StoryCardState extends State<StoryCard> {
                     width: 24,
                     height: 24,
                     colorFilter: ColorFilter.mode(
-                      widget.backgroundImageUrl != null &&
-                              widget.backgroundImageUrl!.isNotEmpty
+                      _showGradient
                           ? Colors.white.withOpacity(0.9)
                           : AppColors.textPrimary,
                       BlendMode.srcIn,
@@ -106,61 +133,95 @@ class _StoryCardState extends State<StoryCard> {
                     ),
                   ),
 
-                // 텍스트 오버레이 (이미지 있으면 그라데이션+흰글씨, 없으면 그라데이션 없이 textPrimary)
+                // 텍스트 오버레이 (이미지 로드 완료 시 그라데이션+흰글씨 200ms 페이드인)
                 Positioned(
                   bottom: 0,
                   left: 0,
                   right: 0,
-                  child: Container(
-                    decoration: widget.backgroundImageUrl != null &&
-                            widget.backgroundImageUrl!.isNotEmpty
-                        ? BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [
-                                Colors.transparent,
-                                Colors.black.withOpacity(0.65),
-                                Colors.black.withOpacity(0.75),
+                  child: _showGradient
+                      ? TweenAnimationBuilder<double>(
+                          key: const ValueKey('gradient_fade'),
+                          tween: Tween(begin: 0, end: 1),
+                          duration: const Duration(milliseconds: 200),
+                          curve: Curves.easeOut,
+                          builder: (context, value, child) {
+                            return Opacity(
+                              opacity: value,
+                              child: child,
+                            );
+                          },
+                          child: Container(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [
+                                  Colors.transparent,
+                                  Colors.black.withOpacity(0.65),
+                                  Colors.black.withOpacity(0.75),
+                                ],
+                              ),
+                            ),
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  widget.title,
+                                  style: const TextStyle(
+                                    fontSize: 28,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  widget.content,
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    color: Colors.white.withOpacity(0.9),
+                                    height: 1.5,
+                                  ),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ],
                             ),
-                          )
-                        : null,
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          widget.title,
-                          style: TextStyle(
-                            fontSize: 28,
-                            fontWeight: FontWeight.bold,
-                            color: widget.backgroundImageUrl != null &&
-                                    widget.backgroundImageUrl!.isNotEmpty
-                                ? Colors.white
-                                : AppColors.textPrimary,
                           ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          widget.content,
-                          style: TextStyle(
-                            fontSize: 16,
-                            color: widget.backgroundImageUrl != null &&
-                                    widget.backgroundImageUrl!.isNotEmpty
-                                ? Colors.white.withOpacity(0.9)
-                                : AppColors.textPrimary,
-                            height: 1.5,
+                        )
+                      : Container(
+                          padding: const EdgeInsets.all(20),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                widget.title,
+                                style: TextStyle(
+                                  fontSize: 28,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.textPrimary,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                widget.content,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: AppColors.textPrimary,
+                                  height: 1.5,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
                           ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
                         ),
-                      ],
-                    ),
-                  ),
                 ),
               ],
             ),

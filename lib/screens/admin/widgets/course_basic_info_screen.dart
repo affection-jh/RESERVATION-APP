@@ -169,7 +169,7 @@ class _CourseBasicInfoScreenState extends State<CourseBasicInfoScreen> {
         _isUploading = false;
       });
       if (mounted) {
-        SnackbarUtil.showError(context, '이미지 업로드에 실패했습니다: ${e.toString()}');
+        SnackbarUtil.showInfo(context, '이미지 업로드에 실패했습니다: ${e.toString()}');
       }
     }
   }
@@ -307,7 +307,7 @@ class _CourseBasicInfoScreenState extends State<CourseBasicInfoScreen> {
             ),
             // 하단 버튼
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
               child: SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
@@ -329,7 +329,7 @@ class _CourseBasicInfoScreenState extends State<CourseBasicInfoScreen> {
                             ? AppColors.primaryGreen
                             : AppColors.borderLight,
                     disabledBackgroundColor: AppColors.borderLight,
-                    padding: const EdgeInsets.symmetric(vertical: 18),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(20),
                     ),

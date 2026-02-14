@@ -316,8 +316,8 @@ class _CourseMemberRegistrationScreenState
     setState(() {
       _mode =
           index == 0
-          ? CourseMemberRegistrationMode.inputNew
-          : CourseMemberRegistrationMode.selectExisting;
+              ? CourseMemberRegistrationMode.inputNew
+              : CourseMemberRegistrationMode.selectExisting;
       // 탭 변경 시 선택된 멤버 초기화
       _selectedMemberName = null;
       _selectedMemberPhone = null;
@@ -480,7 +480,7 @@ class _CourseMemberRegistrationScreenState
         } else {
           errorMessage = '코스 등록 중 오류가 발생했습니다.';
         }
-        SnackbarUtil.showError(context, errorMessage);
+        SnackbarUtil.showInfo(context, errorMessage);
       }
     } finally {
       if (mounted) {
@@ -696,36 +696,36 @@ class _CourseMemberRegistrationScreenState
             child: ElevatedButton.icon(
               onPressed:
                   canAdd
-                  ? () => _addAndSaveMember(name: name, phoneNumber: phone)
-                  : null,
+                      ? () => _addAndSaveMember(name: name, phoneNumber: phone)
+                      : null,
               icon: Icon(
                 Icons.add,
                 color: canAdd ? Colors.white : AppColors.textSecondary,
               ),
               label:
                   _isSaving
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          AppColors.primaryGreen,
+                      ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            AppColors.primaryGreen,
+                          ),
+                        ),
+                      )
+                      : const Text(
+                        '추가',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
-                    )
-                  : const Text(
-                      '추가',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
               style: ElevatedButton.styleFrom(
                 backgroundColor:
                     canAdd
-                    ? AppColors.primaryGreen
-                    : AppColors.textSecondary.withOpacity(0.3),
+                        ? AppColors.primaryGreen
+                        : AppColors.textSecondary.withOpacity(0.3),
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 18),
                 shape: RoundedRectangleBorder(
@@ -771,8 +771,8 @@ class _CourseMemberRegistrationScreenState
                     setState(() {
                       _mode =
                           index == 0
-                          ? CourseMemberRegistrationMode.inputNew
-                          : CourseMemberRegistrationMode.selectExisting;
+                              ? CourseMemberRegistrationMode.inputNew
+                              : CourseMemberRegistrationMode.selectExisting;
                       // 탭 변경 시 선택된 멤버 초기화
                       _selectedMemberName = null;
                       _selectedMemberPhone = null;
@@ -863,29 +863,29 @@ class _CourseMemberRegistrationScreenState
                                 final courseIds = pm.derivedCourseIds;
                                 final enrollments =
                                     courseIds.map((courseId) {
-                                  return CourseEnrollment(
-                                    id: 'pending_${pm.id}_$courseId',
-                                    userId: 'pending_${pm.id}',
-                                    courseId: courseId.toString(),
-                                    placeId: pm.placeId,
-                                    enrolledAt: pm.createdAt,
-                                    validFrom: now.subtract(
-                                      const Duration(days: 1),
-                                    ),
-                                    validUntil: now.add(
-                                      const Duration(days: 3650),
-                                    ),
-                                    totalReservations: 1,
-                                    remainingReservations: 1,
-                                  );
-                                }).toList();
+                                      return CourseEnrollment(
+                                        id: 'pending_${pm.id}_$courseId',
+                                        userId: 'pending_${pm.id}',
+                                        courseId: courseId.toString(),
+                                        placeId: pm.placeId,
+                                        enrolledAt: pm.createdAt,
+                                        validFrom: now.subtract(
+                                          const Duration(days: 1),
+                                        ),
+                                        validUntil: now.add(
+                                          const Duration(days: 3650),
+                                        ),
+                                        totalReservations: 1,
+                                        remainingReservations: 1,
+                                      );
+                                    }).toList();
 
                                 return User(
                                   userId: 'pending_${pm.id}',
                                   name:
                                       (pm.name ?? '이름 없음').trim().isEmpty
-                                      ? '이름 없음'
-                                      : (pm.name ?? '이름 없음').trim(),
+                                          ? '이름 없음'
+                                          : (pm.name ?? '이름 없음').trim(),
                                   phoneNumber: pm.phoneNumber,
                                   placeIds: [pm.placeId],
                                   enrollments: enrollments,
@@ -903,10 +903,10 @@ class _CourseMemberRegistrationScreenState
 
                           final users =
                               allMembers.where((u) {
-                            if (u.isEnrolledInCourse(widget.courseId))
-                              return false;
-                            return matches(u.name, u.phoneNumber);
-                          }).toList();
+                                if (u.isEnrolledInCourse(widget.courseId))
+                                  return false;
+                                return matches(u.name, u.phoneNumber);
+                              }).toList();
 
                           if (kDebugMode) {
                             debugPrint(
@@ -965,8 +965,8 @@ class _CourseMemberRegistrationScreenState
                                   phone: u.phoneNumber,
                                   statusLabel:
                                       MemberUtils.isPendingMember(u.userId)
-                                      ? '대기'
-                                      : null,
+                                          ? '대기'
+                                          : null,
                                   onTap: () {
                                     setState(() {
                                       _selectedMemberName = u.name;
@@ -1002,39 +1002,39 @@ class _CourseMemberRegistrationScreenState
               child: ElevatedButton.icon(
                 onPressed:
                     canAdd
-                    ? () => _addAndSaveMember(
-                        name: _selectedMemberName!,
-                        phoneNumber: _selectedMemberPhone!,
-                      )
-                    : null,
+                        ? () => _addAndSaveMember(
+                          name: _selectedMemberName!,
+                          phoneNumber: _selectedMemberPhone!,
+                        )
+                        : null,
                 icon: Icon(
                   Icons.add,
                   color: canAdd ? Colors.white : AppColors.textSecondary,
                 ),
                 label:
                     _isSaving
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            AppColors.primaryGreen,
+                        ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              AppColors.primaryGreen,
+                            ),
+                          ),
+                        )
+                        : const Text(
+                          '추가',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
-                      )
-                    : const Text(
-                        '추가',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor:
                       canAdd
-                      ? AppColors.primaryGreen
-                      : AppColors.textSecondary.withOpacity(0.3),
+                          ? AppColors.primaryGreen
+                          : AppColors.textSecondary.withOpacity(0.3),
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 18),
                   shape: RoundedRectangleBorder(
@@ -1060,42 +1060,46 @@ class _CourseMemberRegistrationScreenState
   }) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(20),
       child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
         decoration: BoxDecoration(
           color: AppColors.backgroundLight,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(20),
         ),
         child: Row(
           children: [
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Flexible(
-                        child: Text(
-                          name,
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.textPrimary,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
+                  Text(
+                    name,
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  const SizedBox(height: 2),
-                  Text(phone, style: TextStyle(color: AppColors.textSecondary)),
+                  const SizedBox(height: 6),
+                  Text(
+                    phone,
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
                 ],
               ),
             ),
-            Icon(Icons.add_circle, color: AppColors.primaryGreen),
+            Icon(
+              Icons.add_circle,
+              color: AppColors.primaryGreen,
+              size: 32,
+            ),
           ],
         ),
       ),

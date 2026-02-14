@@ -2300,6 +2300,45 @@ export const updateCourseSchedule = functions.https.onCall(async (data, context)
         }
     }
 
+    // 비정기 세션(courseOverrides)과 정기 세션 겹침 검사
+    // 이미 등록된 비정기(날짜별) 세션이 있는 요일/시간대에 정기 세션이 겹치면 저장 차단
+    const overridesSnap = await db
+        .collection('courseOverrides')
+        .where('placeId', '==', placeId)
+        .where('courseId', '==', courseId)
+        .where('isCancelled', '==', false)
+        .get();
+    for (const doc of overridesSnap.docs) {
+        const o = doc.data() as any;
+        const oDate = String(o?.date ?? '');
+        const oDay = Number(o?.dayOfWeek ?? 0);
+        const oStart = String(o?.startTime ?? '').trim();
+        const oEnd = String(o?.endTime ?? '').trim();
+        if (!oDate || oDay < 1 || oDay > 7 || !oStart || !oEnd) continue;
+        let oStartMin: number, oEndMin: number;
+        try {
+            const pStart = parseHHmm(oStart);
+            const pEnd = parseHHmm(oEnd);
+            oStartMin = pStart.h * 60 + pStart.m;
+            oEndMin = pEnd.h * 60 + pEnd.m;
+        } catch {
+            continue;
+        }
+        const regularList = byDay.get(oDay) ?? [];
+        for (const r of regularList) {
+            const rStart = parseHHmm(String(r.startTime));
+            const rEnd = parseHHmm(String(r.endTime));
+            const rStartMin = rStart.h * 60 + rStart.m;
+            const rEndMin = rEnd.h * 60 + rEnd.m;
+            if (rStartMin < oEndMin && rEndMin > oStartMin) {
+                throw new functions.https.HttpsError(
+                    'failed-precondition',
+                    `정기 일정이 비정기 일정과 겹칩니다. 비정기 일정 날짜: ${oDate}, 시간: ${oStart}~${oEnd}. 해당 날짜의 비정기 일정을 먼저 수정·삭제한 뒤 저장해 주세요.`,
+                );
+            }
+        }
+    }
+
     // 삭제/변경된 세션에 미래 예약이 있으면 차단
     const removedKeys: string[] = [];
     const modifiedKeys: string[] = [];
@@ -2307,13 +2346,16 @@ export const updateCourseSchedule = functions.https.onCall(async (data, context)
     for (const key of oldMap.keys()) {
         if (!newMap.has(key)) removedKeys.push(key);
     }
+    // 변경 구분: (1) 삭제 (2) 시간 변경 (3) 정원 변경 - 정원 변경은 예약 있어도 허용(기존 예약 유지)
     for (const key of newMap.keys()) {
         if (!oldMap.has(key)) continue;
         const oldS = oldMap.get(key);
         const newS = newMap.get(key);
         const oldEnd = String((oldS as any)?.endTime ?? '');
+        const newEnd = String(newS.endTime);
         const oldCap = Number((oldS as any)?.capacity ?? 0);
-        if (oldEnd !== String(newS.endTime) || oldCap !== Number(newS.capacity)) {
+        const newCap = Number(newS.capacity);
+        if (oldEnd !== newEnd || oldCap !== newCap) {
             modifiedKeys.push(key);
         }
     }
@@ -2332,6 +2374,7 @@ export const updateCourseSchedule = functions.https.onCall(async (data, context)
         return !snap.empty;
     }
 
+    // 삭제: 예약 있으면 무조건 차단 → 일괄 취소 유도
     for (const key of removedKeys) {
         if (await hasFutureReservationsForSessionKey(key)) {
             const [dStr, st] = key.split('_');
@@ -2344,18 +2387,8 @@ export const updateCourseSchedule = functions.https.onCall(async (data, context)
             });
         }
     }
-    for (const key of modifiedKeys) {
-        if (await hasFutureReservationsForSessionKey(key)) {
-            const [dStr, st] = key.split('_');
-            throwRequiresBulkMove({
-                courseId,
-                courseName,
-                dayOfWeek: Number(dStr),
-                startTime: st,
-                operation: 'modify',
-            });
-        }
-    }
+    // 정원 변경 / 시간 변경(modify): 예약이 있어도 차단하지 않음. 허용 후 place만 업데이트.
+    // (modifiedKeys에 대해 throw 하지 않음. 기존 예약 유지, 새 정원은 이후 예약부터 적용.)
 
     // place courses 업데이트 (sessions만 교체)
     const placeRef = db.collection('places').doc(placeId);
@@ -3633,9 +3666,25 @@ export const batchMoveReservations = functions.https.onCall(async (data, context
         for (const [courseId, reservations] of reservationsByCourse.entries()) {
             for (const { doc, ref } of reservations) {
                 const reservation = doc.data() as any;
+                const userId = String(reservation?.userId ?? '');
                 const oldDayOfWeek = Number(reservation?.dayOfWeek ?? 0);
                 const oldStartTime = String(reservation?.startTime ?? '');
                 const oldReservedDateString = String(reservation?.reservedDateString ?? '');
+
+                // 중복 예약 방지: 목표 세션에 해당 유저의 다른 예약이 이미 있으면 이동 불가
+                const dupQuery = db.collection('places').doc(placeId).collection('reservations')
+                    .where('courseId', '==', courseId)
+                    .where('dayOfWeek', '==', newDayOfWeek)
+                    .where('startTime', '==', newStartTime)
+                    .where('reservedDateString', '==', newReservedDateString)
+                    .where('userId', '==', userId)
+                    .limit(2);
+                const dupSnap = await tx.get(dupQuery);
+                const otherInTarget = dupSnap.docs.filter((d) => d.id !== ref.id);
+                if (otherInTarget.length > 0) {
+                    results.push({ reservationId: ref.id, success: false, error: '이미 해당 세션에 예약이 있습니다.' });
+                    continue;
+                }
 
                 const oldSessionId = `${courseId}_${oldDayOfWeek}_${oldStartTime}`;
                 const newSessionId = `${courseId}_${newDayOfWeek}_${newStartTime}`;
@@ -3760,7 +3809,10 @@ export const batchCancelReservations = functions.https.onCall(async (data, conte
     const db = admin.firestore();
     const seoulNow = getSeoulDateTime();
     const isAdminForThisPlace = await isAdminForPlaceUid(callerId, placeId);
-    if (!isAdminForThisPlace) {
+
+    // 본인 예약 1건 취소는 일반 사용자도 허용 (관리자 아님 + 1건 + 예약 소유자 확인은 아래에서)
+    const allowSelfCancelSingle = !isAdminForThisPlace && reservationIds.length === 1;
+    if (!isAdminForThisPlace && !allowSelfCancelSingle) {
         throw new functions.https.HttpsError('permission-denied', '해당 플레이스에 대한 관리자 권한이 필요합니다.');
     }
 
@@ -3820,6 +3872,14 @@ export const batchCancelReservations = functions.https.onCall(async (data, conte
         userIds.add(reservationUserId);
         courseIds.add(courseId);
         reservationsToCancel.push({ doc, ref: reservationRefs[i], reservation });
+    }
+
+    // 본인 예약 1건 취소 시: 해당 예약의 userId가 호출자와 일치하는지 확인
+    if (allowSelfCancelSingle && reservationsToCancel.length === 1) {
+        const r = reservationsToCancel[0].reservation;
+        if (String(r?.userId ?? '') !== callerId) {
+            throw new functions.https.HttpsError('permission-denied', '본인 예약만 취소할 수 있습니다.');
+        }
     }
 
     // 트랜잭션 밖에서 enrollment 조회
@@ -4061,3 +4121,36 @@ export const searchPlaces = functions.https.onCall(async (data, context) => {
     return { places };
 });
 
+/**
+ * 가입 시 사용자 문서 생성 (클라이언트 권한 이슈 회피)
+ * - 인증된 사용자만 호출 가능
+ * - users/{auth.uid} 에 name, phoneNumber 생성/병합
+ */
+export const createUserDoc = functions.https.onCall(async (data, context) => {
+    const functionName = 'createUserDoc';
+    logFunctionStart(functionName, {});
+
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', '로그인이 필요합니다.');
+    }
+    const uid = context.auth.uid;
+    const name = typeof data?.name === 'string' ? (data.name as string).trim() : '';
+    const phoneNumber = typeof data?.phoneNumber === 'string' ? (data.phoneNumber as string).trim() : '';
+    if (!name || !phoneNumber) {
+        throw new functions.https.HttpsError('invalid-argument', '이름과 전화번호가 필요합니다.');
+    }
+
+    const db = admin.firestore();
+    const now = new Date();
+    const ref = db.collection('users').doc(uid);
+    await ref.set({
+        userId: uid,
+        name,
+        phoneNumber,
+        updatedAt: admin.firestore.Timestamp.fromDate(now),
+        createdAt: admin.firestore.Timestamp.fromDate(now),
+    }, { merge: true });
+
+    logFunctionSuccess(functionName, { userId: uid });
+    return { userId: uid, name, phoneNumber, createdAt: now.toISOString() };
+});

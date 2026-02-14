@@ -236,17 +236,27 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
     }
   }
 
-  List<User> get _filteredMembers {
+  /// 어드민 표시 이름(placeMemberships.displayName) 포함해 검색
+  List<User> _getFilteredMembers(Map<String, String> membershipDisplayNamesByUserId) {
     if (_searchQuery.isEmpty) {
       return _allMembers;
     }
     final query = _searchQuery.toLowerCase();
     return _allMembers.where((user) {
-      // 이름과 전화번호 둘 다 검색 지원 (관리자가 생성한 이름)
-      final name = user.name.toLowerCase();
+      // 일반 멤버: 어드민 표시 이름 우선, 없으면 user.name
+      // 대기 멤버(pending_*): user.name이 이미 어드민 설정 이름(pm.name)
+      final effectiveName = user.userId.startsWith('pending_')
+          ? user.name
+          : (membershipDisplayNamesByUserId[user.userId] ?? user.name);
+      final name = effectiveName.toLowerCase();
       final phone = user.phoneNumber.toLowerCase();
       return name.contains(query) || phone.contains(query);
     }).toList();
+  }
+
+  String _getDisplayName(User user, Map<String, String> membershipDisplayNamesByUserId) {
+    if (user.userId.startsWith('pending_')) return user.name;
+    return membershipDisplayNamesByUserId[user.userId] ?? user.name;
   }
 
   @override
@@ -257,7 +267,7 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
     final maxHeight = screenHeight * 0.7;
 
     return Container(
-      padding: EdgeInsets.only(bottom: bottomInset + paddingBottom),
+      padding: EdgeInsets.only(bottom: bottomInset),
       decoration: const BoxDecoration(color: Colors.transparent),
       child: Stack(
         children: [
@@ -324,65 +334,77 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
                     const SizedBox(height: 16),
                     // 멤버 리스트 (고정 높이로 요동 방지)
                     Expanded(
-                      child:
-                          _isLoading
-                              ? Center(
-                                child: SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 3,
-                                    color: AppColors.primaryGreen,
-                                  ),
+                      child: Consumer<MemberProvider>(
+                        builder: (context, memberProvider, _) {
+                          final displayNames =
+                              memberProvider.membershipDisplayNamesByUserId;
+                          final filtered =
+                              _getFilteredMembers(displayNames);
+                          if (_isLoading) {
+                            return Center(
+                              child: SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 3,
+                                  color: AppColors.primaryGreen,
                                 ),
-                              )
-                              : _filteredMembers.isEmpty
-                              ? Center(
-                                child: Padding(
-                                  padding: const EdgeInsets.all(40),
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Text(
-                                        _searchQuery.isEmpty
-                                            ? '추가 할 수 있는 멤버가 없어요'
-                                            : '검색 결과가 없습니다',
-                                        style: TextStyle(
-                                          fontSize: 16,
-                                          color: AppColors.textSecondary,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              )
-                              : ListView.separated(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 20,
-                                ),
-                                shrinkWrap: false,
-                                itemCount: _filteredMembers.length,
-                                separatorBuilder:
-                                    (context, index) => Divider(
-                                      height: 1,
-                                      color: AppColors.borderLight.withOpacity(
-                                        0.5,
+                              ),
+                            );
+                          }
+                          if (filtered.isEmpty) {
+                            return Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(40),
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Text(
+                                      _searchQuery.isEmpty
+                                          ? '추가할 수 있는 멤버가 없어요'
+                                          : '검색 결과가 없습니다',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        color: AppColors.textSecondary,
                                       ),
                                     ),
-                                itemBuilder: (context, index) {
-                                  final user = _filteredMembers[index];
-                                  return _buildMemberItem(user);
-                                },
+                                  ],
+                                ),
                               ),
+                            );
+                          }
+                          return ListView.separated(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 20,
+                            ),
+                            shrinkWrap: false,
+                            itemCount: filtered.length,
+                            separatorBuilder:
+                                (context, index) => Divider(
+                                  height: 1,
+                                  color: AppColors.borderLight.withOpacity(
+                                    0.5,
+                                  ),
+                                ),
+                            itemBuilder: (context, index) {
+                              final user = filtered[index];
+                              return _buildMemberItem(
+                                user,
+                                _getDisplayName(user, displayNames),
+                              );
+                            },
+                          );
+                        },
+                      ),
                     ),
-                    // 하단 버튼 영역 (항상 표시하여 높이 고정)
+                    // 하단 버튼 영역 (safe area 반영, 시트 배경은 하단까지 채움)
                     if (!_isLoading)
                       Container(
                         padding: EdgeInsets.only(
                           left: 20,
                           right: 20,
                           top: 12,
-                          bottom: 20 + bottomInset,
+                          bottom: 20 + paddingBottom + bottomInset,
                         ),
                         decoration: BoxDecoration(
                           color: AppColors.backgroundWhite,
@@ -455,7 +477,7 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
     );
   }
 
-  Widget _buildMemberItem(User user) {
+  Widget _buildMemberItem(User user, String displayName) {
     final isSelected = _selectedUserIds.contains(user.userId);
     final isEnrolled = user.isEnrolledInCourse(widget.course.id);
     final remaining = user.getRemainingReservations(widget.course.id);
@@ -497,7 +519,7 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
                       : null,
             ),
             const SizedBox(width: 12),
-            // 멤버 정보
+            // 멤버 정보 (어드민 표시 이름 사용)
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -505,7 +527,7 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
                   Row(
                     children: [
                       Text(
-                        user.name,
+                        displayName,
                         style: TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.w600,

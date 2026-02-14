@@ -95,10 +95,7 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
                         final admin = authProvider.currentAdmin;
 
                         if (admin == null) {
-                          SnackbarUtil.showError(
-                            context,
-                            '관리자 정보를 찾을 수 없습니다.',
-                          );
+                          SnackbarUtil.showInfo(context, '관리자 정보를 찾을 수 없습니다.');
                           return;
                         }
 
@@ -113,8 +110,7 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
                           await authProvider.logout();
 
                           if (context.mounted) {
-                            SnackbarUtil.showSuccess(
-                                context, '회원탈퇴가 완료되었습니다.');
+                            SnackbarUtil.showSuccess(context, '회원탈퇴가 완료되었습니다.');
                             Navigator.pushNamedAndRemoveUntil(
                               context,
                               '/',
@@ -129,14 +125,13 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
                               message = e.message!.trim();
                             } else {
                               try {
-                                final msg =
-                                    (e as dynamic).message?.toString();
+                                final msg = (e as dynamic).message?.toString();
                                 if (msg != null && msg.trim().isNotEmpty) {
                                   message = msg.trim();
                                 }
                               } catch (_) {}
                             }
-                            SnackbarUtil.showError(context, message);
+                            SnackbarUtil.showInfo(context, message);
                           }
                         }
                       },

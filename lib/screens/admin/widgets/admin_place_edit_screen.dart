@@ -259,7 +259,7 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
       }
     } catch (e) {
       if (mounted) {
-        SnackbarUtil.showError(context, '이미지를 선택할 수 없습니다');
+        SnackbarUtil.showInfo(context, '이미지를 선택할 수 없습니다');
       }
     }
   }
@@ -300,7 +300,7 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         setState(() {
           _isUploadingImage = false;
         });
-        SnackbarUtil.showError(context, '이미지 업로드에 실패했습니다');
+        SnackbarUtil.showInfo(context, '이미지 업로드에 실패했습니다');
       }
     }
   }
@@ -752,7 +752,7 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         setState(() {
           _isSaving = false;
         });
-        SnackbarUtil.showError(context, '관리자 정보를 찾을 수 없습니다.');
+        SnackbarUtil.showInfo(context, '관리자 정보를 찾을 수 없습니다.');
       }
       return;
     }
@@ -826,7 +826,7 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         setState(() {
           _isSaving = false;
         });
-        SnackbarUtil.showError(context, '저장 중 오류가 발생했습니다: ${e.toString()}');
+        SnackbarUtil.showInfo(context, '저장 중 오류가 발생했습니다: ${e.toString()}');
       }
     } finally {
       if (mounted) {

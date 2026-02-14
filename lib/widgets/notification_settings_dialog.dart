@@ -73,7 +73,7 @@ class _NotificationSettingsDialogState
         // AuthProvider 업데이트
         authProvider.setCurrentUser(updatedUser);
       } else {
-        SnackbarUtil.showError(context, '사용자 정보를 찾을 수 없습니다.');
+        SnackbarUtil.showInfo(context, '사용자 정보를 찾을 수 없습니다.');
         return;
       }
 
@@ -86,7 +86,7 @@ class _NotificationSettingsDialogState
       }
     } catch (e) {
       if (mounted) {
-        SnackbarUtil.showError(context, '알림 설정 변경에 실패했습니다.');
+        SnackbarUtil.showInfo(context, '알림 설정 변경에 실패했습니다.');
       }
     } finally {
       if (mounted) {

@@ -52,12 +52,14 @@ class AppNotification {
 
   // JSON에서 생성
   factory AppNotification.fromJson(Map<String, dynamic> json) {
-    // createdAt 변환
+    // createdAt 변환 (FirestoreService는 이미 DateTime으로 변환해 넘길 수 있음)
     DateTime createdAt;
     if (json['createdAt'] is String) {
       createdAt = DateTime.parse(json['createdAt'] as String);
     } else if (json['createdAt'] is Timestamp) {
       createdAt = (json['createdAt'] as Timestamp).toDate();
+    } else if (json['createdAt'] is DateTime) {
+      createdAt = json['createdAt'] as DateTime;
     } else {
       createdAt = DateTime.now();
     }

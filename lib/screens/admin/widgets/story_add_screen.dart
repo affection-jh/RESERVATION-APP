@@ -120,7 +120,7 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
       }
     } catch (e) {
       if (mounted) {
-        SnackbarUtil.showError(context, '이미지를 선택할 수 없습니다');
+        SnackbarUtil.showInfo(context, '이미지를 선택할 수 없습니다');
       }
     }
   }
@@ -242,7 +242,7 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
         }
 
         if (mounted) {
-          SnackbarUtil.showError(context, '이미지 업로드에 실패했습니다');
+          SnackbarUtil.showInfo(context, '이미지 업로드에 실패했습니다');
         }
       }
     }
@@ -388,7 +388,7 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
     final content = _contentController.text.trim();
 
     if (title.isEmpty || content.isEmpty) {
-      SnackbarUtil.showError(context, '제목과 내용을 입력해주세요');
+      SnackbarUtil.showInfo(context, '제목과 내용을 입력해주세요');
       return;
     }
 
@@ -442,7 +442,7 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
                 debugPrint('파일 삭제 실패: $deleteError');
               }
               if (mounted) {
-                SnackbarUtil.showError(context, '이미지 업로드에 실패했습니다');
+                SnackbarUtil.showInfo(context, '이미지 업로드에 실패했습니다');
               }
               return {
                 'success': false,

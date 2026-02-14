@@ -372,19 +372,19 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
 
     // 유효성 검사
     if (capacityText.isEmpty) {
-      SnackbarUtil.showError(context, '수용인원을 입력해주세요.');
+      SnackbarUtil.showInfo(context, '수용인원을 입력해주세요.');
       return;
     }
 
     final capacity = int.tryParse(capacityText);
 
     if (capacity == null) {
-      SnackbarUtil.showError(context, '올바른 값을 입력해주세요.');
+      SnackbarUtil.showInfo(context, '올바른 값을 입력해주세요.');
       return;
     }
 
     if (capacity <= 0) {
-      SnackbarUtil.showError(context, '수용인원은 1명 이상이어야 합니다.');
+      SnackbarUtil.showInfo(context, '수용인원은 1명 이상이어야 합니다.');
       return;
     }
 
@@ -396,7 +396,13 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
     final endTotalMinutes = _endHour * 60 + _endMinute;
 
     if (endTotalMinutes <= startTotalMinutes) {
-      SnackbarUtil.showError(context, '종료 시간은 시작 시간보다 늦어야 합니다.');
+      SnackbarUtil.showInfo(context, '종료 시간은 시작 시간보다 늦어야 합니다.');
+      return;
+    }
+
+    // 세션 시간 겹침 최종 검사 (등록/수정 완료 직전)
+    if (_hasTimeConflict(_startHour, _startMinute, _endHour, _endMinute)) {
+      SnackbarUtil.showInfo(context, '이미 해당 시간에 세션이 있어 등록할 수 없습니다.');
       return;
     }
 
@@ -414,7 +420,7 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
   @override
   Widget build(BuildContext context) {
     final screenHeight = MediaQuery.of(context).size.height;
-    final maxHeight = screenHeight * 0.9; // 화면 높이의 90%로 제한
+    final maxHeight = screenHeight * 0.95; // 화면 높이의 90%로 제한
 
     return Container(
       constraints: BoxConstraints(maxHeight: maxHeight),
@@ -635,7 +641,7 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
                     _endHour,
                     _endMinute,
                   )) {
-                    SnackbarUtil.showError(context, '이미 해당 시간에 세션이 있습니다.');
+                    SnackbarUtil.showInfo(context, '이미 해당 시간에 세션이 있습니다.');
                   }
                 },
                 onMinuteChanged: (index) {
@@ -661,7 +667,7 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
                     _endHour,
                     _endMinute,
                   )) {
-                    SnackbarUtil.showError(context, '이미 해당 시간에 세션이 있습니다.');
+                    SnackbarUtil.showInfo(context, '이미 해당 시간에 세션이 있습니다.');
                   }
                 },
               ),
@@ -710,7 +716,7 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
                     index,
                     _endMinute,
                   )) {
-                    SnackbarUtil.showError(context, '이미 해당 시간에 세션이 있습니다.');
+                    SnackbarUtil.showInfo(context, '이미 해당 시간에 세션이 있습니다.');
                   }
                 },
                 onMinuteChanged: (index) {
@@ -736,7 +742,7 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
                     _endHour,
                     index,
                   )) {
-                    SnackbarUtil.showError(context, '이미 해당 시간에 세션이 있습니다.');
+                    SnackbarUtil.showInfo(context, '이미 해당 시간에 세션이 있습니다.');
                   }
                 },
               ),

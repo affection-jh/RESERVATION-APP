@@ -23,7 +23,6 @@ import '../widgets/cached_image_widget.dart';
 import '../widgets/week_tab_bar.dart';
 import '../utils/timezone_utils.dart';
 import 'package:cloud_functions/cloud_functions.dart';
-import 'dart:async';
 
 class MyPageScreen extends StatefulWidget {
   final Map<String, dynamic>? highlightReservation; // 강조할 예약 정보
@@ -40,8 +39,6 @@ class _MyPageScreenState extends State<MyPageScreen> {
   Course? _highlightedCourse;
   CourseSession? _highlightedSession;
   DateTime? _highlightedDate;
-  // _isPlaceListExpanded: 현재 화면에서는 사용되지 않음 (필요 시 다시 추가)
-  StreamSubscription<ReservationOperationEvent>? _reservationOpSub;
   int _selectedWeekTab = 0;
 
   List<int> _computeAvailableWeekOffsets(List<Reservation> reservations) {
@@ -124,52 +121,9 @@ class _MyPageScreenState extends State<MyPageScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _init();
-      _subscribeReservationOperationEvents();
       // 초기 로드 시 현재 선택된 주차의 비정기 세션 정보 로드
       _loadOverridesForWeek(0);
     });
-  }
-
-  void _subscribeReservationOperationEvents() {
-    _reservationOpSub?.cancel();
-    final rp = Provider.of<ReservationProvider>(context, listen: false);
-    _reservationOpSub = rp.operationEvents.listen((event) async {
-      // 마이페이지에서는 특히 "취소 성공" 피드백이 중요 (바텀시트가 닫혀 있어도)
-      if (event.type == ReservationOperationType.cancel &&
-          event.success == true &&
-          event.reservation != null) {
-        if (!mounted) return;
-        final r = event.reservation!;
-        try {
-          await Provider.of<EnrollmentProvider>(
-            context,
-            listen: false,
-          ).loadUserEnrollments(userId: r.userId, placeId: r.placeId);
-          await Provider.of<ReservationProvider>(
-            context,
-            listen: false,
-          ).loadUserReservations(userId: r.userId, placeId: r.placeId);
-        } catch (_) {}
-        SnackbarUtil.showSuccess(context, '예약이 취소되었습니다.');
-      }
-
-      // cancel 실패 시: 바텀시트가 닫혀 있어도 즉시 피드백
-      if (event.type == ReservationOperationType.cancel &&
-          event.success == false) {
-        if (!mounted) return;
-        final msg = event.error?.toString();
-        SnackbarUtil.showError(
-          context,
-          (msg == null || msg.isEmpty) ? '예약 취소에 실패했습니다.' : '예약 취소 실패: $msg',
-        );
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _reservationOpSub?.cancel();
-    super.dispose();
   }
 
   Future<void> _init() async {
@@ -757,7 +711,7 @@ class _MyPageScreenState extends State<MyPageScreen> {
                                           final user = authProvider.currentUser;
 
                                           if (user == null) {
-                                            SnackbarUtil.showError(
+                                            SnackbarUtil.showInfo(
                                               context,
                                               '사용자 정보를 찾을 수 없습니다.',
                                             );
@@ -815,7 +769,7 @@ class _MyPageScreenState extends State<MyPageScreen> {
                                                   }
                                                 } catch (_) {}
                                               }
-                                              SnackbarUtil.showError(
+                                              SnackbarUtil.showInfo(
                                                 context,
                                                 message,
                                               );
@@ -859,8 +813,11 @@ class _MyPageScreenState extends State<MyPageScreen> {
     final courses = courseProvider.courses;
 
     // 유효기간 내 등록 정보만 표시 (남은 횟수 0이어도 "수강 중"은 유지되어야 함)
+    // 일회성(1회석) 등록은 수강 중인 코스 목록에 노출하지 않음 (알 수 없는 코스 + 재등록 필요 방지)
     final validEnrollments =
-        enrollmentProvider.enrollments.where((e) => e.isValid).toList()
+        enrollmentProvider.enrollments
+            .where((e) => e.isValid && !e.isOneTime)
+            .toList()
           ..sort((a, b) => a.validUntil.compareTo(b.validUntil));
 
     return Column(

@@ -25,13 +25,15 @@ class NameEditBottomSheet extends StatefulWidget {
       isDismissible: true,
       enableDrag: true,
       useSafeArea: true,
-      builder: (context) => Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).padding.bottom +
-              MediaQuery.of(context).viewInsets.bottom,
-        ),
-        child: NameEditBottomSheet(initialName: initialName),
-      ),
+      builder:
+          (context) => Padding(
+            padding: EdgeInsets.only(
+              bottom:
+                  MediaQuery.of(context).padding.bottom +
+                  MediaQuery.of(context).viewInsets.bottom,
+            ),
+            child: NameEditBottomSheet(initialName: initialName),
+          ),
     );
   }
 
@@ -95,15 +97,16 @@ class _NameEditBottomSheetState extends State<NameEditBottomSheet> {
         // AuthProvider 업데이트
         authProvider.setCurrentAdmin(updatedAdmin);
       } else if (currentUser != null) {
-        // 일반 사용자 정보 업데이트
-        final updatedUser = currentUser.updateProfile(name: newName);
+        // 일반 사용자: UserService에 현재 유저 동기화 후 업데이트 (권한 체크 통과)
         final userService = UserService();
+        await userService.login(currentUser.userId);
+        final updatedUser = currentUser.updateProfile(name: newName);
         await userService.updateUser(updatedUser);
 
         // AuthProvider 업데이트
         authProvider.setCurrentUser(updatedUser);
       } else {
-        SnackbarUtil.showError(context, '사용자 정보를 찾을 수 없습니다.');
+        SnackbarUtil.showInfo(context, '사용자 정보를 찾을 수 없습니다.');
         Navigator.of(context).pop();
         return;
       }
@@ -114,7 +117,7 @@ class _NameEditBottomSheetState extends State<NameEditBottomSheet> {
       }
     } catch (e) {
       if (mounted) {
-        SnackbarUtil.showError(context, '이름 변경에 실패했습니다.');
+        SnackbarUtil.showInfo(context, '이름 변경에 실패했습니다.');
       }
     } finally {
       if (mounted) {
@@ -202,8 +205,8 @@ class _NameEditBottomSheetState extends State<NameEditBottomSheet> {
                           color: AppColors.textPrimary,
                         ),
                         textInputAction: TextInputAction.done,
-                        onChanged: (_) =>
-                            setState(() {}), // 텍스트 변경 시 버튼 상태 업데이트
+                        onChanged:
+                            (_) => setState(() {}), // 텍스트 변경 시 버튼 상태 업데이트
                         onSubmitted: (_) => _onSubmit(),
                         inputFormatters: [LengthLimitingTextInputFormatter(20)],
                       ),
@@ -213,9 +216,10 @@ class _NameEditBottomSheetState extends State<NameEditBottomSheet> {
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton(
-                          onPressed: _isFormValid() && !_isSubmitting
-                              ? _onSubmit
-                              : null,
+                          onPressed:
+                              _isFormValid() && !_isSubmitting
+                                  ? _onSubmit
+                                  : null,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: AppColors.primaryGreen,
                             foregroundColor: Colors.white,
@@ -229,24 +233,25 @@ class _NameEditBottomSheetState extends State<NameEditBottomSheet> {
                             ),
                             elevation: 0,
                           ),
-                          child: _isSubmitting
-                              ? SizedBox(
-                                  height: 20,
-                                  width: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                      AppColors.primaryGreen,
+                          child:
+                              _isSubmitting
+                                  ? SizedBox(
+                                    height: 20,
+                                    width: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                        AppColors.primaryGreen,
+                                      ),
+                                    ),
+                                  )
+                                  : const Text(
+                                    '저장',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
                                     ),
                                   ),
-                                )
-                              : const Text(
-                                  '저장',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
                         ),
                       ),
                       const SizedBox(height: 12),

@@ -341,7 +341,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
     FocusScope.of(context).unfocus();
 
     if (!_isRemainingReservationsValid()) {
-      SnackbarUtil.showError(context, '입력값을 확인해주세요.');
+      SnackbarUtil.showInfo(context, '입력값을 확인해주세요.');
       return;
     }
 
@@ -362,7 +362,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         final placeId = placeProvider.currentPlace?.id;
         if (placeId == null) {
           if (mounted) {
-            SnackbarUtil.showError(context, '플레이스를 찾을 수 없습니다.');
+            SnackbarUtil.showInfo(context, '플레이스를 찾을 수 없습니다.');
           }
           return;
         }
@@ -466,7 +466,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
       }
     } catch (e) {
       if (mounted) {
-        SnackbarUtil.showError(context, '저장 중 오류가 발생했습니다: $e');
+        SnackbarUtil.showInfo(context, '저장 중 오류가 발생했습니다: $e');
       }
     } finally {
       if (mounted) {
@@ -585,13 +585,13 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
     FocusScope.of(context).unfocus();
 
     if (!_hasPeriodExtensionChanges()) {
-      SnackbarUtil.showError(context, '변경사항이 없습니다.');
+      SnackbarUtil.showInfo(context, '변경사항이 없습니다.');
       return;
     }
 
     // 클라이언트 검증: 종료일이 유효 범위 내에 있는지 확인
     if (!_isValidUntilInRange(_extendedValidUntil)) {
-      SnackbarUtil.showError(context, '종료일은 오늘 날짜 이후로만 선택할 수 있습니다.');
+      SnackbarUtil.showInfo(context, '종료일은 오늘 날짜 이후로만 선택할 수 있습니다.');
       return;
     }
 
@@ -611,7 +611,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         final placeId = placeProvider.currentPlace?.id;
         if (placeId == null) {
           if (mounted) {
-            SnackbarUtil.showError(context, '플레이스를 찾을 수 없습니다.');
+            SnackbarUtil.showInfo(context, '플레이스를 찾을 수 없습니다.');
           }
           return;
         }
@@ -710,12 +710,12 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         }
 
         if (mounted) {
-          SnackbarUtil.showSuccess(context, '유효기간이 연장되었습니다.');
+          SnackbarUtil.showSuccess(context, '유효기간이 변경되었습니다.');
         }
       }
     } catch (e) {
       if (mounted) {
-        SnackbarUtil.showError(context, '저장 중 오류가 발생했습니다: $e');
+        SnackbarUtil.showInfo(context, '저장 중 오류가 발생했습니다: $e');
       }
     } finally {
       if (mounted) {
@@ -796,11 +796,11 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
 
     // 버튼이 비활성인데도 호출되는 케이스 방지
     if (!_canReEnroll()) {
-      SnackbarUtil.showError(context, '재등록은 잔여 횟수가 0이거나 유효기간이 만료된 경우에만 가능합니다.');
+      SnackbarUtil.showInfo(context, '재등록은 잔여 횟수가 0이거나 유효기간이 만료된 경우에만 가능합니다.');
       return;
     }
     if (!_isReEnrollValid()) {
-      SnackbarUtil.showError(context, '입력값을 확인해주세요.');
+      SnackbarUtil.showInfo(context, '입력값을 확인해주세요.');
       return;
     }
 
@@ -808,7 +808,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
     final confirmed = await CommonDialog.show(
       context: context,
       title: '재등록',
-      message: '정말 재등록하시겠습니까?',
+      message: '재등록하시겠습니까?',
       cancelText: '취소',
       confirmText: '확인',
       confirmButtonColor: AppColors.primaryGreen,
@@ -1059,7 +1059,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
       }
     } catch (e) {
       if (mounted) {
-        SnackbarUtil.showError(context, '저장 중 오류가 발생했습니다: $e');
+        SnackbarUtil.showInfo(context, '저장 중 오류가 발생했습니다: $e');
       }
     } finally {
       if (mounted) {
@@ -1074,8 +1074,8 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
   Future<void> _cancelEnrollment() async {
     final confirmed = await CommonDialog.show(
       context: context,
-      title: '수강 취소',
-      message: '정말 수강을 취소하시겠습니까?',
+      title: '수강 취소 처리',
+      message: '수강 리스트에서 제외하시겠습니까?',
       cancelText: '취소',
       confirmText: '확인',
       confirmButtonColor: Colors.red,
@@ -1171,11 +1171,11 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
 
           final confirmedCascade = await CommonDialog.show(
             context: context,
-            title: '수강 취소',
+            title: '수강 취소 처리',
             message:
                 '$courseName\n\n수강자의 예약 $reservationCount건이 남아있습니다.\n수강취소 처리하시겠습니까?',
             cancelText: '취소',
-            confirmText: '예약 전부 취소 후 수강 취소',
+            confirmText: '수강 취소',
             confirmButtonColor: Colors.red,
           );
           if (confirmedCascade != true) return;
@@ -1199,12 +1199,12 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
       await memberProvider.loadMembers(placeId);
 
       if (mounted) {
-        SnackbarUtil.showSuccess(context, '수강이 취소되었습니다.');
+        SnackbarUtil.showSuccess(context, '수강취소 처리가 완료되었습니다.');
         Navigator.of(context).pop(true);
       }
     } catch (e) {
       if (mounted) {
-        SnackbarUtil.showError(context, '취소 중 오류가 발생했습니다: $e');
+        SnackbarUtil.showInfo(context, '취소 중 오류가 발생했습니다: $e');
       }
     } finally {
       if (mounted) {

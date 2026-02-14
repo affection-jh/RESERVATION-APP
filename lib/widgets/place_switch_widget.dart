@@ -151,13 +151,6 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
     final memberPlaceIds = authProvider.approvedPlaceIds;
     final adminPlaceIds = authProvider.adminManagedPlaceIds;
 
-    debugPrint(
-      '[PlaceSwitchWidget] 멤버 승인 플레이스 ID: $memberPlaceIds (개수: ${memberPlaceIds.length})',
-    );
-    debugPrint(
-      '[PlaceSwitchWidget] 관리자 관리 플레이스 ID: $adminPlaceIds (개수: ${adminPlaceIds.length})',
-    );
-
     final accessEntries = <_PlaceAccessEntry>[
       ...memberPlaceIds.map(
         (id) => _PlaceAccessEntry(placeId: id, isAdmin: false),
@@ -168,13 +161,6 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
     ];
 
     final uniquePlaceIds = accessEntries.map((e) => e.placeId).toSet().toList();
-
-    debugPrint(
-      '[PlaceSwitchWidget] accessEntries: ${accessEntries.map((e) => "${e.placeId}:${e.isAdmin ? "admin" : "member"}").toList()} (개수: ${accessEntries.length})',
-    );
-    debugPrint(
-      '[PlaceSwitchWidget] hasMultiplePlaces: ${accessEntries.length > 1}, enabled: ${widget.enabled}',
-    );
 
     final hasMultiplePlaces = accessEntries.length > 1;
     final currentPlaceId = currentPlace.id;
@@ -559,7 +545,7 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
     final admin = authProvider.currentAdmin;
 
     if (user == null && admin == null) {
-      SnackbarUtil.showError(context, '사용자 정보를 찾을 수 없습니다.');
+      SnackbarUtil.showInfo(context, '사용자 정보를 찾을 수 없습니다.');
       return;
     }
 
@@ -569,24 +555,24 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
     if (switchToAdminMode) {
       final linkedAdmin = authProvider.linkedAdmin;
       if (linkedAdmin == null) {
-        SnackbarUtil.showError(context, '연동된 관리자 계정을 찾을 수 없습니다.');
+        SnackbarUtil.showInfo(context, '연동된 관리자 계정을 찾을 수 없습니다.');
         return;
       }
       // 관리 권한 확인: places.adminId로 로드된 목록 기준
       final adminPlaceIds = authProvider.adminManagedPlaceIds;
       if (!adminPlaceIds.contains(newPlace.id)) {
-        SnackbarUtil.showError(context, '해당 플레이스에 대한 관리자 권한이 없습니다.');
+        SnackbarUtil.showInfo(context, '해당 플레이스에 대한 관리자 권한이 없습니다.');
         return;
       }
     } else {
       // 멤버(일반) 권한 확인
       final memberPlaceIds = authProvider.approvedPlaceIds;
       if (!memberPlaceIds.contains(newPlace.id)) {
-        SnackbarUtil.showError(context, '해당 플레이스에 접근 권한이 없습니다.');
+        SnackbarUtil.showInfo(context, '해당 플레이스에 접근 권한이 없습니다.');
         return;
       }
       if (authProvider.currentUser == null) {
-        SnackbarUtil.showError(context, '사용자 정보를 찾을 수 없습니다.');
+        SnackbarUtil.showInfo(context, '사용자 정보를 찾을 수 없습니다.');
         return;
       }
     }
@@ -625,7 +611,7 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
     } catch (e) {
       if (mounted) {
         setState(() => _isSwitching = false);
-        SnackbarUtil.showError(context, '전환에 실패했습니다.');
+        SnackbarUtil.showInfo(context, '전환에 실패했습니다.');
       }
     }
   }

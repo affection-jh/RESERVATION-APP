@@ -96,10 +96,8 @@ class _ReservationScreenState extends State<ReservationScreen> {
     if (currentPlace == null) return;
 
     try {
-      // 코스 로드 (이미 로드되어 있으면 스킵)
-      if (courseProvider.courses.isEmpty) {
-        await courseProvider.loadCourses(currentPlace.id);
-      }
+      // 코스 로드 (정기일정·요일 변경 반영을 위해 화면 진입 시마다 최신 목록 갱신)
+      await courseProvider.loadCourses(currentPlace.id);
 
       // enrollment 로드 (정렬/예약 버튼 활성화에 사용)
       final userId = authProvider.currentUser?.userId;

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../models/course.dart';
 import '../../models/course_enrollment.dart';
+import '../../providers/enrollment_provider.dart';
 import '../../theme/app_colors.dart';
 
 /// 등록 상세 정보 바텀시트
@@ -28,11 +30,17 @@ class _EnrollmentDetailBottomSheetState
     return '${date.year}.${date.month.toString().padLeft(2, '0')}.${date.day.toString().padLeft(2, '0')}';
   }
 
+  /// Provider에서 최신 등록 정보 사용 (어드민이 횟수 조절 시 실시간 반영)
+  CourseEnrollment get _enrollment {
+    final provider = Provider.of<EnrollmentProvider>(context, listen: true);
+    return provider.enrollmentsByCourseId[widget.enrollment.courseId] ??
+        widget.enrollment;
+  }
+
   // 남은 횟수 비율 계산
   double get _progress {
-    return widget.enrollment.totalReservations > 0
-        ? widget.enrollment.remainingReservations /
-            widget.enrollment.totalReservations
+    return _enrollment.totalReservations > 0
+        ? _enrollment.remainingReservations / _enrollment.totalReservations
         : 0.0;
   }
 
@@ -126,7 +134,7 @@ class _EnrollmentDetailBottomSheetState
                                       ),
                                     ),
                                     Text(
-                                      '${widget.enrollment.remainingReservations} / ${widget.enrollment.totalReservations}',
+                                      '${_enrollment.remainingReservations} / ${_enrollment.totalReservations}',
                                       style: TextStyle(
                                         fontSize: 16,
                                         color: AppColors.textSecondary,
@@ -194,7 +202,7 @@ class _EnrollmentDetailBottomSheetState
                                 children: [
                                   _buildInfoChip(
                                     '등록일',
-                                    _formatDate(widget.enrollment.enrolledAt),
+                                    _formatDate(_enrollment.enrolledAt),
                                     AppColors.textSecondary,
                                   ),
                                   Padding(
@@ -212,7 +220,7 @@ class _EnrollmentDetailBottomSheetState
                                   ),
                                   _buildInfoChip(
                                     '마감일',
-                                    _formatDate(widget.enrollment.validUntil),
+                                    _formatDate(_enrollment.validUntil),
                                     AppColors.textSecondary,
                                   ),
                                 ],

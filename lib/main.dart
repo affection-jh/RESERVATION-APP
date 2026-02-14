@@ -28,14 +28,13 @@ import 'providers/auth_provider.dart';
 import 'providers/enrollment_provider.dart';
 import 'services/fcm_service.dart';
 import 'utils/navigator_key.dart';
+import 'widgets/reservation_feedback_listener.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
-// 백그라운드 메시지 핸들러 (최상위 함수로 선언)
+// 백그라운드 메시지 핸들러 (최상위 함수로 선언, 앱이 백그라운드/종료일 때만 호출)
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
-  // 백그라운드 수신 시 로그 (디버그용)
-  debugPrint('[FCM Background] 메시지 수신 messageId=${message.messageId} notificationId=${message.data['notificationId']}');
   await FcmService.backgroundMessageHandler(message);
 }
 
@@ -47,6 +46,71 @@ void main() async {
   FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
 
   runApp(const MyApp());
+}
+
+/// 앱이 포그라운드로 복귀할 때 알림 목록 재로드 (백그라운드에서 수신한 FCM 반영)
+class _AppLifecycleNotifier extends StatefulWidget {
+  final Widget child;
+
+  const _AppLifecycleNotifier({required this.child});
+
+  @override
+  State<_AppLifecycleNotifier> createState() => _AppLifecycleNotifierState();
+}
+
+class _AppLifecycleNotifierState extends State<_AppLifecycleNotifier>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    _reloadNotificationsOnResume();
+  }
+
+  void _reloadNotificationsOnResume() {
+    if (!mounted) return;
+    try {
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      final notificationProvider =
+          Provider.of<NotificationProvider>(context, listen: false);
+      final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+      final placeId = placeProvider.currentPlace?.id;
+      final admin = authProvider.currentAdmin;
+      final user = authProvider.currentUser;
+
+      // 유저 정보 기준으로 FCM 토큰 없으면 재발급 후 저장
+      authProvider.ensureFcmTokenSaved().catchError((e) =>
+          debugPrint('[AppLifecycle] FCM 토큰 저장 실패: $e'));
+
+      if (admin != null) {
+        notificationProvider
+            .loadNotifications(admin.userId, isAdmin: true, placeId: placeId)
+            .catchError((e) =>
+                debugPrint('[AppLifecycle] 관리자 알림 재로드 실패: $e'));
+      } else if (user != null) {
+        notificationProvider
+            .loadNotifications(user.userId, isAdmin: false, placeId: placeId)
+            .catchError((e) =>
+                debugPrint('[AppLifecycle] 사용자 알림 재로드 실패: $e'));
+      }
+    } catch (e) {
+      debugPrint('[AppLifecycle] 알림 재로드 오류: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 class MyApp extends StatelessWidget {
@@ -66,7 +130,8 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
         ChangeNotifierProvider(create: (_) => AdminProvider()),
       ],
-      child: MaterialApp(
+      child: _AppLifecycleNotifier(
+        child: MaterialApp(
         navigatorKey: navigatorKey,
         title: '기차 예약',
         builder: (context, child) {
@@ -182,6 +247,7 @@ class MyApp extends StatelessWidget {
           },
         },
       ),
+    ),
     );
   }
 }
@@ -314,21 +380,22 @@ class _MainScreenState extends State<MainScreen> {
         // 필요시 앱 종료 다이얼로그를 표시할 수 있음
       },
       child: Scaffold(
-        // 탭 전환 시 화면을 재생성하지 않고 상태를 유지 (애니메이션/스크롤 등 부작용 방지)
-        body: IndexedStack(
-          index: _currentIndex,
-          children: [
-            const HomeScreen(), // 0: 홈
-            const ReservationScreen(), // 1: 예약
+        body: ReservationFeedbackListener(
+          child: IndexedStack(
+            index: _currentIndex,
+            children: [
+              const HomeScreen(), // 0: 홈
+              const ReservationScreen(), // 1: 예약
             // 2: 마이페이지
             //
             // ⚠️ 바텀 네비로 마이페이지에 "그냥 들어왔을 때"는 하이라이트 애니메이션을 촉발하지 않는다.
             // 하이라이트는 명시적으로 전달된 경우에만 1회 실행되고 소비된다.
-            MyPageScreen(
-              highlightReservation:
-                  _currentIndex == 2 ? _pendingHighlightReservation : null,
-            ),
-          ],
+              MyPageScreen(
+                highlightReservation:
+                    _currentIndex == 2 ? _pendingHighlightReservation : null,
+              ),
+            ],
+          ),
         ),
         bottomNavigationBar: BottomNavBar(
           currentIndex: _currentIndex,

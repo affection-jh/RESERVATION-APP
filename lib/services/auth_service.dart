@@ -898,15 +898,18 @@ class AuthService {
   /// 인증 완료 후 공통 처리
   /// 관리자도 일반 사용자로 처리하여 다른 플레이스의 멤버가 될 수 있도록 함
   Future<AuthResult> _completeAuthentication(models.User user) async {
-    // 자동 매칭 시도 (관리자도 일반 사용자로 처리)
+    // placeMemberships 규칙이 request.auth.uid 기준이므로 현재 인증 UID 사용
+    final authUid = _auth.currentUser?.uid;
+    final effectiveUserId = authUid ?? user.userId;
+
+    // 자동 매칭 시도 (Auth UID로 생성해야 규칙 통과)
     final newlyCreated = await _autoMatchMemberships(
-      user.userId,
+      effectiveUserId,
       user.phoneNumber,
     );
 
     // ✅ 기존 placeMemberships까지 합쳐서 "전체 멤버십"을 구성해야 한다.
-    // (pendingMembers가 없으면 _autoMatchMemberships는 []를 반환하므로)
-    final existing = await _fetchPlaceMembershipsForUser(user.userId);
+    final existing = await _fetchPlaceMembershipsForUser(effectiveUserId);
 
     final byPlaceId = <String, PlaceMembership>{};
     for (final m in existing) {
@@ -1044,21 +1047,37 @@ class AuthService {
   }
 
   /// 신규 사용자 생성
+  /// Firebase Auth UID가 있으면 Callable(createUserDoc)로 생성해 권한 이슈 회피
   Future<models.User> _createUser({
     String? userId, // Firebase Auth UID 사용 시
     required String phoneNumber,
     required String name,
   }) async {
-    final finalUserId = userId ?? _generateUserId();
+    if (userId != null && userId.isNotEmpty) {
+      final functions = FirebaseFunctions.instance;
+      final result = await functions.httpsCallable('createUserDoc').call({
+        'name': name.trim(),
+        'phoneNumber': phoneNumber,
+      });
+      final data = result.data as Map<String, dynamic>;
+      final createdAt = data['createdAt'] != null
+          ? DateTime.parse(data['createdAt'] as String)
+          : TimezoneUtils.getSeoulDateTime();
+      return models.User(
+        userId: data['userId'] as String,
+        name: data['name'] as String,
+        phoneNumber: data['phoneNumber'] as String,
+        createdAt: createdAt,
+      );
+    }
 
+    final finalUserId = _generateUserId();
     final user = models.User(
       userId: finalUserId,
       name: name,
       phoneNumber: phoneNumber,
       createdAt: TimezoneUtils.getSeoulDateTime(),
     );
-
-    // UserService를 통해 저장
     final userService = UserService();
     return await userService.createUserFromModel(user);
   }
@@ -1329,12 +1348,13 @@ class AuthService {
   /// 전화번호로 자동 매칭
   ///
   /// pendingMembers 컬렉션에서 전화번호로 검색하여
-  /// PlaceMembership 생성
+  /// PlaceMembership 생성. [userId]는 반드시 request.auth.uid여야 규칙 통과.
+  /// 존재하지 않는 문서에 transaction.get()을 하면 규칙에서 거부되므로,
+  /// set(merge: true)로만 처리하고 get은 하지 않음.
   Future<List<PlaceMembership>> _autoMatchMemberships(
     String userId,
     String phoneNumber,
   ) async {
-    // pendingMembers에서 전화번호로 검색
     final firestore = _firestoreService.firestore;
     final query = firestore
         .collection('pendingMembers')
@@ -1348,26 +1368,16 @@ class AuthService {
 
     final memberships = <PlaceMembership>[];
 
-    // 트랜잭션으로 처리
-    // ✅ 중복 확인은 트랜잭션 내부에서 수행 (race condition 방지)
     await firestore.runTransaction((transaction) async {
       for (final doc in snapshot.docs) {
         final data = doc.data();
         final placeId = data['placeId'] as String;
         final autoApprove = data['autoApprove'] as bool? ?? true;
 
-        // PlaceMembership 생성 (중복 방지: placeId+userId로 고정 ID 사용)
         final membershipId = '${placeId}_$userId';
         final membershipRef = firestore
             .collection('placeMemberships')
             .doc(membershipId);
-
-        // ✅ 트랜잭션 내부에서도 중복 확인 (race condition 방지)
-        final existingMembership = await transaction.get(membershipRef);
-        if (existingMembership.exists) {
-          // 이미 있으면 스킵
-          continue;
-        }
 
         final now = TimezoneUtils.getSeoulDateTime();
         final membership = PlaceMembership(
@@ -1375,11 +1385,10 @@ class AuthService {
           userId: userId,
           placeId: placeId,
           requestedAt: now,
-          approvedAt: autoApprove ? now : now, // status 제거로 항상 approvedAt 설정
+          approvedAt: autoApprove ? now : now,
           invitedBy: data['createdBy'] as String?,
         );
 
-        // PlaceMembership 저장 (Timestamp 변환)
         final membershipData = membership.toJson();
         final timestamp = _firestoreService.dateTimeToTimestamp(now);
         membershipData['requestedAt'] = timestamp.toDate().toIso8601String();
@@ -1387,16 +1396,13 @@ class AuthService {
           membershipData['approvedAt'] = timestamp.toDate().toIso8601String();
         }
 
-        transaction.set(membershipRef, membershipData);
-
-        // users.placeIds는 더 이상 사용하지 않음 (courseMembers 기반으로 조회)
-
-        // ✅ pendingMembers는 클라이언트에서 삭제하지 않는다.
-        // - 일반 유저는 rules상 pendingMembers delete 권한이 없음(트랜잭션 실패 위험)
-        // - 관리자(겸용) 계정은 delete가 가능해서, 오히려 서버 트리거(onPlaceMembershipCreated)가
-        //   pendingMembers를 못 찾아 enrollments 생성이 누락되는 문제가 생길 수 있음
-        // - pendingMembers 정리는 서버 트리거가 담당한다.
-
+        // merge: true로 기존 문서가 있으면 병합, 없으면 생성. transaction.get() 제거로
+        // "없는 문서 읽기 → permission-denied" 방지.
+        transaction.set(
+          membershipRef,
+          membershipData,
+          SetOptions(merge: true),
+        );
         memberships.add(membership);
       }
     });

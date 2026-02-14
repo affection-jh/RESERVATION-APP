@@ -173,7 +173,7 @@ class _MemberCourseEnrollmentScreenState
       final placeId = placeProvider.currentPlace?.id;
       if (placeId == null) {
         if (mounted) {
-          SnackbarUtil.showError(context, '플레이스를 찾을 수 없습니다.');
+          SnackbarUtil.showInfo(context, '플레이스를 찾을 수 없습니다.');
         }
         return;
       }
@@ -185,23 +185,24 @@ class _MemberCourseEnrollmentScreenState
 
       // courseEnrollments 데이터 준비
       final now = TimezoneUtils.getSeoulDateTime();
-      final courseEnrollments = _selectedCourseIds
-          .map((courseId) {
-            final config = _courseConfigs[courseId];
-            if (config == null) return null;
+      final courseEnrollments =
+          _selectedCourseIds
+              .map((courseId) {
+                final config = _courseConfigs[courseId];
+                if (config == null) return null;
 
-            return {
-              'courseId': courseId,
-              'totalReservations': config.totalReservations,
-              'validFrom': (config.validFrom ?? now).toIso8601String(),
-              'validUntil':
-                  (config.validUntil ?? now.add(const Duration(days: 365)))
-                      .toIso8601String(),
-            };
-          })
-          .where((e) => e != null)
-          .cast<Map<String, dynamic>>()
-          .toList();
+                return {
+                  'courseId': courseId,
+                  'totalReservations': config.totalReservations,
+                  'validFrom': (config.validFrom ?? now).toIso8601String(),
+                  'validUntil':
+                      (config.validUntil ?? now.add(const Duration(days: 365)))
+                          .toIso8601String(),
+                };
+              })
+              .where((e) => e != null)
+              .cast<Map<String, dynamic>>()
+              .toList();
 
       // ⚠️ 중앙 로직: pending/일반 멤버 자동 분기 처리
       final memberService = MemberService();
@@ -247,7 +248,7 @@ class _MemberCourseEnrollmentScreenState
         } else {
           errorMessage = '코스 등록 중 오류가 발생했습니다.';
         }
-        SnackbarUtil.showError(context, errorMessage);
+        SnackbarUtil.showInfo(context, errorMessage);
       }
     } finally {
       if (mounted) {
@@ -394,130 +395,143 @@ class _MemberCourseEnrollmentScreenState
                             Wrap(
                               spacing: 8,
                               runSpacing: 8,
-                              children: allCourses.map((course) {
-                                final isSelected = _selectedCourseIds.contains(
-                                  course.id,
-                                );
-                                return GestureDetector(
-                                  onTap: () {
-                                    setState(() {
-                                      if (isSelected) {
-                                        _selectedCourseIds.remove(course.id);
-                                        _courseConfigs.remove(course.id);
-                                        _validPeriodModes.remove(course.id);
-                                        _periodControllers[course.id]
-                                            ?.dispose();
-                                        _periodControllers.remove(course.id);
-                                        _totalReservationsControllers['${course.id}_total']
-                                            ?.dispose();
-                                        _totalReservationsControllers.remove(
-                                          '${course.id}_total',
-                                        );
-                                        _totalReservationsFocusNodes['${course.id}_total']
-                                            ?.dispose();
-                                        _totalReservationsFocusNodes.remove(
-                                          '${course.id}_total',
-                                        );
-                                        _totalReservationsPinFocusNodes['${course.id}_total']
-                                            ?.dispose();
-                                        _totalReservationsPinFocusNodes.remove(
-                                          '${course.id}_total',
-                                        );
-                                      } else {
-                                        _selectedCourseIds.add(course.id);
-                                        // 일괄 적용 모드 확인
-                                        final now =
-                                            TimezoneUtils.getSeoulDateTime();
-                                        final useUniform =
-                                            course.useUniformSettings;
-                                        final uniformTotal =
-                                            course.uniformTotalReservations ??
-                                            course.defaultTotalReservations;
-                                        final uniformPeriodType =
-                                            course.uniformPeriodType ??
-                                            PeriodType.weeks;
-                                        final uniformPeriodValue =
-                                            course.uniformPeriodValue ?? 1;
+                              children:
+                                  allCourses.map((course) {
+                                    final isSelected = _selectedCourseIds
+                                        .contains(course.id);
+                                    return GestureDetector(
+                                      onTap: () {
+                                        setState(() {
+                                          if (isSelected) {
+                                            _selectedCourseIds.remove(
+                                              course.id,
+                                            );
+                                            _courseConfigs.remove(course.id);
+                                            _validPeriodModes.remove(course.id);
+                                            _periodControllers[course.id]
+                                                ?.dispose();
+                                            _periodControllers.remove(
+                                              course.id,
+                                            );
+                                            _totalReservationsControllers['${course.id}_total']
+                                                ?.dispose();
+                                            _totalReservationsControllers
+                                                .remove('${course.id}_total');
+                                            _totalReservationsFocusNodes['${course.id}_total']
+                                                ?.dispose();
+                                            _totalReservationsFocusNodes.remove(
+                                              '${course.id}_total',
+                                            );
+                                            _totalReservationsPinFocusNodes['${course.id}_total']
+                                                ?.dispose();
+                                            _totalReservationsPinFocusNodes
+                                                .remove('${course.id}_total');
+                                          } else {
+                                            _selectedCourseIds.add(course.id);
+                                            // 일괄 적용 모드 확인
+                                            final now =
+                                                TimezoneUtils.getSeoulDateTime();
+                                            final useUniform =
+                                                course.useUniformSettings;
+                                            final uniformTotal =
+                                                course
+                                                    .uniformTotalReservations ??
+                                                course.defaultTotalReservations;
+                                            final uniformPeriodType =
+                                                course.uniformPeriodType ??
+                                                PeriodType.weeks;
+                                            final uniformPeriodValue =
+                                                course.uniformPeriodValue ?? 1;
 
-                                        // 유효기간 계산
-                                        final Duration duration;
-                                        switch (uniformPeriodType) {
-                                          case PeriodType.weeks:
-                                            duration = Duration(
-                                              days: uniformPeriodValue * 7,
-                                            );
-                                            break;
-                                          case PeriodType.days:
-                                            duration = Duration(
-                                              days: uniformPeriodValue,
-                                            );
-                                            break;
-                                          case PeriodType.months:
-                                            duration = Duration(
-                                              days: uniformPeriodValue * 30,
-                                            );
-                                            break;
-                                        }
+                                            // 유효기간 계산
+                                            final Duration duration;
+                                            switch (uniformPeriodType) {
+                                              case PeriodType.weeks:
+                                                duration = Duration(
+                                                  days: uniformPeriodValue * 7,
+                                                );
+                                                break;
+                                              case PeriodType.days:
+                                                duration = Duration(
+                                                  days: uniformPeriodValue,
+                                                );
+                                                break;
+                                              case PeriodType.months:
+                                                duration = Duration(
+                                                  days: uniformPeriodValue * 30,
+                                                );
+                                                break;
+                                            }
 
-                                        _courseConfigs[course.id] =
-                                            CourseEnrollmentConfig(
+                                            _courseConfigs[course
+                                                .id] = CourseEnrollmentConfig(
                                               courseId: course.id,
-                                              totalReservations: useUniform
-                                                  ? uniformTotal
-                                                  : 0,
+                                              totalReservations:
+                                                  useUniform ? uniformTotal : 0,
                                               validFrom: now,
-                                              validUntil: useUniform
-                                                  ? now.add(duration)
-                                                  : now.add(
-                                                      const Duration(days: 7),
-                                                    ),
-                                              periodType: useUniform
-                                                  ? uniformPeriodType
-                                                  : PeriodType.weeks,
-                                              periodValue: useUniform
-                                                  ? uniformPeriodValue
-                                                  : 1,
+                                              validUntil:
+                                                  useUniform
+                                                      ? now.add(duration)
+                                                      : now.add(
+                                                        const Duration(days: 7),
+                                                      ),
+                                              periodType:
+                                                  useUniform
+                                                      ? uniformPeriodType
+                                                      : PeriodType.weeks,
+                                              periodValue:
+                                                  useUniform
+                                                      ? uniformPeriodValue
+                                                      : 1,
                                               validPeriodMode:
                                                   ValidPeriodMode.period,
                                             );
-                                        _validPeriodModes[course.id] =
-                                            ValidPeriodMode.period;
-                                      }
-                                      _courseErrorText = null;
-                                    });
-                                  },
-                                  child: AnimatedContainer(
-                                    duration: const Duration(milliseconds: 200),
-                                    curve: Curves.easeInOut,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 18,
-                                      vertical: 10,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: isSelected
-                                          ? AppColors.textPrimary
-                                          : AppColors.backgroundWhite,
-                                      borderRadius: BorderRadius.circular(16),
-                                      border: isSelected
-                                          ? null
-                                          : Border.all(
-                                              color: AppColors.borderLight,
-                                              width: 1,
-                                            ),
-                                    ),
-                                    child: Text(
-                                      course.name,
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w500,
-                                        color: isSelected
-                                            ? AppColors.backgroundWhite
-                                            : AppColors.textPrimary,
+                                            _validPeriodModes[course.id] =
+                                                ValidPeriodMode.period;
+                                          }
+                                          _courseErrorText = null;
+                                        });
+                                      },
+                                      child: AnimatedContainer(
+                                        duration: const Duration(
+                                          milliseconds: 200,
+                                        ),
+                                        curve: Curves.easeInOut,
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 18,
+                                          vertical: 10,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color:
+                                              isSelected
+                                                  ? AppColors.textPrimary
+                                                  : AppColors.backgroundWhite,
+                                          borderRadius: BorderRadius.circular(
+                                            16,
+                                          ),
+                                          border:
+                                              isSelected
+                                                  ? null
+                                                  : Border.all(
+                                                    color:
+                                                        AppColors.borderLight,
+                                                    width: 1,
+                                                  ),
+                                        ),
+                                        child: Text(
+                                          course.name,
+                                          style: TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w500,
+                                            color:
+                                                isSelected
+                                                    ? AppColors.backgroundWhite
+                                                    : AppColors.textPrimary,
+                                          ),
+                                        ),
                                       ),
-                                    ),
-                                  ),
-                                );
-                              }).toList(),
+                                    );
+                                  }).toList(),
                             ),
                             if (_courseErrorText != null) ...[
                               const SizedBox(height: 8),
@@ -566,9 +580,8 @@ class _MemberCourseEnrollmentScreenState
                     child: SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed: _isSaving || !_isValid()
-                            ? null
-                            : _handleSave,
+                        onPressed:
+                            _isSaving || !_isValid() ? null : _handleSave,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.primaryGreen,
                           foregroundColor: Colors.white,
@@ -580,24 +593,25 @@ class _MemberCourseEnrollmentScreenState
                           disabledBackgroundColor: AppColors.textPrimary
                               .withOpacity(0.1),
                         ),
-                        child: _isSaving
-                            ? const SizedBox(
-                                height: 20,
-                                width: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                    AppColors.primaryGreen,
+                        child:
+                            _isSaving
+                                ? const SizedBox(
+                                  height: 20,
+                                  width: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      AppColors.primaryGreen,
+                                    ),
+                                  ),
+                                )
+                                : Text(
+                                  '등록',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
                                   ),
                                 ),
-                              )
-                            : Text(
-                                '등록',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
                       ),
                     ),
                   ),
@@ -620,10 +634,10 @@ class _MemberCourseEnrollmentScreenState
       _totalReservationsControllers[controllerKey] = TextEditingController(
         text: initialValue.toString(),
       );
-      _totalReservationsFocusNodes[controllerKey] = FocusNode()
-        ..addListener(() {
-          setState(() {});
-        });
+      _totalReservationsFocusNodes[controllerKey] =
+          FocusNode()..addListener(() {
+            setState(() {});
+          });
       _totalReservationsPinFocusNodes[controllerKey] = FocusNode();
     }
     final totalReservationsController =
@@ -771,9 +785,8 @@ class _MemberCourseEnrollmentScreenState
           _validPeriodModes[course.id] = ValidPeriodMode.period;
           _courseConfigs[course.id]?.validPeriodMode = ValidPeriodMode.period;
           _courseConfigs[course.id]?.periodType = type;
-          _courseConfigs[course.id]?.periodValue = type == PeriodType.days
-              ? 7
-              : 1;
+          _courseConfigs[course.id]?.periodValue =
+              type == PeriodType.days ? 7 : 1;
           _updateValidUntil();
         });
       },

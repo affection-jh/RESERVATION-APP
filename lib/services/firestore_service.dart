@@ -1114,6 +1114,16 @@ class FirestoreService {
     await _firestore.collection('notifications').doc(notificationId).delete();
   }
 
+  /// 알림 일괄 삭제 (Firestore batch 최대 500건)
+  Future<void> deleteNotifications(List<String> notificationIds) async {
+    if (notificationIds.isEmpty) return;
+    final batch = _firestore.batch();
+    for (final id in notificationIds) {
+      batch.delete(_firestore.collection('notifications').doc(id));
+    }
+    await batch.commit();
+  }
+
   /// 알림 생성
   Future<AppNotification> createNotification(
     AppNotification notification,

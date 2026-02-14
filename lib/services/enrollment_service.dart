@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../models/course_enrollment.dart';
 import '../models/course_member.dart';
@@ -941,39 +942,55 @@ class EnrollmentService {
     );
   }
 
-  /// 코스별 멤버 조회
+  /// 코스별 멤버 조회 (enrollments 컬렉션 기준 — 단일 소스)
+  ///
+  /// [placeId]가 있으면 해당 플레이스의 enrollment만 조회합니다.
+  /// 없으면 courseId만으로 조회(다중 플레이스 시 placeId 전달 권장).
   Stream<List<CourseMember>> watchCourseMembers({
     required String courseId,
+    String? placeId,
     bool? isActive,
   }) {
-    var query =
-        _firestore
-                .collection('courseMembers')
-                .where('courseId', isEqualTo: courseId)
-            as dynamic;
-
-    if (isActive != null) {
-      query = query.where('isActive', isEqualTo: isActive);
+    final normalizedCourseId = courseId.trim();
+    if (normalizedCourseId.isEmpty) {
+      return Stream.value(const <CourseMember>[]);
     }
 
-    return (query.snapshots() as Stream<QuerySnapshot<Map<String, dynamic>>>)
-        .map((snapshot) {
-          return snapshot.docs.map((doc) {
-            final data = doc.data();
-            data['enrolledAt'] = _timestampToDateTime(
-              data['enrolledAt'],
-            ).toIso8601String();
-            data['createdAt'] = _timestampToDateTime(
-              data['createdAt'],
-            ).toIso8601String();
-            if (data['updatedAt'] != null) {
-              data['updatedAt'] = _timestampToDateTime(
-                data['updatedAt'],
-              ).toIso8601String();
-            }
-            return CourseMember.fromJson(data);
-          }).toList();
-        });
+    var query = _firestore
+        .collection('enrollments')
+        .where('courseId', isEqualTo: normalizedCourseId);
+
+    if (placeId != null && placeId.trim().isNotEmpty) {
+      query = query.where('placeId', isEqualTo: placeId.trim());
+    }
+
+    return query.snapshots().map((snapshot) {
+      if (kDebugMode) {
+        debugPrint(
+          '[EnrollmentService] watchCourseMembers courseId=$normalizedCourseId '
+          'placeId=$placeId docs=${snapshot.docs.length}',
+        );
+      }
+      return snapshot.docs.map((doc) {
+        final data = doc.data();
+        final id = doc.id;
+        final userId = (data['userId'] ?? '').toString();
+        final courseIdVal = (data['courseId'] ?? '').toString();
+        final placeIdVal = (data['placeId'] ?? '').toString();
+        final enrolledAt = _timestampToDateTime(data['enrolledAt']);
+        return CourseMember(
+          id: id,
+          userId: userId,
+          courseId: courseIdVal,
+          placeId: placeIdVal,
+          enrollmentId: id,
+          enrolledAt: enrolledAt,
+          isActive: true,
+          createdAt: enrolledAt,
+          updatedAt: null,
+        );
+      }).toList();
+    });
   }
 
   /// 플레이스별 코스 멤버 조회

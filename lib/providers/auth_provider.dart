@@ -303,4 +303,11 @@ class AuthProvider with ChangeNotifier {
       debugPrint('[AuthProvider] FCM 초기화 실패: $e');
     }
   }
+
+  /// 유저 정보 로드/앱 재개 시 호출. 토큰 없거나 갱신 필요 시 재발급 후 Firestore 저장.
+  Future<void> ensureFcmTokenSaved() async {
+    final userId = _currentAdmin?.userId ?? _currentUser?.userId;
+    if (userId == null) return;
+    await _fcmService.ensureTokenForUser(userId);
+  }
 }

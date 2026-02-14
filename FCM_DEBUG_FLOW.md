@@ -18,8 +18,9 @@
 | FCM 초기화 | `[FcmService] initialize` | 권한/토큰/핸들러 설정 |
 | 토큰 저장 | `[FcmService] _saveTokenToFirestore` | Firestore에 fcmToken 저장 성공/실패 |
 | 토큰 없음 | `FCM 토큰을 가져올 수 없습니다` | getToken() null → 푸시 불가 원인 후보 |
-| 포그라운드 수신 | `[FcmService] onMessage` | 앱 사용 중 푸시 수신 |
-| 포그라운드 수신 | `FCM [FOREGROUND_RECEIVED]` | 수신 메시지 상세 (messageId, data 등) |
+| 포그라운드 수신 | `[FCM Foreground] messageId=` | 앱 사용 중 푸시 수신 (이 로그가 있으면 수신된 것) |
+| 플랫폼/APNS | `[FcmService] platform=` | iOS/Android 구분 |
+| 플랫폼/APNS | `[FcmService] APNS 토큰:` | iOS에서 APNS 토큰 있음/없음 (수신 가능 여부 참고) |
 | Provider 반영 | `[FcmService] _addNotificationToProvider` | notificationId, context 유무 |
 | Provider 반영 | `[NotificationProvider] addNotificationFromId` | Firestore 조회/검증/추가 여부 |
 | 알림 로드 | `[NotificationProvider] loadNotifications` | 앱/알림 화면 진입 시 일회성 로드 |
@@ -38,6 +39,18 @@
 | FCM 실패 | `[sendPushNotification] FCM 전송 실패` | error 메시지/코드 확인 |
 
 ---
+
+## 발송 vs 수신 구분
+
+- **발송 여부**: Firebase Console > Functions 로그에서 `[sendPushNotification] FCM 전송 성공` 이 나오면 **서버는 해당 기기로 푸시를 보낸 것**이다. 실패면 `FCM 전송 실패` + 에러 코드 확인.
+- **수신 여부**: 앱 포그라운드일 때 Flutter 로그에 `[FCM Foreground] messageId=...` 가 찍히면 **앱이 메시지를 받은 것**이다. 발송은 성공인데 이 로그가 없으면 **수신 측(앱/APNS)** 문제.
+
+## iOS 포그라운드 수신이 안 될 때 (APNS 점검)
+
+- **Info.plist** 에 `FirebaseAppDelegateProxyEnabled` = false 이면, **AppDelegate에서 APNS 디바이스 토큰을 FCM에 수동 전달**해야 한다. `application(_:didRegisterForRemoteNotificationsWithDeviceToken:)` 에서 `Messaging.messaging().apnsToken = deviceToken` 설정 여부 확인.
+- **Firebase Console** > 프로젝트 설정 > Cloud Messaging > **APNs 인증 키** (.p8) 업로드 여부. 없으면 iOS 푸시 자체가 실패할 수 있음.
+- **실기기**에서 테스트할 것. iOS 시뮬레이터는 APNS 미지원.
+- 앱 로그에서 `[FcmService] platform=iOS` / `APNS 토큰: 있음` 인지 확인. `APNS 토큰: 없음` 이면 시뮬레이터이거나 Firebase에 APNs 키가 없거나, AppDelegate에서 토큰 전달이 안 된 상태.
 
 ## 자주 나오는 원인
 

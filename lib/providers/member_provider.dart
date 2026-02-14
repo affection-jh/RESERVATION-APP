@@ -91,8 +91,8 @@ class MemberProvider with ChangeNotifier {
   /// Firestore 반영된 두 번째 emit이 올 때까지 기다린 뒤 완료합니다.
   static const Duration _loadMembersStabilizeDelay = Duration(milliseconds: 550);
 
-  /// 플레이스 멤버 목록 로드 (courseMembers 기반 + pendingMembers)
-  /// users.placeIds는 더 이상 사용하지 않으므로 courseMembers에서 조회
+  /// 플레이스 멤버 목록 로드 (placeMemberships 기반 + pendingMembers)
+  /// 수강 취소해도 플레이스 소속이면 멤버 목록에 유지됨.
   /// 반환된 Future는 양쪽 스트림에서 최소 1회 emit된 뒤, 잠시 대기 후 완료됩니다.
   Future<void> loadMembers(String placeId, {bool forceRefreshUsers = false}) async {
     if (kDebugMode) {
@@ -130,34 +130,18 @@ class MemberProvider with ChangeNotifier {
     }
 
     try {
-      final enrollmentService = EnrollmentService();
-
-      // courseMembers 기반으로 멤버 조회 (users.placeIds 대신)
-      _memberSubscription = enrollmentService
-          .watchPlaceCourseMembers(placeId: placeId)
-          .asyncMap((courseMembers) async {
+      // placeMemberships 기반으로 멤버 조회 (수강 취소해도 플레이스 소속이면 목록에 유지)
+      _memberSubscription = _memberService
+          .watchPlaceMemberUserIds(placeId)
+          .asyncMap((userIds) async {
             if (kDebugMode) {
               debugPrint(
-                '[MemberProvider] courseMembers updated placeId=$placeId count=${courseMembers.length}',
+                '[MemberProvider] placeMemberships updated placeId=$placeId userIds count=${userIds.length}',
               );
             }
 
-            if (courseMembers.isEmpty) {
+            if (userIds.isEmpty) {
               return <User>[];
-            }
-
-            // userId 리스트 추출 (중복 제거)
-            final userIds =
-                courseMembers
-                    .map((cm) => cm.userId)
-                    .where((id) => id.isNotEmpty)
-                    .toSet()
-                    .toList();
-
-            if (kDebugMode) {
-              debugPrint(
-                '[MemberProvider] courseMembers userIds=$userIds (count=${userIds.length})',
-              );
             }
 
             // ✅ 이름 등 최신 정보 보장을 위해 필요 시 강제 재조회
@@ -188,7 +172,7 @@ class MemberProvider with ChangeNotifier {
               }
             }
 
-            // 캐시에서 User 정보 가져오기
+            // 캐시에서 User 정보 가져오기 (placeMemberships에 있는 userId만)
             final users =
                 userIds.map((id) => _userCache[id]).whereType<User>().toList();
 
@@ -220,7 +204,7 @@ class MemberProvider with ChangeNotifier {
               maybeComplete();
               if (kDebugMode) {
                 debugPrint(
-                  '[MemberProvider] courseMembers error placeId=$placeId error=$_error',
+                  '[MemberProvider] placeMemberships error placeId=$placeId error=$_error',
                 );
               }
               notifyListeners();
@@ -371,117 +355,72 @@ class MemberProvider with ChangeNotifier {
   // userId -> User 캐시 (전역, 여러 코스에서 공유)
   final Map<String, User> _userCache = {};
 
-  /// 코스별 멤버 조회 (courseMembers 컬렉션 직접 조회)
+  /// 코스별 멤버 조회 (enrollments + pendingMembers는 호출처에서 합침)
   ///
-  /// enrollments가 생성되기 전에도 courseMembers가 있으면 표시됨
-  ///
-  /// ✅ 최적화:
-  /// - courseMembers는 Stream으로 실시간 업데이트
-  /// - users는 캐시 활용 (이미 조회한 userId는 재조회 안 함)
-  /// - 배치 조회로 네트워크 호출 최소화
-  /// - Stream 캐싱으로 중복 구독 방지
-  Stream<List<User>> watchCourseMembers(String courseId) {
-    // 이미 캐시된 Stream이 있으면 재사용 (중복 구독 방지)
-    if (_courseMemberStreamCache.containsKey(courseId)) {
-      return _courseMemberStreamCache[courseId]!;
+  /// [placeId]가 있으면 해당 플레이스의 enrollment만 조회합니다. 코스별 탭/코스 상세에서는 반드시 전달 권장.
+  Stream<List<User>> watchCourseMembers(String courseId, {String? placeId}) {
+    final cacheKey = placeId != null ? '${placeId}_$courseId' : courseId;
+    if (_courseMemberStreamCache.containsKey(cacheKey)) {
+      return _courseMemberStreamCache[cacheKey]!;
     }
 
     final enrollmentService = EnrollmentService();
+    final stream = enrollmentService
+        .watchCourseMembers(courseId: courseId, placeId: placeId)
+        .asyncMap((courseMembers) async {
+      if (courseMembers.isEmpty) {
+        if (kDebugMode) {
+          debugPrint(
+            '[MemberProvider] watchCourseMembers courseId=$courseId placeId=$placeId '
+            'enrollmentDocs=0 -> users=0',
+          );
+        }
+        _courseMembersCache[cacheKey] = [];
+        return <User>[];
+      }
 
-    // Stream 생성 및 캐싱 (broadcast로 변환하여 여러 구독자 지원)
-    final stream =
-        enrollmentService.watchCourseMembers(courseId: courseId).asyncMap((
-          courseMembers,
-        ) async {
-          // 로그 출력 최소화: 데이터가 실제로 변경되었을 때만 출력
-          final previousCount = _courseMembersCache[courseId]?.length ?? 0;
-          final currentCount = courseMembers.length;
+      final userIds = courseMembers
+          .map((cm) => cm.userId)
+          .where((id) => id.isNotEmpty)
+          .toSet()
+          .toList();
 
-          if (kDebugMode && previousCount != currentCount) {
-            debugPrint(
-              '[MemberProvider] watchCourseMembers: courseId=$courseId, count=$currentCount (이전: $previousCount)',
-            );
+      final missingUserIds =
+          userIds.where((id) => !_userCache.containsKey(id)).toList();
+      if (missingUserIds.isNotEmpty) {
+        try {
+          final fetchedUsers = await _userService.getUsersByIds(missingUserIds);
+          for (final user in fetchedUsers) {
+            _userCache[user.userId] = user;
           }
-
-          if (courseMembers.isEmpty) {
-            _courseMembersCache[courseId] = [];
-            return <User>[];
+        } catch (e, stackTrace) {
+          if (kDebugMode) {
+            debugPrint('[MemberProvider] Batch user fetch error: $e');
+            debugPrint('[MemberProvider] Stack trace: $stackTrace');
           }
+        }
+      }
 
-          // userId 리스트 추출 (null 제외)
-          final userIds =
-              courseMembers
-                  .map((cm) => cm.userId)
-                  .where((id) => id.isNotEmpty)
-                  .toSet()
-                  .toList();
+      final users =
+          userIds.map((id) => _userCache[id]).whereType<User>().toList();
+      if (kDebugMode) {
+        debugPrint(
+          '[MemberProvider] watchCourseMembers courseId=$courseId placeId=$placeId '
+          'enrollmentDocs=${courseMembers.length} userIds=${userIds.length} -> users=${users.length}',
+        );
+      }
+      _courseMembersCache[cacheKey] = users;
+      return users;
+    }).asBroadcastStream();
 
-          // 캐시에 없는 userId만 조회
-          final missingUserIds =
-              userIds.where((id) => !_userCache.containsKey(id)).toList();
-
-          // 배치 조회 (최대 10개씩)
-          if (missingUserIds.isNotEmpty) {
-            try {
-              final fetchedUsers = await _userService.getUsersByIds(
-                missingUserIds,
-              );
-              // 캐시에 저장
-              for (final user in fetchedUsers) {
-                _userCache[user.userId] = user;
-              }
-
-              // users 컬렉션에 없는 userId 확인
-              final fetchedUserIds = fetchedUsers.map((u) => u.userId).toSet();
-              final missingInUsers =
-                  missingUserIds
-                      .where((id) => !fetchedUserIds.contains(id))
-                      .toList();
-              if (missingInUsers.isNotEmpty && kDebugMode) {
-                debugPrint(
-                  '[MemberProvider] ⚠️ watchCourseMembers: users 컬렉션에 없는 userId들: $missingInUsers',
-                );
-                debugPrint(
-                  '[MemberProvider] ⚠️ 이 userId들은 courseMembers에는 있지만 users 컬렉션에 없습니다.',
-                );
-              }
-            } catch (e, stackTrace) {
-              if (kDebugMode) {
-                debugPrint('[MemberProvider] Batch user fetch error: $e');
-                debugPrint('[MemberProvider] Stack trace: $stackTrace');
-              }
-            }
-          }
-
-          // 캐시에서 User 정보 가져오기 (users 컬렉션에 있는 것만)
-          final users =
-              userIds.map((id) => _userCache[id]).whereType<User>().toList();
-
-          // users 컬렉션에 없는 userId가 있는지 확인
-          final foundUserIds = users.map((u) => u.userId).toSet();
-          final notFoundUserIds =
-              userIds.where((id) => !foundUserIds.contains(id)).toList();
-          if (notFoundUserIds.isNotEmpty && kDebugMode) {
-            debugPrint(
-              '[MemberProvider] ⚠️ watchCourseMembers: 최종 결과에서 제외된 userId들: $notFoundUserIds',
-            );
-            debugPrint(
-              '[MemberProvider] ⚠️ 이 userId들은 courseMembers에는 있지만 users 컬렉션에 없어서 표시되지 않습니다.',
-            );
-          }
-
-          _courseMembersCache[courseId] = users;
-          return users;
-        }).asBroadcastStream();
-
-    // Stream 캐시에 저장
-    _courseMemberStreamCache[courseId] = stream;
+    _courseMemberStreamCache[cacheKey] = stream;
     return stream;
   }
 
-  /// 코스별 멤버 가져오기 (캐시된 값)
-  List<User> getCourseMembers(String courseId) {
-    return _courseMembersCache[courseId] ?? [];
+  /// 코스별 멤버 가져오기 (캐시된 값). watchCourseMembers와 동일한 cacheKey 사용.
+  List<User> getCourseMembers(String courseId, {String? placeId}) {
+    final cacheKey = placeId != null ? '${placeId}_$courseId' : courseId;
+    return _courseMembersCache[cacheKey] ?? [];
   }
 
   /// 리소스 정리 (Provider dispose 시 호출)

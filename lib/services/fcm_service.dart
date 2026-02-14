@@ -1,8 +1,8 @@
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../widgets/push_notification_overlay.dart';
 import '../utils/navigator_key.dart';
 import '../providers/notification_provider.dart';
 import '../providers/auth_provider.dart';
@@ -13,7 +13,6 @@ import '../providers/place_provider.dart';
 import '../screens/admin/widgets/enrollment_detail_screen.dart';
 import '../models/admin_models.dart';
 import 'dart:async';
-import 'dart:convert';
 
 /// Firebase Cloud Messaging 서비스
 /// FCM 토큰 관리 및 푸시 알림 수신 처리
@@ -24,58 +23,6 @@ class FcmService {
   StreamSubscription<RemoteMessage>? _foregroundMessageSubscription;
   StreamSubscription<RemoteMessage>? _messageOpenedSubscription;
   bool _isInitialized = false;
-
-  static String _safeTruncate(String value, {int max = 80}) {
-    if (value.length <= max) return value;
-    return '${value.substring(0, max)}...(${value.length})';
-  }
-
-  static String _prettyJson(Object? obj) {
-    try {
-      return const JsonEncoder.withIndent('  ').convert(obj);
-    } catch (_) {
-      return obj?.toString() ?? '';
-    }
-  }
-
-  /// FCM 로그를 터미널에서 쉽게 찾기 위한 블록 로그
-  static void logRemoteMessage(RemoteMessage message, {required String event}) {
-    final now = DateTime.now().toIso8601String();
-    final title = message.notification?.title ?? '';
-    final body = message.notification?.body ?? '';
-    final data = message.data;
-    final notificationId = data['notificationId'];
-    final type = data['type'];
-
-    debugPrint('');
-    debugPrint('==================== FCM [$event] ====================');
-    debugPrint('time: $now');
-    debugPrint('messageId: ${message.messageId ?? '-'}');
-    debugPrint('sentTime: ${message.sentTime?.toIso8601String() ?? '-'}');
-    debugPrint('from: ${message.from ?? '-'}');
-    debugPrint('notificationId: ${notificationId ?? '-'}');
-    debugPrint('type: ${type ?? '-'}');
-    debugPrint('title: ${_safeTruncate(title)}');
-    debugPrint('body: ${_safeTruncate(body, max: 160)}');
-    debugPrint('data:\n${_prettyJson(data)}');
-    debugPrint('======================================================');
-    debugPrint('');
-  }
-
-  static void logData(Map<String, dynamic>? data, {required String event}) {
-    final now = DateTime.now().toIso8601String();
-    final notificationId = data?['notificationId'];
-    final type = data?['type'];
-
-    debugPrint('');
-    debugPrint('==================== FCM [$event] ====================');
-    debugPrint('time: $now');
-    debugPrint('notificationId: ${notificationId ?? '-'}');
-    debugPrint('type: ${type ?? '-'}');
-    debugPrint('data:\n${_prettyJson(data ?? const {})}');
-    debugPrint('======================================================');
-    debugPrint('');
-  }
 
   /// FCM 초기화 및 토큰 저장
   /// 사용자와 관리자 모두 동일하게 처리
@@ -138,53 +85,49 @@ class FcmService {
       return;
     }
 
-    // 포그라운드 메시지 핸들러
+    // 포그라운드: 로그 + 빨간 점 갱신만 (알림 UI는 띄우지 않음)
     _foregroundMessageSubscription = FirebaseMessaging.onMessage.listen((
       RemoteMessage message,
     ) {
       debugPrint(
-        '[FcmService] onMessage (포그라운드) 수신 → logRemoteMessage + provider + overlay',
+        '[FCM Foreground] messageId=${message.messageId} notificationId=${message.data['notificationId']}',
       );
-      logRemoteMessage(message, event: 'FOREGROUND_RECEIVED');
-
       try {
         _addNotificationToProvider(message.data);
-        _showForegroundNotification(message);
       } catch (e) {
-        debugPrint('[FcmService] 포그라운드 알림 처리 오류: $e');
+        debugPrint('[FCM Foreground] addNotificationToProvider error: $e');
       }
     });
 
-    // 알림 클릭 핸들러
+    // 알림 탭 (백그라운드에서 알림 눌러 앱 연 경우)
     _messageOpenedSubscription = FirebaseMessaging.onMessageOpenedApp.listen((
       RemoteMessage message,
     ) {
-      logRemoteMessage(message, event: 'TAP_OPENED_APP');
+      debugPrint('[FCM] onMessageOpenedApp messageId=${message.messageId}');
       try {
+        _addNotificationToProvider(message.data);
         _handleNotificationTap(message.data);
       } catch (e) {
-        debugPrint('[FcmService] 알림 클릭 처리 오류: $e');
+        debugPrint('[FCM] onMessageOpenedApp error: $e');
       }
     });
-
-    debugPrint('[FcmService] 포그라운드 핸들러 설정 완료');
   }
 
-  /// NotificationProvider에 새 알림 추가
-  void _addNotificationToProvider(Map<String, dynamic>? data) {
+  /// NotificationProvider에 새 알림 추가 → 빨간 점 갱신 (context 없으면 최대 3회 재시도)
+  void _addNotificationToProvider(
+    Map<String, dynamic>? data, {
+    int retryCount = 0,
+  }) {
     final notificationId = data?['notificationId'];
-    debugPrint(
-      '[FcmService] _addNotificationToProvider notificationId=$notificationId dataKeys=${data?.keys.toList()}',
-    );
+    if (notificationId == null || notificationId is! String) return;
+
     final context = navigatorKey.currentContext;
     if (context == null) {
-      debugPrint('[FcmService] _addNotificationToProvider context==null → 스킵');
-      return;
-    }
-    if (notificationId == null || notificationId is! String) {
-      debugPrint(
-        '[FcmService] _addNotificationToProvider notificationId 없음 또는 비문자열 → 스킵',
-      );
+      if (retryCount < 3) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _addNotificationToProvider(data, retryCount: retryCount + 1);
+        });
+      }
       return;
     }
     try {
@@ -194,22 +137,13 @@ class FcmService {
         listen: false,
       );
       final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
-
       final currentAdmin = authProvider.currentAdmin;
       final currentUser = authProvider.currentUser;
       final isAdmin = currentAdmin != null;
       final userId = currentAdmin?.userId ?? currentUser?.userId;
+      if (userId == null) return;
 
-      if (userId == null) {
-        debugPrint('[FcmService] _addNotificationToProvider userId==null → 스킵');
-        return;
-      }
-
-      final currentPlace = placeProvider.currentPlace;
-      final placeId = currentPlace?.id;
-      debugPrint(
-        '[FcmService] _addNotificationToProvider calling addNotificationFromId userId=$userId isAdmin=$isAdmin placeId=$placeId',
-      );
+      final placeId = placeProvider.currentPlace?.id;
       notificationProvider
           .addNotificationFromId(
             notificationId,
@@ -217,49 +151,91 @@ class FcmService {
             isAdmin,
             placeId: placeId,
           )
-          .catchError((e) {
-            debugPrint('[FcmService] _addNotificationToProvider error: $e');
-          });
+          .catchError(
+            (e) => debugPrint('[FCM] addNotificationFromId error: $e'),
+          );
     } catch (e) {
-      debugPrint('[FcmService] _addNotificationToProvider error: $e');
+      debugPrint('[FCM] _addNotificationToProvider error: $e');
     }
   }
 
-  /// FCM 토큰을 Firestore에 저장
+  /// iOS에서 APNS 지연 시 동기 대기 후 재시도 (2초, 5초, 10초)
+  static const List<int> _iosApnsRetryDelays = [2, 5];
+
+  /// 유저 정보 로드 시 등에서 호출. 토큰이 없거나 갱신 필요 시 재발급 후 저장.
+  Future<void> ensureTokenForUser(String userId) async {
+    await _saveTokenToFirestore(userId);
+  }
+
+  /// FCM 토큰을 Firestore에 저장. [token]이 있으면 그대로 저장, 없으면 getToken() 호출(동기 재시도).
   Future<void> _saveTokenToFirestore(String userId, {String? token}) async {
     debugPrint(
       '[FcmService] _saveTokenToFirestore() userId=$userId, tokenProvided=${token != null}',
     );
-    try {
-      // iOS에서 APNS 토큰 먼저 요청 (FCM 토큰을 얻기 위해 필요)
-      try {
-        await _messaging.getAPNSToken();
-      } catch (e) {
-        debugPrint('[FcmService] APNS 토큰 요청 (시뮬레이터일 수 있음): $e');
-      }
+    final isIOS = defaultTargetPlatform == TargetPlatform.iOS;
+    debugPrint('[FcmService] platform=${isIOS ? "iOS" : "Android"}');
 
-      final fcmToken = token ?? await _messaging.getToken();
-      if (fcmToken == null) {
+    // 호출자가 토큰을 넘긴 경우(예: onTokenRefresh) → 재시도 없이 바로 저장
+    if (token != null && token.isNotEmpty) {
+      await _writeTokenToFirestore(userId, token);
+      return;
+    }
+
+    // 토큰 발급: iOS는 APNS 대기 후 동기 재시도
+    String? fcmToken;
+    const maxAttempts = 4; // 1회 시도 + 3회 재시도
+
+    for (int attempt = 0; attempt < maxAttempts; attempt++) {
+      if (attempt > 0 && isIOS) {
+        final delaySec = _iosApnsRetryDelays[attempt - 1];
         debugPrint(
-          '[FcmService] FCM 토큰을 가져올 수 없습니다. (getToken() returned null)',
+          '[FcmService] ${delaySec}초 대기 후 재시도 (${attempt + 1}/$maxAttempts)',
         );
-        return;
+        await Future.delayed(Duration(seconds: delaySec));
       }
-      final masked =
-          fcmToken.length > 12
-              ? '${fcmToken.substring(0, 6)}...${fcmToken.substring(fcmToken.length - 6)}'
-              : fcmToken;
-      debugPrint(
-        '[FcmService] FCM 토큰 획득됨 len=${fcmToken.length} masked=$masked',
-      );
 
-      // ✅ 트랜잭션으로 원자적 저장 (users 문서 + 서브컬렉션)
+      try {
+        if (isIOS && attempt == 0) {
+          final apns = await _messaging.getAPNSToken();
+          debugPrint('[FcmService] APNS 토큰: ${apns != null ? "있음" : "대기 중"}');
+        }
+        fcmToken = await _messaging.getToken();
+        if (fcmToken != null && fcmToken.isNotEmpty) break;
+      } catch (e) {
+        final isApnsNotSet = e.toString().contains('apns-token-not-set');
+        if (isIOS && isApnsNotSet && attempt == maxAttempts - 1) {
+          debugPrint(
+            '[FcmService] iOS 푸시 토큰을 사용할 수 없습니다. '
+            '실기기: Firebase 콘솔 → Cloud Messaging → APNs 인증 키 등록을 확인해 주세요.',
+          );
+        } else if (!isIOS || !isApnsNotSet) {
+          debugPrint('[FcmService] getToken 오류: $e');
+        }
+      }
+    }
+
+    if (fcmToken == null || fcmToken.isEmpty) {
+      debugPrint('[FcmService] FCM 토큰을 가져오지 못했습니다.');
+      return;
+    }
+
+    final masked =
+        fcmToken.length > 12
+            ? '${fcmToken.substring(0, 6)}...${fcmToken.substring(fcmToken.length - 6)}'
+            : fcmToken;
+    debugPrint('[FcmService] FCM 토큰 획득됨 len=${fcmToken.length} masked=$masked');
+
+    await _writeTokenToFirestore(userId, fcmToken);
+  }
+
+  Future<void> _writeTokenToFirestore(String userId, String fcmToken) async {
+    try {
       await _firestore.runTransaction((transaction) async {
         final userRef = _firestore.collection('users').doc(userId);
-        transaction.update(userRef, {
+        transaction.set(userRef, {
           'fcmToken': fcmToken,
           'fcmTokenUpdatedAt': FieldValue.serverTimestamp(),
-        });
+        }, SetOptions(merge: true));
 
         final tokenRef = _firestore
             .collection('users')
@@ -272,7 +248,6 @@ class FcmService {
           'updatedAt': FieldValue.serverTimestamp(),
         });
       });
-
       debugPrint('[FcmService] FCM 토큰 Firestore 저장 완료 userId=$userId');
     } catch (e, stack) {
       debugPrint('[FcmService] FCM 토큰 저장 실패: $e');
@@ -304,39 +279,6 @@ class FcmService {
       }
     } catch (e) {
       debugPrint('[FcmService] FCM 토큰 삭제 실패: $e');
-    }
-  }
-
-  /// 포그라운드 알림 UI 표시 (스낵바처럼 상단에)
-  void _showForegroundNotification(RemoteMessage message) {
-    final context = navigatorKey.currentContext;
-    if (context == null) {
-      debugPrint('[FcmService] context가 없어 포그라운드 알림을 표시할 수 없습니다.');
-      return;
-    }
-
-    final title = message.notification?.title ?? '알림';
-    final body = message.notification?.body ?? '';
-
-    if (title.isEmpty && body.isEmpty) {
-      debugPrint('[FcmService] 알림 제목과 본문이 모두 비어있습니다.');
-      return;
-    }
-
-    debugPrint('[FcmService] 포그라운드 알림 표시: $title');
-
-    // PushNotificationOverlay를 사용하여 알림 표시 (스낵바처럼 상단에)
-    try {
-      PushNotificationOverlay.show(
-        context: context,
-        title: title,
-        body: body,
-        onTap: () {
-          _handleNotificationTap(message.data);
-        },
-      );
-    } catch (e) {
-      debugPrint('[FcmService] 포그라운드 알림 표시 오류: $e');
     }
   }
 
@@ -548,25 +490,27 @@ class FcmService {
     }
   }
 
-  /// 앱이 종료된 상태에서 알림 클릭으로 열렸는지 확인
+  /// 앱이 종료된 상태에서 알림 탭으로 열렸는지 확인
   Future<void> checkInitialMessage() async {
     try {
       final message = await _messaging.getInitialMessage();
-      debugPrint(
-        '[FcmService] checkInitialMessage() getInitialMessage=${message != null}',
-      );
       if (message != null) {
-        logRemoteMessage(message, event: 'TAP_LAUNCH_FROM_TERMINATED');
+        debugPrint(
+          '[FCM] getInitialMessage (앱 종료 상태에서 알림 탭으로 실행) messageId=${message.messageId}',
+        );
+        _addNotificationToProvider(message.data);
         _handleNotificationTap(message.data);
       }
     } catch (e) {
-      debugPrint('[FcmService] 초기 메시지 확인 오류: $e');
+      debugPrint('[FCM] checkInitialMessage error: $e');
     }
   }
 
-  /// 백그라운드 메시지 핸들러 설정
+  /// 백그라운드/종료 상태 수신 (OS가 notification payload 있으면 자동 표시 → 앱 복귀 시 loadNotifications로 빨간 점 갱신)
   static Future<void> backgroundMessageHandler(RemoteMessage message) async {
-    logRemoteMessage(message, event: 'BACKGROUND_RECEIVED');
+    debugPrint(
+      '[FCM Background] messageId=${message.messageId} notificationId=${message.data['notificationId']}',
+    );
   }
 
   /// 리소스 정리

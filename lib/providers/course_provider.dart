@@ -31,6 +31,9 @@ class CourseProvider with ChangeNotifier {
   List<Course> get courses => List.unmodifiable(_courses);
   bool get isLoading => _isLoading;
   String? get error => _error;
+  /// 현재 로드된 courses가 속한 placeId (loadCourses/saveCourse 호출 시 설정됨)
+  /// 화면/탭 전환 중 PlaceProvider와 잠깐 어긋날 수 있어, 코스 관련 조회는 이 값을 우선 사용 권장.
+  String? get currentPlaceId => _placeId;
 
   /// 특정 주의 비정기 일정 가져오기
   List<CourseOverride> getOverridesForWeek(String weekStartDate) {

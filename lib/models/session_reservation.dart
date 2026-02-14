@@ -90,18 +90,18 @@ class SessionReservation {
     };
   }
 
-  /// JSON에서 생성
+  /// JSON에서 생성 (Firestore 문서에 null 필드가 있어도 안전)
   factory SessionReservation.fromJson(Map<String, dynamic> json) {
     return SessionReservation(
       id: json['id'] as String,
       sessionId: json['sessionId'] as String,
       courseId: json['courseId'] as String,
       placeId: json['placeId'] as String,
-      dayOfWeek: json['dayOfWeek'] as int,
+      dayOfWeek: (json['dayOfWeek'] as num?)?.toInt() ?? 0,
       startTime: json['startTime'] as String,
       date: json['date'] as String,
-      capacity: json['capacity'] as int,
-      reservedCount: json['reservedCount'] as int,
+      capacity: (json['capacity'] as num?)?.toInt() ?? 0,
+      reservedCount: (json['reservedCount'] as num?)?.toInt() ?? 0,
       lastUpdated: DateTime.parse(json['lastUpdated'] as String),
       createdAt: json['createdAt'] != null
           ? DateTime.parse(json['createdAt'] as String)

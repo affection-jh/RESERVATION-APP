@@ -566,10 +566,12 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     final user = _userCache[reservation.userId];
     // 관리자 지정 이름(placeMemberships.displayName) 우선, 없으면 user.name
     final memberProvider = Provider.of<MemberProvider>(context, listen: false);
-    final adminDisplayName = memberProvider.membershipDisplayNamesByUserId[reservation.userId];
-    final userName = (adminDisplayName != null && adminDisplayName.trim().isNotEmpty)
-        ? adminDisplayName.trim()
-        : (user?.name ?? '예약자 $index');
+    final adminDisplayName =
+        memberProvider.membershipDisplayNamesByUserId[reservation.userId];
+    final userName =
+        (adminDisplayName != null && adminDisplayName.trim().isNotEmpty)
+            ? adminDisplayName.trim()
+            : (user?.name ?? '예약자 $index');
     final phoneNumber = user?.phoneNumber ?? '010-0000-0000';
     final isLoading = _loadingUserIds.contains(reservation.userId);
     final isMoving = _movingReservationIds.contains(reservation.id);
@@ -863,7 +865,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
           );
         } catch (enrollmentError) {
           if (mounted) {
-            SnackbarUtil.showError(
+            SnackbarUtil.showInfo(
               context,
               isPendingUser
                   ? 'pending 멤버 1회석 등록 업데이트에 실패했습니다: $enrollmentError'
@@ -889,7 +891,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
         String message = e.message ?? '정책상 예약이 제한됩니다.';
         if (reason == 'full') {
           message =
-              '정원 마감 상태입니다. 관리자 권한으로 강제 추가하시겠습니까?\n\n현재: $reservedCount / $capacity';
+              '정원 마감 상태입니다.\n관리자 권한으로 추가하시겠습니까?\n\n현재: $reservedCount / $capacity';
         } else if (reason == 'notOpenedYet') {
           message =
               '아직 예약 오픈 전입니다. 관리자 권한으로 강제 추가하시겠습니까?'
@@ -904,7 +906,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
           title: '관리자 강제 추가',
           message: message,
           cancelText: '취소',
-          confirmText: '강제 추가',
+          confirmText: '추가',
           confirmButtonColor: Colors.red,
         );
 
@@ -920,7 +922,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
 
         // "세션을 찾을 수 없습니다" 에러는 비정기 일정일 수 있으므로 더 명확한 메시지 표시
         if (e.message?.contains('세션을 찾을 수 없습니다') == true) {
-          SnackbarUtil.showError(
+          SnackbarUtil.showInfo(
             context,
             '비정기 일정은 예약 추가가 제한될 수 있습니다. 정기 일정을 사용해주세요.',
           );
@@ -928,19 +930,19 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
             e.message?.contains('남은 예약 횟수가 없거나 유효 기간이 만료') == true ||
             e.message?.contains('예약 가능한 횟수가 없거나 유효 기간이 만료') == true) {
           // 유효기간/횟수 관련 에러는 더 자세한 정보 표시
-          SnackbarUtil.showError(
+          SnackbarUtil.showInfo(
             context,
             '남은 예약 횟수가 없거나 유효 기간이 만료된 회원입니다.\n\n'
             '회원의 등록 정보를 확인해주세요.',
           );
         } else {
-          SnackbarUtil.showError(context, e.message ?? '예약 추가에 실패했습니다.');
+          SnackbarUtil.showInfo(context, e.message ?? '예약 추가에 실패했습니다.');
         }
       }
       return {'success': false, 'isOneTime': false};
     } catch (e) {
       if (mounted) {
-        SnackbarUtil.showError(context, '예약 추가 중 오류가 발생했습니다: $e');
+        SnackbarUtil.showInfo(context, '예약 추가 중 오류가 발생했습니다: $e');
       }
       return {'success': false, 'isOneTime': false};
     }
@@ -949,12 +951,22 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
   Future<void> _addReservationsForUsers(List<User> users) async {
     if (users.isEmpty) return;
 
+    // 이미 이 세션에 예약된 사용자는 제외 (클라이언트 중복 방지, 데이터 지연 시에도 안전)
+    final existingUserIds = _dateReservations.map((r) => r.userId).toSet();
+    final toAdd =
+        users.where((u) => !existingUserIds.contains(u.userId)).toList();
+    final skipped = users.length - toAdd.length;
+    if (skipped > 0 && mounted) {
+      SnackbarUtil.showInfo(context, '이미 이 세션에 예약된 멤버 $skipped명은 제외했습니다.');
+    }
+    if (toAdd.isEmpty) return;
+
     int success = 0;
     int oneTimeCount = 0;
     final List<Reservation> tempReservations = [];
 
     // 1. 로컬에서 즉시 리스트에 추가 (임시 예약 생성)
-    for (final user in users) {
+    for (final user in toAdd) {
       if (!mounted) break;
 
       // 사용자 정보 캐시에 추가
@@ -985,8 +997,8 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     }
 
     // 2. 백그라운드에서 서버 요청 처리
-    for (int i = 0; i < users.length; i++) {
-      final user = users[i];
+    for (int i = 0; i < toAdd.length; i++) {
+      final user = toAdd[i];
       final tempReservation = tempReservations[i];
 
       if (!mounted) break;
@@ -1186,7 +1198,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     } catch (e) {
       debugPrint('[SessionDetailScreen] 세션 취소 실패: $e');
       if (mounted) {
-        SnackbarUtil.showError(context, '세션 취소 실패: $e');
+        SnackbarUtil.showInfo(context, '세션 취소에 실패했습니다.');
       }
     }
   }

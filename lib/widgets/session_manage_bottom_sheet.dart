@@ -74,221 +74,225 @@ class _SessionManageBottomSheetState extends State<SessionManageBottomSheet> {
             mainAxisSize: MainAxisSize.min,
             children: [
               // 핸들 바
-            Container(
-              margin: const EdgeInsets.only(top: 12, bottom: 8),
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: AppColors.borderLight,
-                borderRadius: BorderRadius.circular(2),
+              Container(
+                margin: const EdgeInsets.only(top: 12, bottom: 8),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.borderLight,
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
-            ),
-            // 세션 정보 헤더
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    widget.course.name,
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.textPrimary,
-                      letterSpacing: -0.5,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    alignment: WrapAlignment.start,
-                    crossAxisAlignment: WrapCrossAlignment.start,
-                    children: [
-                      // 날짜/시간 칩
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          color: AppColors.backgroundLight,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.access_time,
-                              size: 14,
-                              color: AppColors.textSecondary,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              '${widget.dateString} ${widget.startTime} - ${widget.endTime}',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: AppColors.textSecondary,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
+              // 세션 정보 헤더
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 20,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.course.name,
+                      style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.textPrimary,
+                        letterSpacing: -0.5,
                       ),
-                      // 예약/수용 칩
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          color: AppColors.backgroundLight,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              '예약: ${widget.reservedCount}명 / ${widget.currentCapacity}명',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: AppColors.textSecondary,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            // 수용인원 변경 섹션
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '수용인원 변경',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textSecondary,
                     ),
-                  ),
-                  const SizedBox(height: 4),
-
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextFormField(
-                          controller: _capacityController,
-                          keyboardType: TextInputType.number,
-                          decoration: TextFieldDecorationUtil.defaultDecoration(
-                            hintText: '수용인원을 입력하세요',
-                            hasFocus: false,
-                            borderRadius: 12,
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 12,
-                            ),
-                          ).copyWith(
-                            errorText: _errorText,
-                            errorStyle: TextStyle(
-                              fontSize: 12,
-                              color: Colors.red,
-                            ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      alignment: WrapAlignment.start,
+                      crossAxisAlignment: WrapCrossAlignment.start,
+                      children: [
+                        // 날짜/시간 칩
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
                           ),
-                          onChanged: (value) {
-                            // 입력값 실시간 검증
-                            setState(() {
-                              if (value.isEmpty) {
-                                _errorText = null;
-                                _isApplyButtonEnabled = false;
-                              } else {
-                                final inputCapacity = int.tryParse(value);
-                                if (inputCapacity == null ||
-                                    inputCapacity <= 0) {
-                                  _errorText = '올바른 수용인원을 입력하세요.';
-                                  _isApplyButtonEnabled = false;
-                                } else if (inputCapacity <
-                                    widget.reservedCount) {
-                                  _errorText =
-                                      '현재 예약자 수(${widget.reservedCount}명)보다 작을 수 없습니다.';
+                          decoration: BoxDecoration(
+                            color: AppColors.backgroundLight,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.access_time,
+                                size: 14,
+                                color: AppColors.textSecondary,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                '${widget.dateString} ${widget.startTime} - ${widget.endTime}',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: AppColors.textSecondary,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        // 예약/수용 칩
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppColors.backgroundLight,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                '예약: ${widget.reservedCount}명 / ${widget.currentCapacity}명',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: AppColors.textSecondary,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              // 수용인원 변경 섹션
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '수용인원 변경',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextFormField(
+                            controller: _capacityController,
+                            keyboardType: TextInputType.number,
+                            decoration:
+                                TextFieldDecorationUtil.defaultDecoration(
+                                  hintText: '수용인원을 입력하세요',
+                                  hasFocus: false,
+                                  borderRadius: 12,
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 12,
+                                  ),
+                                ).copyWith(
+                                  errorText: _errorText,
+                                  errorStyle: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.red,
+                                  ),
+                                ),
+                            onChanged: (value) {
+                              // 입력값 실시간 검증
+                              setState(() {
+                                if (value.isEmpty) {
+                                  _errorText = null;
                                   _isApplyButtonEnabled = false;
                                 } else {
-                                  _errorText = null;
-                                  // 원래 값과 다를 때만 활성화
-                                  _isApplyButtonEnabled =
-                                      inputCapacity != widget.currentCapacity;
+                                  final inputCapacity = int.tryParse(value);
+                                  if (inputCapacity == null ||
+                                      inputCapacity <= 0) {
+                                    _errorText = '올바른 수용인원을 입력하세요.';
+                                    _isApplyButtonEnabled = false;
+                                  } else if (inputCapacity <
+                                      widget.reservedCount) {
+                                    _errorText =
+                                        '현재 예약자 수(${widget.reservedCount}명)보다 작을 수 없습니다.';
+                                    _isApplyButtonEnabled = false;
+                                  } else {
+                                    _errorText = null;
+                                    // 원래 값과 다를 때만 활성화
+                                    _isApplyButtonEnabled =
+                                        inputCapacity != widget.currentCapacity;
+                                  }
                                 }
-                              }
-                            });
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      ElevatedButton(
-                        onPressed:
-                            _isApplyButtonEnabled
-                                ? () => _handleApplyCapacity(context)
-                                : null,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.primaryGreen,
-                          foregroundColor: Colors.white,
-                          disabledBackgroundColor: AppColors.borderLight,
-                          disabledForegroundColor: AppColors.textSecondary,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 24,
-                            vertical: 14,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
+                              });
+                            },
                           ),
                         ),
-                        child: const Text(
-                          '적용',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
+                        const SizedBox(width: 12),
+                        ElevatedButton(
+                          onPressed:
+                              _isApplyButtonEnabled
+                                  ? () => _handleApplyCapacity(context)
+                                  : null,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primaryGreen,
+                            foregroundColor: Colors.white,
+                            disabledBackgroundColor: AppColors.borderLight,
+                            disabledForegroundColor: AppColors.textSecondary,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 24,
+                              vertical: 14,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: const Text(
+                            '적용',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            Divider(height: 1, thickness: 1, color: AppColors.borderLight),
-            // 세션 취소 버튼
-            InkWell(
-              onTap: () {
-                Navigator.of(context).pop({'action': 'cancel'});
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 18,
+                      ],
+                    ),
+                  ],
                 ),
-                child: Center(
-                  child: Text(
-                    '세션 취소하기',
-                    style: TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.red,
-                      letterSpacing: -0.3,
+              ),
+              Divider(height: 1, thickness: 1, color: AppColors.borderLight),
+              // 세션 취소 버튼
+              InkWell(
+                onTap: () {
+                  Navigator.of(context).pop({'action': 'cancel'});
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 18,
+                  ),
+                  child: Center(
+                    child: Text(
+                      '세션 취소하기',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.red,
+                        letterSpacing: -0.3,
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-            SizedBox(height: MediaQuery.of(context).viewInsets.bottom),
-          ],
-        ),
+              SizedBox(height: MediaQuery.of(context).viewInsets.bottom),
+            ],
+          ),
         ),
       ),
     );
@@ -328,7 +332,7 @@ class _SessionManageBottomSheetState extends State<SessionManageBottomSheet> {
         }
       } catch (e) {
         if (context.mounted) {
-          SnackbarUtil.showError(context, '수용인원 변경 중 오류가 발생했습니다.');
+          SnackbarUtil.showInfo(context, '수용인원 변경 중 오류가 발생했습니다.');
         }
       }
     } else {

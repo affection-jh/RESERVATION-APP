@@ -86,7 +86,7 @@ void _requestExtension(String reason) async {
       setState(() {
         _isRequesting = false;
       });
-      SnackbarUtil.showError(context, '연장 요청 중 오류가 발생했습니다: $e');
+      SnackbarUtil.showInfo(context, '연장 요청 중 오류가 발생했습니다: $e');
     }
   }
 }

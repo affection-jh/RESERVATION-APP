@@ -74,6 +74,11 @@ class CourseEnrollment {
     return isValid && remainingReservations > 0;
   }
 
+  /// 관리자가 멤버 선택 패널에서 일회성으로 추가한 등록 여부 (1회석 등록)
+  bool get isOneTime {
+    return totalReservations == 1 && totalEnrollmentCount == 1;
+  }
+
   // 하위 호환성: 가장 최근 연장 요청 반환 (pending 우선)
   ExtensionRequest? get extensionRequest {
     // pending 상태인 요청이 있으면 반환

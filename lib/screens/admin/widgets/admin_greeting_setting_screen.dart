@@ -467,101 +467,102 @@ class _AdminGreetingSettingScreenState
         Expanded(
           flex: 2,
           child: FilledButton(
-            onPressed: _isFormValid()
-                ? () async {
-                    if (_isSubmitting) return;
-                    _removeFocus();
+            onPressed:
+                _isFormValid()
+                    ? () async {
+                      if (_isSubmitting) return;
+                      _removeFocus();
 
-                    try {
-                      setState(() => _isSubmitting = true);
-                      final authProvider = Provider.of<AuthProvider>(
-                        context,
-                        listen: false,
-                      );
-                      final placeProvider = Provider.of<PlaceProvider>(
-                        context,
-                        listen: false,
-                      );
+                      try {
+                        setState(() => _isSubmitting = true);
+                        final authProvider = Provider.of<AuthProvider>(
+                          context,
+                          listen: false,
+                        );
+                        final placeProvider = Provider.of<PlaceProvider>(
+                          context,
+                          listen: false,
+                        );
 
-                      if (authProvider.currentAdmin == null) {
-                        SnackbarUtil.showError(context, '관리자 정보를 찾을 수 없습니다.');
-                        return;
-                      }
-
-                      final admin = authProvider.currentAdmin!;
-
-                      // 이미지 URL 처리 (이미 업로드된 경우 URL 사용, 아니면 업로드)
-                      String? imageUrl = widget.placeImageUrl;
-                      if (imageUrl == null && widget.placeImage != null) {
-                        try {
-                          final storageService = StorageService();
-                          imageUrl = await storageService.uploadImage(
-                            imageFile: widget.placeImage!,
-                            folder: 'places',
-                          );
-                        } catch (e) {
-                          if (mounted) {
-                            SnackbarUtil.showError(
-                              context,
-                              '이미지 업로드에 실패했습니다: ${e.toString()}',
-                            );
-                          }
+                        if (authProvider.currentAdmin == null) {
+                          SnackbarUtil.showInfo(context, '관리자 정보를 찾을 수 없습니다.');
                           return;
                         }
-                      }
 
-                      // 플레이스 생성
-                      final place = await placeProvider.createPlace(
-                        name: widget.placeName,
-                        description: widget.placeDescription,
-                        appBarText: widget.placeName,
-                        greetingText: _greetingTextController.text.trim(),
-                        imageUrl: imageUrl,
-                        adminId: admin.userId,
-                      );
+                        final admin = authProvider.currentAdmin!;
 
-                      // 관리자의 placeIds에 추가
-                      final updatedAdmin = admin.addPlace(place.id);
-                      final userService = UserService();
-                      await userService.updateAdmin(updatedAdmin);
+                        // 이미지 URL 처리 (이미 업로드된 경우 URL 사용, 아니면 업로드)
+                        String? imageUrl = widget.placeImageUrl;
+                        if (imageUrl == null && widget.placeImage != null) {
+                          try {
+                            final storageService = StorageService();
+                            imageUrl = await storageService.uploadImage(
+                              imageFile: widget.placeImage!,
+                              folder: 'places',
+                            );
+                          } catch (e) {
+                            if (mounted) {
+                              SnackbarUtil.showInfo(
+                                context,
+                                '이미지 업로드에 실패했습니다: ${e.toString()}',
+                              );
+                            }
+                            return;
+                          }
+                        }
 
-                      // AuthProvider 업데이트
-                      authProvider.setCurrentAdmin(updatedAdmin);
-
-                      // ✅ 플레이스 전환과 동일한 플로우:
-                      // - 모든 place 의존 Provider 초기화
-                      // - 새 place를 미리 주입
-                      // - 마지막 접속 플레이스 저장
-                      // - 스플래시(AppStartup)로 스택 리셋 → 로딩 → 홈 진입
-                      if (!mounted) return;
-                      await _resetAllProvidersForSwitch(context);
-                      if (!mounted) return;
-
-                      // 다음 화면에서 currentPlace null로 로드가 스킵되지 않도록 미리 주입
-                      placeProvider.setCurrentPlace(place);
-
-                      final authService = AuthService();
-                      await authService.updateLastAccessedPlace(place.id);
-
-                      if (!mounted) return;
-                      Navigator.of(
-                        context,
-                      ).pushNamedAndRemoveUntil('/', (route) => false);
-                    } catch (e) {
-                      if (mounted) {
-                        final errorMessage = e.toString().replaceAll(
-                          'Exception: ',
-                          '',
+                        // 플레이스 생성
+                        final place = await placeProvider.createPlace(
+                          name: widget.placeName,
+                          description: widget.placeDescription,
+                          appBarText: widget.placeName,
+                          greetingText: _greetingTextController.text.trim(),
+                          imageUrl: imageUrl,
+                          adminId: admin.userId,
                         );
-                        SnackbarUtil.showError(context, errorMessage);
-                      }
-                    } finally {
-                      if (mounted) {
-                        setState(() => _isSubmitting = false);
+
+                        // 관리자의 placeIds에 추가
+                        final updatedAdmin = admin.addPlace(place.id);
+                        final userService = UserService();
+                        await userService.updateAdmin(updatedAdmin);
+
+                        // AuthProvider 업데이트
+                        authProvider.setCurrentAdmin(updatedAdmin);
+
+                        // ✅ 플레이스 전환과 동일한 플로우:
+                        // - 모든 place 의존 Provider 초기화
+                        // - 새 place를 미리 주입
+                        // - 마지막 접속 플레이스 저장
+                        // - 스플래시(AppStartup)로 스택 리셋 → 로딩 → 홈 진입
+                        if (!mounted) return;
+                        await _resetAllProvidersForSwitch(context);
+                        if (!mounted) return;
+
+                        // 다음 화면에서 currentPlace null로 로드가 스킵되지 않도록 미리 주입
+                        placeProvider.setCurrentPlace(place);
+
+                        final authService = AuthService();
+                        await authService.updateLastAccessedPlace(place.id);
+
+                        if (!mounted) return;
+                        Navigator.of(
+                          context,
+                        ).pushNamedAndRemoveUntil('/', (route) => false);
+                      } catch (e) {
+                        if (mounted) {
+                          final errorMessage = e.toString().replaceAll(
+                            'Exception: ',
+                            '',
+                          );
+                          SnackbarUtil.showInfo(context, errorMessage);
+                        }
+                      } finally {
+                        if (mounted) {
+                          setState(() => _isSubmitting = false);
+                        }
                       }
                     }
-                  }
-                : null,
+                    : null,
             style: FilledButton.styleFrom(
               backgroundColor: AppColors.primaryGreen,
               disabledBackgroundColor: AppColors.borderLight,

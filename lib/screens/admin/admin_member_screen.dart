@@ -8,6 +8,7 @@ import '../../providers/auth_provider.dart';
 import '../../theme/app_colors.dart';
 import '../../models/admin_models.dart';
 import 'widgets/admin_shared_widgets.dart';
+import 'widgets/course_member_list_content.dart';
 import 'widgets/member_edit_bottom_sheet.dart';
 import 'widgets/member_registration_screen.dart';
 import '../../../models/course.dart';
@@ -480,131 +481,35 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
       );
     }
 
-    // 단일 코스 선택 시
+    // 단일 코스 선택 시 (공통 위젯: enrollments + pendingMembers 동일 소스·동일 UI)
     if (selectedCourseIds.length == 1) {
       final selectedCourseId = selectedCourseIds.first;
+      final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+      final placeId = placeProvider.currentPlace?.id;
 
-      return StreamBuilder<List<User>>(
-        stream: memberProvider.watchCourseMembers(selectedCourseId),
-        builder: (context, snapshot) {
-          // 기존 데이터가 있으면 먼저 표시 (탭 전환 시 로딩 제거)
-          final courseMembers = snapshot.hasData ? snapshot.data! : <User>[];
-
-          if (snapshot.hasError) {
-            return Center(
-              child: Text(
-                '오류가 발생했습니다: ${snapshot.error}',
-                style: TextStyle(
-                  color: AppColors.textSecondary.withOpacity(0.8),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            );
-          }
-
-          // pendingMembers도 포함 (선택된 코스에 등록된 것만)
-          final placeProvider = Provider.of<PlaceProvider>(
-            context,
-            listen: false,
-          );
-          final placeId = placeProvider.currentPlace?.id;
-          final pendingMembers =
-              placeId != null
-                  ? memberProvider.pendingMembers.where((pm) {
-                    // ⚠️ courseIds 제거: courseEnrollments에서 유도
-                    final courseIds = pm.derivedCourseIds;
-                    // 디버깅: pendingMembers 필터링 확인
-                    if (kDebugMode) {
-                      debugPrint(
-                        '[AdminMemberScreen] pendingMember 필터링: pm.id=${pm.id}, phoneNumber=${pm.phoneNumber}, derivedCourseIds=$courseIds, selectedCourseId=$selectedCourseId, contains=${courseIds.contains(selectedCourseId)}',
-                      );
-                    }
-                    return courseIds.contains(selectedCourseId);
-                  }).toList()
-                  : <PendingMember>[];
-
-          // 디버깅: 필터링된 pendingMembers 확인
-          if (kDebugMode) {
-            debugPrint(
-              '[AdminMemberScreen] 코스별 보기 - selectedCourseId=$selectedCourseId, totalPendingMembers=${memberProvider.pendingMembers.length}, filteredPendingMembers=${pendingMembers.length}',
-            );
-          }
-
-          // pendingMembers를 User로 변환
-          final pendingAsUsers =
-              pendingMembers.map((pm) {
-                return User(
-                  userId: 'pending_${pm.id}',
-                  name: pm.name ?? '이름 없음',
-                  phoneNumber: pm.phoneNumber,
-                  placeIds: [pm.placeId],
-                  enrollments: const [], // enrollments 필드 사용 안 함
-                  reservations: const [],
-                  notificationsEnabled: false,
-                  createdAt: pm.createdAt,
-                  updatedAt: null,
-                );
-              }).toList();
-
-          // courseMembers + pendingMembers 합치기
-          final allMembers = [...courseMembers, ...pendingAsUsers];
-          final filteredMembers = _filteredMembers(allMembers);
-
-          if (filteredMembers.isEmpty) {
-            return Center(
-              child: _buildEmptyMemberState(
-                context,
-                _searchQuery.isNotEmpty ? '검색 결과가 없어요.' : '등록된 멤버가 없어요.',
-                showCta: _searchQuery.isEmpty,
-              ),
-            );
-          }
-
-          return ListView.builder(
-            padding: const EdgeInsets.symmetric(vertical: 0),
-            itemCount: filteredMembers.length,
-            itemBuilder: (context, index) {
-              final member = filteredMembers[index];
-              final isPending = member.userId.startsWith('pending_');
-
-              return Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 4,
-                ),
-                child: MemberCard(
-                  member:
-                      isPending
-                          ? _pendingMemberToMemberData(
-                            pendingMembers.firstWhere(
-                              (pm) => 'pending_${pm.id}' == member.userId,
-                            ),
-                          )
-                          : _userToMemberData(
-                            member,
-                            displayName: _getAdminDisplayNameForUser(
-                              member,
-                              pendingMembers,
-                              memberProvider.membershipDisplayNamesByUserId,
-                            ),
-                          ),
-                  onMemberTapped: () {},
-                ),
-              );
-            },
-          );
-        },
+      return CourseMemberListContent(
+        logLabel: 'AdminMember(single)',
+        courseId: selectedCourseId,
+        placeId: placeId,
+        searchQuery: _searchQuery,
+        emptyMessage: _searchQuery.isNotEmpty
+            ? '검색 결과가 없어요.'
+            : '등록된 멤버가 없어요.',
+        showEmptyCta: _searchQuery.isEmpty,
+        onMemberTapped: () {},
       );
     } else {
-      // 여러 코스 선택 시: 첫 번째 코스를 기준으로 하고 나머지는 클라이언트 사이드에서 필터링
-      // (실시간 업데이트를 위해 첫 번째 코스의 Stream 사용)
+      // 여러 코스 선택 시 (enrollments + pendingMembers 둘 다 소스)
       final firstCourseId = selectedCourseIds.first;
+      final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+      final placeId = placeProvider.currentPlace?.id;
 
       return StreamBuilder<List<User>>(
-        stream: memberProvider.watchCourseMembers(firstCourseId),
+        stream: memberProvider.watchCourseMembers(
+          firstCourseId,
+          placeId: placeId,
+        ),
         builder: (context, snapshot) {
-          // 기존 데이터가 있으면 먼저 표시 (탭 전환 시 로딩 제거)
           final courseMembers = snapshot.hasData ? snapshot.data! : <User>[];
 
           if (snapshot.hasError) {
@@ -621,11 +526,6 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
           }
 
           // pendingMembers도 포함 (선택된 코스 중 하나라도 등록된 것만)
-          final placeProvider = Provider.of<PlaceProvider>(
-            context,
-            listen: false,
-          );
-          final placeId = placeProvider.currentPlace?.id;
           final pendingMembers =
               placeId != null
                   ? memberProvider.pendingMembers.where((pm) {
@@ -1061,14 +961,14 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
 
     // placeId가 null이면 로그인 상태 문제 - 재로그인 필요
     if (placeId == null) {
-      SnackbarUtil.showError(context, '플레이스 정보를 불러올 수 없습니다. 다시 로그인해주세요.');
+      SnackbarUtil.showInfo(context, '플레이스 정보를 불러올 수 없습니다. 다시 로그인해주세요.');
       // 로그인 화면으로 이동하거나 재로그인 유도
       return;
     }
 
     // 관리자 인증 확인
     if (!authProvider.isAuthenticated || authProvider.currentAdmin == null) {
-      SnackbarUtil.showError(context, '로그인이 필요합니다. 다시 로그인해주세요.');
+      SnackbarUtil.showInfo(context, '로그인이 필요합니다. 다시 로그인해주세요.');
       return;
     }
 
@@ -1136,10 +1036,7 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
       if (failCount == 0) {
         SnackbarUtil.showSuccess(context, '${successCount}명의 멤버가 등록되었습니다.');
       } else {
-        SnackbarUtil.showError(
-          context,
-          '${successCount}명 성공, ${failCount}명 실패',
-        );
+        SnackbarUtil.showInfo(context, '${successCount}명 성공, ${failCount}명 실패');
       }
 
       // 트랜잭션 완료 후 프로바이더 상태 동기화
@@ -1151,7 +1048,7 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
       // 멤버 등록 직후: User 이름(관리자 지정) 등 최신 반영을 위해 강제 새로고침
       await memberProvider.loadMembers(placeId, forceRefreshUsers: true);
     } catch (e) {
-      SnackbarUtil.showError(context, '멤버 등록 중 오류가 발생했습니다: $e');
+      SnackbarUtil.showInfo(context, '멤버 등록 중 오류가 발생했습니다: $e');
     }
   }
 }

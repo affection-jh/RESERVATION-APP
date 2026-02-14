@@ -10,6 +10,7 @@ import '../../../models/course_override.dart';
 import '../../../policies/course_policy.dart';
 import '../../../policies/reservation_policy_engine.dart';
 import '../../../providers/auth_provider.dart';
+import '../../../providers/course_provider.dart';
 import '../../../utils/timezone_utils.dart';
 import '../../../providers/enrollment_provider.dart';
 import '../../../providers/place_provider.dart';
@@ -35,7 +36,10 @@ class CalendarScreen extends StatefulWidget {
 }
 
 class _CalendarScreenState extends State<CalendarScreen> {
-  Course get course => widget.course;
+  /// 정기일정(요일/세션) 변경 시 Provider에서 최신 코스 반영
+  late Course _effectiveCourse;
+
+  Course get course => _effectiveCourse;
 
   // 주간 이동을 위한 상태
   int _weekOffset = 0; // 0: 현재 주(이번주), 1: 다음주, 2: 다다음주
@@ -75,6 +79,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
 
   // UI 상수 정의
   static const double _minHourSlotHeight = 120.0; // 세션이 있는 구간의 최소 한 시간당 높이 (px)
+  static const double _minHourSlotHeightCompressed =
+      36.0; // 뷰포트에 맞출 때 슬롯 하한 (긴 세션 시 간격 축소)
   static const double _optimalPxPerMinute = 50; // 세션 블록이 잘 보이기 위한 분당 픽셀 수
   static const double _minGapHourSlotHeight = 22.0; // 공백 구간 축소 하한 (px/h)
   static const int _edgePaddingMinutes = 30; // 00시, 23시 경계에 추가할 여백(분)
@@ -100,6 +106,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
   @override
   void initState() {
     super.initState();
+    _effectiveCourse = widget.course;
     debugPrint('[CalendarScreen] initState: 화면 초기화 시작');
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -114,6 +121,14 @@ class _CalendarScreenState extends State<CalendarScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    // CourseProvider에 최신 정기일정이 있으면 반영 (요일/세션 변경 시)
+    final fromProvider = Provider.of<CourseProvider>(
+      context,
+      listen: false,
+    ).getCourse(widget.course.id);
+    if (fromProvider != null && fromProvider != _effectiveCourse) {
+      setState(() => _effectiveCourse = fromProvider);
+    }
     // 화면이 다시 포커스될 때 정책을 다시 로드
     // (예: 정책 편집 화면에서 돌아왔을 때)
     // 중복 호출 방지를 위해 최근 로드 시간 확인
@@ -289,40 +304,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
         return;
       }
 
-      // cancel 성공 시: 달력에서도 바로 피드백 + 상태 갱신
-      if (event.type == ReservationOperationType.cancel &&
-          event.success == true &&
-          event.reservation != null) {
-        if (!mounted) return;
-        final r = event.reservation!;
-        try {
-          // 취소 후 크레딧/예약이 바로 반영되도록 강제 재구독 (닫혀있어도 백그라운드에서 정상 동작)
-          await Provider.of<EnrollmentProvider>(
-            context,
-            listen: false,
-          ).loadUserEnrollments(userId: r.userId, placeId: r.placeId);
-          await Provider.of<ReservationProvider>(
-            context,
-            listen: false,
-          ).loadUserReservations(userId: r.userId, placeId: r.placeId);
-        } catch (_) {}
-        SnackbarUtil.showSuccess(context, '예약이 취소되었습니다.');
-        if (!mounted) return;
-        setState(() {});
-      }
-
-      // cancel 실패 시: 바텀시트가 닫혀 있어도 즉시 피드백
-      if (event.type == ReservationOperationType.cancel &&
-          event.success == false) {
-        if (!mounted) return;
-        final msg = event.error?.toString();
-        SnackbarUtil.showError(
-          context,
-          (msg == null || msg.isEmpty) ? '예약 취소에 실패했습니다.' : '예약 취소 실패: $msg',
-        );
-        if (!mounted) return;
-        setState(() {});
-      }
+      // cancel 성공/실패: MainScreen에서 단일 구독으로 스낵바 + 데이터 갱신 처리
 
       // move 성공 시: 바텀시트가 닫혀 있어도 결과 피드백 + 상태 갱신
       if (event.type == ReservationOperationType.move &&
@@ -342,15 +324,12 @@ class _CalendarScreenState extends State<CalendarScreen> {
         setState(() {});
       }
 
-      // move 실패 시: 바텀시트가 닫혀 있어도 즉시 피드백
+      // move 실패 시: 바텀시트가 닫혀 있어도 즉시 피드백 (유저친화 문구만 스낵바, 상세는 디버그)
       if (event.type == ReservationOperationType.move &&
           event.success == false) {
         if (!mounted) return;
-        final msg = event.error?.toString();
-        SnackbarUtil.showError(
-          context,
-          (msg == null || msg.isEmpty) ? '예약 변경에 실패했습니다.' : '예약 변경 실패: $msg',
-        );
+        debugPrint('[CalendarScreen] 예약 변경 실패: ${event.error}');
+        SnackbarUtil.showInfo(context, '예약 변경에 실패했습니다.');
         if (!mounted) return;
         setState(() {});
       }
@@ -417,7 +396,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
     }
 
     // 정책 기반 주차 + 미리 열린 주차 합치기 (이번 주 0은 항상 포함)
-    var sortedOffsets = <int>[0, ...baseOffsets, ...openedOffsets].toSet().toList()..sort();
+    var sortedOffsets =
+        <int>[0, ...baseOffsets, ...openedOffsets].toSet().toList()..sort();
 
     // 빈 리스트 방지 (clamp(0, -1) 예외 방지)
     if (sortedOffsets.isEmpty) {
@@ -428,7 +408,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
     setState(() {
       _availableWeekOffsets = sortedOffsets;
       // 선택된 주가 범위를 벗어나면 마지막 탭으로
-      if (_availableWeekOffsets.isNotEmpty && _weekOffset > _availableWeekOffsets.last) {
+      if (_availableWeekOffsets.isNotEmpty &&
+          _weekOffset > _availableWeekOffsets.last) {
         _weekOffset = _availableWeekOffsets.last;
         didChangeWeek = true;
       }
@@ -880,11 +861,12 @@ class _CalendarScreenState extends State<CalendarScreen> {
             ),
             Expanded(
               child: WeekTabBar(
-                selectedIndex: _availableWeekOffsets.isEmpty
-                    ? 0
-                    : _availableWeekOffsets
-                        .indexOf(_weekOffset)
-                        .clamp(0, _availableWeekOffsets.length - 1),
+                selectedIndex:
+                    _availableWeekOffsets.isEmpty
+                        ? 0
+                        : _availableWeekOffsets
+                            .indexOf(_weekOffset)
+                            .clamp(0, _availableWeekOffsets.length - 1),
                 onTabChanged: (index) {
                   if (index < _availableWeekOffsets.length) {
                     setState(() {
@@ -954,35 +936,39 @@ class _CalendarScreenState extends State<CalendarScreen> {
 
                           // 주차 변경 시 로딩 중·레이아웃 대기 중에는 스피너만, 그 후 세션 그리드 페이드 인
                           Expanded(
-                            child: (_isLoading || !_showGridAfterLoad)
-                                ? Center(
-                                    child: CircularProgressIndicator(
-                                      valueColor:
-                                          AlwaysStoppedAnimation<Color>(
-                                            AppColors.primaryGreen,
-                                          ),
-                                    ),
-                                  )
-                                : TweenAnimationBuilder<double>(
-                                    key: ValueKey('grid_$_weekOffset'),
-                                    tween: Tween(begin: 0, end: 1),
-                                    duration: const Duration(milliseconds: 320),
-                                    curve: Curves.easeOut,
-                                    builder: (context, value, child) {
-                                      return Opacity(
-                                        opacity: value,
-                                        child: child,
-                                      );
-                                    },
-                                    child: LayoutBuilder(
-                                      builder: (context, constraints) {
-                                        return _buildCalendarGrid(
-                                          sessionDates,
-                                          viewportHeight: constraints.maxHeight,
+                            child:
+                                (_isLoading || !_showGridAfterLoad)
+                                    ? Center(
+                                      child: CircularProgressIndicator(
+                                        valueColor:
+                                            AlwaysStoppedAnimation<Color>(
+                                              AppColors.primaryGreen,
+                                            ),
+                                      ),
+                                    )
+                                    : TweenAnimationBuilder<double>(
+                                      key: ValueKey('grid_$_weekOffset'),
+                                      tween: Tween(begin: 0, end: 1),
+                                      duration: const Duration(
+                                        milliseconds: 320,
+                                      ),
+                                      curve: Curves.easeOut,
+                                      builder: (context, value, child) {
+                                        return Opacity(
+                                          opacity: value,
+                                          child: child,
                                         );
                                       },
+                                      child: LayoutBuilder(
+                                        builder: (context, constraints) {
+                                          return _buildCalendarGrid(
+                                            sessionDates,
+                                            viewportHeight:
+                                                constraints.maxHeight,
+                                          );
+                                        },
+                                      ),
                                     ),
-                                  ),
                           ),
                         ],
                       ),
@@ -1014,7 +1000,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                     Text(
                       dayNames[date.weekday],
                       style: TextStyle(
-                        fontSize: 16,
+                        fontSize: 17,
                         fontWeight: FontWeight.w400,
                         color: AppColors.textSecondary,
                       ),
@@ -1078,25 +1064,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
       }
     }
 
-    // 세션 블록이 잘 보이기 위한 최적 높이 계산
-    // 분당 _optimalPxPerMinute 픽셀을 기준으로, 최소 _minHourSlotHeight 보장
-    // 예: 1시간 세션 = 60분 * 10.5px/분 = 630px → 630px/h → 10.5px/h
-    // 예: 2시간 세션 = 120분 * 10.5px/분 = 1260px → 1260px/h → 21px/h
-    // 계산: maxSessionDuration(분) * _optimalPxPerMinute(px/분) / 60(분/h) = px/h
-    final optimalHourSlotHeight =
-        maxSessionDuration > 0
-            ? (maxSessionDuration * _optimalPxPerMinute / 60.0).clamp(
-              _minHourSlotHeight,
-              double.infinity,
-            )
-            : _minHourSlotHeight;
-
-    // 디버그: 계산된 높이 확인
-    debugPrint(
-      '세션 지속 시간: $maxSessionDuration분, 계산된 높이: ${maxSessionDuration * _optimalPxPerMinute / 60.0}px/h, 최종 높이: $optimalHourSlotHeight px/h',
-    );
-
-    // 2시간 여백 + 시간 단위 정렬 + 경계 여백
+    // 2시간 여백 + 시간 단위 정렬 + 경계 여백 (먼저 범위 계산)
     var rangeStart = _floorToHour(
       (minStart - _basePaddingMinutes).clamp(0, 24 * 60),
     );
@@ -1106,23 +1074,38 @@ class _CalendarScreenState extends State<CalendarScreen> {
 
     // 00시 경계에 여백 추가
     if (rangeStart == 0) {
-      rangeStart = 0; // 00시는 그대로 유지하되, 시각적으로 여백이 보이도록
+      rangeStart = 0;
     } else if (rangeStart < _edgePaddingMinutes) {
-      rangeStart = 0; // 00시 근처면 00시부터 시작
+      rangeStart = 0;
     }
 
     // 23시 경계에 여백 추가
     if (rangeEnd >= 24 * 60 - _edgePaddingMinutes) {
-      rangeEnd = 24 * 60; // 23시 근처면 24시까지 확장
+      rangeEnd = 24 * 60;
     }
 
     if (rangeEnd <= rangeStart) {
       rangeEnd = (rangeStart + 60).clamp(0, 24 * 60);
     }
 
-    // 동적 최적 높이로 계산
     int slotCount = (rangeEnd - rangeStart) ~/ 60;
-    final hourSlotHeight = optimalHourSlotHeight;
+
+    // 세션 블록이 잘 보이기 위한 최적 높이 (짧은 세션일 때 사용)
+    final optimalHourSlotHeight =
+        maxSessionDuration > 0
+            ? (maxSessionDuration * _optimalPxPerMinute / 60.0).clamp(
+              _minHourSlotHeight,
+              double.infinity,
+            )
+            : _minHourSlotHeight;
+
+    // 긴 세션이 있을 때: 뷰포트에 맞추기 위해 눈금 간격을 동적으로 줄임
+    final maxByViewport = viewportHeight / slotCount;
+    final hourSlotHeight = (optimalHourSlotHeight > maxByViewport
+            ? maxByViewport
+            : optimalHourSlotHeight)
+        .clamp(_minHourSlotHeightCompressed, double.infinity);
+
     double totalHeightAtDefault = slotCount * hourSlotHeight;
 
     if (totalHeightAtDefault < viewportHeight) {
@@ -1147,6 +1130,15 @@ class _CalendarScreenState extends State<CalendarScreen> {
       totalHeightAtDefault = slotCount * hourSlotHeight;
     }
 
+    // 범위 확장 후에도 뷰포트를 넘지 않도록 눈금 간격 한 번 더 조정
+    double finalHourSlotHeight = hourSlotHeight;
+    if (slotCount > 0 && slotCount * hourSlotHeight > viewportHeight) {
+      finalHourSlotHeight = (viewportHeight / slotCount).clamp(
+        _minHourSlotHeightCompressed,
+        hourSlotHeight,
+      );
+    }
+
     final startHour = rangeStart ~/ 60;
     final endHour = rangeEnd ~/ 60;
     return _SmartRange(
@@ -1155,7 +1147,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
       startHour: startHour,
       endHour: endHour,
       slotCount: slotCount,
-      hourSlotHeight: hourSlotHeight,
+      hourSlotHeight: finalHourSlotHeight,
     );
   }
 
@@ -1604,30 +1596,16 @@ class _CalendarScreenState extends State<CalendarScreen> {
     final blockColor =
         isProcessing
             ? (isMyReserved
-                ? baseBlockColor.withOpacity(0.35)
+                ? baseBlockColor.withOpacity(0.3)
                 : baseBlockColor.withOpacity(0.45))
-            : (isMyReserved
-                ? baseBlockColor.withOpacity(0.55)
-                : baseBlockColor);
+            : (isMyReserved ? baseBlockColor.withOpacity(0.4) : baseBlockColor);
 
-    // 배경색 밝기에 따라 텍스트 색상 자동 결정
-    // opacity가 적용된 색상의 실제 밝기를 계산하기 위해
-    // 배경이 흰색이라고 가정하고 블렌딩된 색상의 밝기 계산
-    final backgroundColor = AppColors.backgroundWhite;
-    final blendedColor = Color.alphaBlend(blockColor, backgroundColor);
-    final luminance = blendedColor.computeLuminance();
-
-    // 예약 완료 또는 잠김 상태는 회색 텍스트 유지
-    final textColor =
-        (isMyReserved || isLocked)
-            ? AppColors.reservedTextGrey
-            : (luminance > 0.5 ? AppColors.textPrimary : Colors.white);
-    final iconColor =
-        (isMyReserved || isLocked)
-            ? AppColors.reservedTextGrey
-            : (luminance > 0.5
-                ? AppColors.textPrimary.withOpacity(0.9)
-                : Colors.white.withOpacity(0.9));
+    // 비활성화된 회색 위에는 textPrimary, 그 외에는 흰색
+    final isInactive = isMyReserved || isLocked;
+    final textColor = isInactive ? AppColors.textPrimary : Colors.white;
+    final iconColor = isInactive ? AppColors.textPrimary : Colors.white;
+    // 예약중/취소중/변경중 UI는 iconColor 대신 고정 흰색으로 표시 (깜빡임 방지)
+    const Color processingUiColor = Colors.white;
 
     return Positioned(
       top: topPosition,
@@ -1637,7 +1615,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
       child: GestureDetector(
         onTap: () async {
           if (isProcessing) {
-            SnackbarUtil.showError(context, '처리 중입니다. 잠시만 기다려주세요.');
+            SnackbarUtil.showInfo(context, '처리 중입니다. 잠시만 기다려주세요.');
             return;
           }
 
@@ -1724,13 +1702,13 @@ class _CalendarScreenState extends State<CalendarScreen> {
           }
 
           if (!isEnrolled) {
-            SnackbarUtil.showError(context, '등록된 코스가 아닙니다.');
+            SnackbarUtil.showInfo(context, '등록된 코스가 아닙니다.');
             return;
           }
           if (eligibility.reason == ReservationLockReason.notOpenedYet &&
               eligibility.openAt != null) {
             final t = eligibility.openAt!;
-            SnackbarUtil.showError(
+            SnackbarUtil.showInfo(
               context,
               '아직 예약 오픈 전입니다. (오픈 ${t.month}/${t.day} ${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')})',
             );
@@ -1748,22 +1726,24 @@ class _CalendarScreenState extends State<CalendarScreen> {
               );
               return;
             case ReservationLockReason.full:
-              SnackbarUtil.showError(context, '예약 가능한 자리가 없습니다.');
+              SnackbarUtil.showInfo(context, '예약 가능한 자리가 없습니다.');
               return;
             case ReservationLockReason.noCreditsOrExpired:
-              SnackbarUtil.showError(context, '예약 가능한 횟수가 없습니다.');
+              SnackbarUtil.showInfo(context, '예약 가능한 횟수가 없습니다.');
               return;
             case ReservationLockReason.notOpenedYet:
-              SnackbarUtil.showError(context, '아직 예약 오픈 전입니다.');
+              SnackbarUtil.showInfo(context, '아직 예약 오픈 전입니다.');
               return;
             case ReservationLockReason.none:
               return;
           }
         },
         child: Container(
-          padding: EdgeInsets.symmetric(
-            horizontal: 8,
-            vertical: sessionHeightPx >= 50 ? 4 : 2,
+          padding: EdgeInsets.only(
+            left: 12,
+            top: sessionHeightPx >= 50 ? 8 : 6,
+            right: 8,
+            bottom: sessionHeightPx >= 50 ? 4 : 2,
           ),
           decoration: BoxDecoration(
             color: blockColor,
@@ -1795,8 +1775,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
                         color: textColor,
                         fontSize:
                             sessionHeightPx >= 60
-                                ? 16
-                                : (sessionHeightPx >= 40 ? 14 : 12),
+                                ? 20
+                                : (sessionHeightPx >= 40 ? 18 : 16),
                         fontWeight: FontWeight.bold,
                       ),
                       maxLines: 1,
@@ -1810,7 +1790,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                         '${session.startTime} - ${session.endTime}',
                         style: TextStyle(
                           color: iconColor,
-                          fontSize: sessionHeightPx >= 90 ? 13 : 11,
+                          fontSize: sessionHeightPx >= 90 ? 17 : 15,
                           fontWeight: FontWeight.w500,
                         ),
                         maxLines: 1,
@@ -1825,7 +1805,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                         '$reservedCount / $totalSeats',
                         style: TextStyle(
                           color: iconColor,
-                          fontSize: sessionHeightPx >= 110 ? 14 : 12,
+                          fontSize: sessionHeightPx >= 110 ? 18 : 16,
                           fontWeight: FontWeight.w500,
                         ),
                         maxLines: 1,
@@ -1851,7 +1831,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                           child: CircularProgressIndicator(
                             strokeWidth: 3.0,
                             valueColor: AlwaysStoppedAnimation<Color>(
-                              iconColor,
+                              processingUiColor,
                             ),
                           ),
                         ),
@@ -1865,7 +1845,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                                 ? '취소중'
                                 : '변경중',
                             style: TextStyle(
-                              color: iconColor,
+                              color: processingUiColor,
                               fontSize: sessionHeightPx >= 50 ? 18 : 16,
                               fontWeight: FontWeight.w600,
                             ),

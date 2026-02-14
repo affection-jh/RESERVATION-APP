@@ -47,6 +47,7 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
 
   // 각 요일의 DragCalendarEditor에 접근하기 위한 GlobalKey
   final Map<int, GlobalKey> _calendarEditorKeys = {};
+  final GlobalKey _dragAreaKey = GlobalKey();
 
   // 일괄등록 미리보기용 임시 세션 (바텀시트가 열려있을 때만 사용)
   String? _previewStartTime;
@@ -223,7 +224,7 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
             ),
             // 하단 버튼
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
               decoration: BoxDecoration(
                 color: AppColors.backgroundWhite,
                 border: Border(
@@ -244,7 +245,7 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
                     elevation: 0,
                   ),
                   child: const Text(
-                    '다음으로',
+                    '다음',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
@@ -294,6 +295,7 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
     }
 
     return Container(
+      key: _dragAreaKey,
       color: AppColors.backgroundWhite,
       child: SingleChildScrollView(
         controller: _calendarScrollController,
@@ -351,6 +353,7 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
                             hourSlotHeight: hourSlotHeight,
                             totalHeight: totalHeight,
                             scrollController: _calendarScrollController!,
+                            dragAreaKey: _dragAreaKey,
                             onDragStateChanged: (isDragging) {
                               debugPrint(
                                 '[CourseScheduleScreen] onDragStateChanged($isDragging)',
@@ -376,6 +379,7 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
     required double hourSlotHeight,
     required double totalHeight,
     required ScrollController scrollController,
+    required GlobalKey dragAreaKey,
     required Function(bool) onDragStateChanged,
   }) {
     final sessions = _daySessions[dayOfWeek] ?? [];
@@ -428,6 +432,7 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
         hourSlotHeight: hourSlotHeight,
         totalHeight: totalHeight,
         scrollController: scrollController,
+        dragAreaKey: dragAreaKey,
         isEditMode: true, // 드래그 영역(Listener) 렌더링 → 길게 눌러서 세션 추가
         onSessionsChanged: (newSessions) {
           setState(() {
@@ -749,12 +754,12 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
   void _complete() {
     final name = widget.colorSelectionData.basicInfo.name.trim();
     if (name.isEmpty) {
-      SnackbarUtil.showError(context, '코스명을 입력해주세요.');
+      SnackbarUtil.showInfo(context, '코스명을 입력해주세요.');
       return;
     }
 
     if (!_isFormValid()) {
-      SnackbarUtil.showError(context, '모든 선택된 요일에 최소 하나의 세션을 추가해주세요.');
+      SnackbarUtil.showInfo(context, '모든 선택된 요일에 최소 하나의 세션을 추가해주세요.');
       return;
     }
 

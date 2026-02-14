@@ -30,11 +30,11 @@ class _StoryDetailScreenState extends State<StoryDetailScreen> {
       if (ok) {
         SnackbarUtil.showSuccess(context, '이미지를 저장했어요');
       } else {
-        SnackbarUtil.showError(context, '이미지 저장에 실패했습니다');
+        SnackbarUtil.showInfo(context, '이미지 저장에 실패했습니다');
       }
     } catch (e) {
       if (!mounted) return;
-      SnackbarUtil.showError(context, '이미지 저장에 실패했습니다');
+      SnackbarUtil.showInfo(context, '이미지 저장에 실패했습니다');
     } finally {
       if (mounted) {
         setState(() => _downloadingStates[index] = false);

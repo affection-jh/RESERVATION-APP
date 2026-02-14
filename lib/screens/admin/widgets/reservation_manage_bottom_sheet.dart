@@ -28,6 +28,7 @@ class ReservationManageBottomSheet extends StatelessWidget {
   final Function(Set<String>)? onMovingStarted;
   final Function(String)? onMovingCompleted;
   final Function()? onAllMovingCompleted;
+
   /// 스낵바를 붙일 context (예약 변경 성공/실패 스낵바를 화면에 표시할 때 사용)
   final BuildContext? snackbarContext;
 
@@ -198,7 +199,7 @@ class ReservationManageBottomSheet extends StatelessWidget {
                               .get();
 
                       if (!doc.exists || doc.data() == null) {
-                        SnackbarUtil.showError(
+                        SnackbarUtil.showInfo(
                           ctx,
                           '등록 정보를 찾을 수 없습니다. (enrollmentId: $enrollmentId)',
                         );
@@ -275,7 +276,7 @@ class ReservationManageBottomSheet extends StatelessWidget {
 
                       final enrollment = CourseEnrollment.fromJson(
                         normalizeEnrollmentJson(doc.data()!),
-                    );
+                      );
 
                       // 4) 상세 화면으로 이동
                       await Navigator.of(ctx).push(
@@ -289,7 +290,7 @@ class ReservationManageBottomSheet extends StatelessWidget {
                         ),
                       );
                     } catch (e) {
-                      SnackbarUtil.showError(
+                      SnackbarUtil.showInfo(
                         ctx,
                         '등록 상세 화면 이동 중 오류가 발생했습니다: $e',
                       );
@@ -327,57 +328,57 @@ class ReservationManageBottomSheet extends StatelessWidget {
           ),
           // 액션 버튼들 (시작된 세션이 아닐 때만 표시)
           if (!isSessionStarted) ...[
-          const SizedBox(height: 34),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => _handleCancel(context),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.red,
-                      side: const BorderSide(color: Colors.red),
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20),
+            const SizedBox(height: 34),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => _handleCancel(context),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.red,
+                        side: const BorderSide(color: Colors.red),
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20),
+                        ),
                       ),
-                    ),
-                    child: const Text(
-                      '예약 취소',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  flex: 2,
-                  child: ElevatedButton(
-                    onPressed: () => _handleMove(context),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primaryGreen,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      elevation: 0,
-                    ),
-                    child: const Text(
-                      '예약 변경시키기',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
+                      child: const Text(
+                        '예약 취소',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ],
+                  const SizedBox(width: 12),
+                  Expanded(
+                    flex: 2,
+                    child: ElevatedButton(
+                      onPressed: () => _handleMove(context),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primaryGreen,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        elevation: 0,
+                      ),
+                      child: const Text(
+                        '예약 변경시키기',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
           ],
         ],
       ),
@@ -441,7 +442,8 @@ class ReservationManageBottomSheet extends StatelessWidget {
     } catch (e) {
       final errorCtx = navigatorKey.currentContext;
       if (errorCtx != null && errorCtx.mounted) {
-        SnackbarUtil.showError(errorCtx, '예약 취소 중 오류가 발생했습니다: $e');
+        debugPrint('[ReservationManageBottomSheet] 예약 취소 실패: $e');
+        SnackbarUtil.showInfo(errorCtx, '예약 취소 중 오류가 발생했습니다.');
       }
       rethrow;
     }

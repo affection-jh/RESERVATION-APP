@@ -67,6 +67,8 @@ class _WeeklyOverrideScheduleScreenState
 
   // 각 요일의 DragCalendarEditor에 접근하기 위한 GlobalKey
   final Map<int, GlobalKey> _calendarEditorKeys = {};
+  // 드래그 영역(캘린더 그리드) 기준 좌표용 - 상하단 자동스크롤
+  final GlobalKey _dragAreaKey = GlobalKey();
 
   // 일괄등록 미리보기용 임시 세션
   String? _previewStartTime;
@@ -86,6 +88,15 @@ class _WeeklyOverrideScheduleScreenState
 
   // 미리 열린 주차 여부 (bookingWeekOpens에서 확인)
   bool _isBookingWeekOpened = false;
+
+  /// 저장 성공 후 pop 또는 사용자 뒤로가기 시 한 번만 pop 되도록 방지
+  bool _isLeaving = false;
+
+  void _popOnce(dynamic result) {
+    if (_isLeaving || !mounted) return;
+    _isLeaving = true;
+    Navigator.of(context).pop(result);
+  }
 
   @override
   void initState() {
@@ -596,210 +607,219 @@ class _WeeklyOverrideScheduleScreenState
                 .firstOrNull
             : null;
 
-    return Scaffold(
-      backgroundColor: AppColors.backgroundWhite,
-      appBar: AppBar(
+    return PopScope(
+      canPop: !_isLeaving && !_isSaving,
+      child: Scaffold(
         backgroundColor: AppColors.backgroundWhite,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios, size: 24),
-          onPressed: () => Navigator.of(context).pop(),
-          color: AppColors.textPrimary,
-        ),
-        title: Column(
-          children: [
-            Text(
-              displayCourse != null ? displayCourse.name : '',
-              style: const TextStyle(
-                color: AppColors.textPrimary,
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
+        appBar: AppBar(
+          backgroundColor: AppColors.backgroundWhite,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios, size: 24),
+            onPressed: () => _popOnce(null),
+            color: AppColors.textPrimary,
+          ),
+          title: Column(
+            children: [
+              Text(
+                '비정기 일정 설정',
+                style: const TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-            ),
-            Text(
-              '비정기 일정 설정',
-              style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
-            ),
-          ],
-        ),
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // 헤더
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 20),
-              color: AppColors.backgroundWhite,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // 연속 주차 표시 (이번주, 다음주, 다다음주)
-                            _buildWeekTabs(),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+              Text(
+                '길게 눌러 드래그하기',
+                style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
               ),
-            ),
-            // 메인 콘텐츠 (주차 변경 시에도 바깥 표는 유지, 안쪽만 로딩)
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // 요일 헤더 (항상 표시)
-                  Container(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    color: AppColors.backgroundWhite,
-                    child: Row(
+            ],
+          ),
+        ),
+        body: SafeArea(
+          child: Column(
+            children: [
+              // 헤더
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 20,
+                ),
+                color: AppColors.backgroundWhite,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
                       children: [
-                        SizedBox(
-                          width: 35,
-                          child: Center(
-                            child: Padding(
-                              padding: const EdgeInsets.only(left: 2),
-                              child: Text(
-                                '시간',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w500,
-                                  color: AppColors.textSecondary,
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // 연속 주차 표시 (이번주, 다음주, 다다음주)
+                              _buildWeekTabs(),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              // 메인 콘텐츠 (주차 변경 시에도 바깥 표는 유지, 안쪽만 로딩)
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // 요일 헤더 (항상 표시)
+                    Container(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      color: AppColors.backgroundWhite,
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: 35,
+                            child: Center(
+                              child: Padding(
+                                padding: const EdgeInsets.only(left: 2),
+                                child: Text(
+                                  '시간',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w500,
+                                    color: AppColors.textSecondary,
+                                  ),
                                 ),
                               ),
                             ),
                           ),
-                        ),
-                        ...selectedDays.map((day) {
-                          const dayNames = [
-                            '',
-                            '월',
-                            '화',
-                            '수',
-                            '목',
-                            '금',
-                            '토',
-                            '일',
-                          ];
-                          final date = _dateForDayOfWeek(day);
-                          final dateStr = '${date.month}/${date.day}';
-                          return Expanded(
-                            child: Center(
-                              child: Column(
-                                children: [
-                                  Text(
-                                    dayNames[day],
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.bold,
-                                      color: AppColors.textPrimary,
+                          ...selectedDays.map((day) {
+                            const dayNames = [
+                              '',
+                              '월',
+                              '화',
+                              '수',
+                              '목',
+                              '금',
+                              '토',
+                              '일',
+                            ];
+                            final date = _dateForDayOfWeek(day);
+                            final dateStr = '${date.month}/${date.day}';
+                            return Expanded(
+                              child: Center(
+                                child: Column(
+                                  children: [
+                                    Text(
+                                      dayNames[day],
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        color: AppColors.textPrimary,
+                                      ),
                                     ),
-                                  ),
-                                  Text(
-                                    dateStr,
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: AppColors.textSecondary,
+                                    Text(
+                                      dateStr,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: AppColors.textSecondary,
+                                      ),
                                     ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
-                            ),
-                          );
-                        }).toList(),
-                      ],
+                            );
+                          }).toList(),
+                        ],
+                      ),
                     ),
+                    // 캘린더 영역: 로딩 중이면 스피너만, 로딩 완료 후 그리드 페이드 인
+                    Expanded(
+                      child:
+                          _isLoadingData
+                              ? Center(
+                                child: CircularProgressIndicator(
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    Colors.transparent,
+                                  ),
+                                ),
+                              )
+                              : TweenAnimationBuilder<double>(
+                                key: ValueKey('grid_$_currentWeekOffset'),
+                                tween: Tween(begin: 0, end: 1),
+                                duration: const Duration(milliseconds: 320),
+                                curve: Curves.easeOut,
+                                builder: (context, value, child) {
+                                  return Opacity(opacity: value, child: child);
+                                },
+                                child: LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    return _buildAllDaysCalendar(
+                                      constraints.maxHeight,
+                                      selectedDays,
+                                    );
+                                  },
+                                ),
+                              ),
+                    ),
+                  ],
+                ),
+              ),
+              // 하단 버튼
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.backgroundWhite,
+                  border: Border(
+                    top: BorderSide(color: AppColors.borderLight, width: 0.5),
                   ),
-                  // 캘린더 영역: 로딩 중이면 스피너만, 로딩 완료 후 그리드 페이드 인
-                  Expanded(
+                ),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed:
+                        _isSaving
+                            ? null
+                            : (_isWeekOpenedByPolicy()
+                                ? (_hasChanges() ? _saveOverrides : null)
+                                : _saveOverrides), // ✅ 변경사항 없어도 "미리 예약 열기"는 가능
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primaryGreen,
+                      disabledBackgroundColor: AppColors.borderLight,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      elevation: 0,
+                    ),
                     child:
-                        _isLoadingData
-                            ? Center(
+                        _isSaving
+                            ? const SizedBox(
+                              width: 20,
+                              height: 20,
                               child: CircularProgressIndicator(
+                                strokeWidth: 2,
                                 valueColor: AlwaysStoppedAnimation<Color>(
-                                  Colors.transparent,
+                                  Colors.white,
                                 ),
                               ),
                             )
-                            : TweenAnimationBuilder<double>(
-                              key: ValueKey('grid_$_currentWeekOffset'),
-                              tween: Tween(begin: 0, end: 1),
-                              duration: const Duration(milliseconds: 320),
-                              curve: Curves.easeOut,
-                              builder: (context, value, child) {
-                                return Opacity(opacity: value, child: child);
-                              },
-                              child: LayoutBuilder(
-                                builder: (context, constraints) {
-                                  return _buildAllDaysCalendar(
-                                    constraints.maxHeight,
-                                    selectedDays,
-                                  );
-                                },
+                            : Text(
+                              _isWeekOpenedByPolicy() ? '저장' : '미리 예약 열기',
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.white,
                               ),
                             ),
                   ),
-                ],
-              ),
-            ),
-            // 하단 버튼
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
-              decoration: BoxDecoration(
-                color: AppColors.backgroundWhite,
-                border: Border(
-                  top: BorderSide(color: AppColors.borderLight, width: 0.5),
                 ),
               ),
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed:
-                      _isSaving
-                          ? null
-                          : (_isWeekOpenedByPolicy()
-                              ? (_hasChanges() ? _saveOverrides : null)
-                              : _saveOverrides), // ✅ 변경사항 없어도 "미리 예약 열기"는 가능
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primaryGreen,
-                    disabledBackgroundColor: AppColors.borderLight,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    elevation: 0,
-                  ),
-                  child:
-                      _isSaving
-                          ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(
-                                Colors.white,
-                              ),
-                            ),
-                          )
-                          : Text(
-                            _isWeekOpenedByPolicy() ? '저장' : '미리 예약 열기',
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white,
-                            ),
-                          ),
-                ),
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -865,6 +885,7 @@ class _WeeklyOverrideScheduleScreenState
     }
 
     return Container(
+      key: _dragAreaKey,
       color: AppColors.backgroundWhite,
       child: SingleChildScrollView(
         controller: _calendarScrollController,
@@ -922,6 +943,7 @@ class _WeeklyOverrideScheduleScreenState
                             hourSlotHeight: hourSlotHeight,
                             totalHeight: totalHeight,
                             scrollController: _calendarScrollController!,
+                            dragAreaKey: _dragAreaKey,
                             onDragStateChanged: (isDragging) {
                               setState(() {
                                 _isAnyDragging = isDragging;
@@ -976,6 +998,7 @@ class _WeeklyOverrideScheduleScreenState
     required double hourSlotHeight,
     required double totalHeight,
     required ScrollController scrollController,
+    required GlobalKey dragAreaKey,
     required Function(bool) onDragStateChanged,
   }) {
     // 정기 일정 (취소되지 않은 것)
@@ -1066,6 +1089,7 @@ class _WeeklyOverrideScheduleScreenState
         hourSlotHeight: hourSlotHeight,
         totalHeight: totalHeight,
         scrollController: scrollController,
+        dragAreaKey: dragAreaKey,
         onSessionsChanged: (newSessions) {
           // 비정기 일정만 업데이트 (정기 일정 제외)
           // 주의: 이 콜백은 드래그로 세션을 추가/수정할 때만 호출되어야 함
@@ -1467,7 +1491,7 @@ class _WeeklyOverrideScheduleScreenState
     final placeId =
         Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
     if (placeId == null) {
-      SnackbarUtil.showError(context, '플레이스를 찾을 수 없습니다.');
+      SnackbarUtil.showInfo(context, '플레이스를 찾을 수 없습니다.');
       return;
     }
 
@@ -1478,7 +1502,7 @@ class _WeeklyOverrideScheduleScreenState
       final courseId =
           widget.selectedCourseId ?? _regularSessions.keys.firstOrNull;
       if (courseId == null) {
-        SnackbarUtil.showError(context, '코스를 선택해주세요');
+        SnackbarUtil.showInfo(context, '코스를 선택해주세요');
         setState(() => _isSaving = false);
         return;
       }
@@ -1497,14 +1521,14 @@ class _WeeklyOverrideScheduleScreenState
         } catch (e) {
           debugPrint('[WeeklyOverrideScheduleScreen] 미리 예약 열기 실패: $e');
           if (mounted) {
-            SnackbarUtil.showError(context, '미리 예약 열기에 실패했습니다.');
+            SnackbarUtil.showInfo(context, '미리 예약 열기에 실패했습니다.');
           }
           return;
         }
 
         if (mounted) {
           SnackbarUtil.showSuccess(context, '예약이 미리 열렸습니다.');
-          Navigator.of(context).pop(true);
+          _popOnce(true);
         }
         return;
       }
@@ -1664,13 +1688,13 @@ class _WeeklyOverrideScheduleScreenState
       if (mounted) {
         SnackbarUtil.showSuccess(context, '저장되었습니다.');
 
-        // 저장 성공 후 화면을 닫고 부모 화면에서 데이터를 다시 로드하도록 함
-        Navigator.of(context).pop(true);
+        // 저장 성공 후 화면을 닫고 부모 화면에서 데이터를 다시 로드하도록 함 (한 번만 pop)
+        _popOnce(true);
       }
     } catch (e) {
       if (mounted) {
         debugPrint('저장 중 오류: $e');
-        SnackbarUtil.showError(context, '저장 중 오류가 발생했습니다');
+        SnackbarUtil.showInfo(context, '저장 중 오류가 발생했습니다');
       }
     } finally {
       if (mounted) {
