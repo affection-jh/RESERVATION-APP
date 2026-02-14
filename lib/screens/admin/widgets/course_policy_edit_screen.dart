@@ -250,16 +250,16 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
 
       final openStrategy =
           _type == BookingOpenStrategyType.rollingWindow
-          ? BookingOpenStrategy.rollingWindow(
-              RollingWindowOpenStrategy(windowDays: _windowDays),
-            )
-          : BookingOpenStrategy.weeklyRelease(
-              WeeklyReleaseOpenStrategy(
-                releaseDayOfWeek: _releaseDayOfWeek,
-                releaseTime: _toHHmm(_releaseTime),
-                weeksAhead: _weeksAhead,
-              ),
-            );
+              ? BookingOpenStrategy.rollingWindow(
+                RollingWindowOpenStrategy(windowDays: _windowDays),
+              )
+              : BookingOpenStrategy.weeklyRelease(
+                WeeklyReleaseOpenStrategy(
+                  releaseDayOfWeek: _releaseDayOfWeek,
+                  releaseTime: _toHHmm(_releaseTime),
+                  weeksAhead: _weeksAhead,
+                ),
+              );
 
       final policy = CoursePolicy(
         courseId: widget.courseId,
@@ -270,8 +270,8 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
         version: nextVersion,
         effectiveFrom:
             _scheduleForFuture
-            ? _effectiveFrom
-            : TimezoneUtils.getSeoulDateTime(),
+                ? _effectiveFrom
+                : TimezoneUtils.getSeoulDateTime(),
       );
 
       // 디버그: 실제 저장 payload 확인 (릴리즈 빌드에서는 실행되지 않음)
@@ -679,7 +679,7 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                               '0시간 이상 입력해주세요',
                               style: TextStyle(fontSize: 12, color: Colors.red),
                             ),
-                        ),
+                          ),
                       ],
                     ),
                   ),
@@ -798,7 +798,7 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
             ),
             // 하단 고정 버튼
             Container(
-              padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+              padding: const EdgeInsets.fromLTRB(24, 12, 24, 20),
               decoration: BoxDecoration(color: AppColors.backgroundLight),
               child: SafeArea(
                 child: SizedBox(
@@ -806,18 +806,18 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                   child: ElevatedButton(
                     onPressed:
                         (_isLoading || _isSaving || !_isValidInput())
-                        ? null
-                        : (widget.requireSave || _hasChanges)
-                        ? (widget.requireSave
-                              ? _saveAndRegisterCourse
-                              : () => _savePolicy(popAfterSave: true))
-                        : null,
+                            ? null
+                            : (widget.requireSave || _hasChanges)
+                            ? (widget.requireSave
+                                ? _saveAndRegisterCourse
+                                : () => _savePolicy(popAfterSave: true))
+                            : null,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primaryGreen,
                       foregroundColor: Colors.white,
                       disabledBackgroundColor: AppColors.borderLight,
                       disabledForegroundColor: AppColors.textSecondary,
-                      padding: const EdgeInsets.symmetric(vertical: 18),
+                      padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(20),
                       ),
@@ -825,23 +825,23 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                     ),
                     child:
                         _isSaving
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(
-                                AppColors.primaryGreen,
+                            ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  AppColors.primaryGreen,
+                                ),
+                              ),
+                            )
+                            : Text(
+                              widget.requireSave ? '저장 및 코스 등록' : '정책 수정',
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
                               ),
                             ),
-                          )
-                        : Text(
-                            widget.requireSave ? '저장 및 코스 등록' : '정책 수정',
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
                   ),
                 ),
               ),
@@ -857,7 +857,7 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
     required ValueChanged<BookingOpenStrategyType> onChanged,
     Color? activeColor,
   }) {
-    final color = activeColor ?? AppColors.primaryGreen;
+    final color = AppColors.primaryGreen;
     return Container(
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(

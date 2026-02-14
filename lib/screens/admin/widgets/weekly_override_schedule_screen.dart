@@ -405,6 +405,7 @@ class _WeeklyOverrideScheduleScreenState
             ),
           );
           _isLoadingData = false; // 로딩 완료
+          _didInitialJump = false; // 주차별 데이터 로드 후 스크롤을 첫 세션으로 맞추기 위해 리셋
         });
       }
     } catch (e) {
@@ -559,35 +560,31 @@ class _WeeklyOverrideScheduleScreenState
     final now = TimezoneUtils.getSeoulDateTime();
     final today = DateTime(now.year, now.month, now.day);
 
-    // 기본 요일: 월~금 (1~5)
-    final defaultDays = <int>{1, 2, 3, 4, 5};
-
-    // 세션이 있는 요일도 추가
-    for (final sessions in _regularSessions.values) {
-      for (final session in sessions) {
-        if (session.dayOfWeek >= 1 && session.dayOfWeek <= 5) {
-          defaultDays.add(session.dayOfWeek);
-        }
-      }
-    }
-    for (final day in _daySessions.keys) {
-      if (day >= 1 && day <= 5) {
-        defaultDays.add(day);
-      }
-    }
-
-    // 이번 주인 경우 지난 요일 필터링
-    List<int> selectedDays = defaultDays.toList()..sort();
+    // 이번 주: 남은 요일만 표시 (토·일 포함). 다른 주: 월~금 + 세션 있는 요일.
+    List<int> selectedDays;
     if (_currentWeekOffset == 0) {
+      // 이번 주는 1~7 중 오늘 포함 이후 요일만 (토요일 밤이면 토·일만 표시)
       selectedDays =
-          selectedDays.where((day) {
-            if (day < 1 || day > 7) return true;
+          [1, 2, 3, 4, 5, 6, 7].where((day) {
             final date = _dateForDayOfWeek(day);
             final dateOnly = DateTime(date.year, date.month, date.day);
-            // 지나간 요일은 제외
-            if (dateOnly.isBefore(today)) return false;
-            return true;
+            return !dateOnly.isBefore(today);
           }).toList();
+    } else {
+      final defaultDays = <int>{1, 2, 3, 4, 5};
+      for (final sessions in _regularSessions.values) {
+        for (final session in sessions) {
+          if (session.dayOfWeek >= 1 && session.dayOfWeek <= 7) {
+            defaultDays.add(session.dayOfWeek);
+          }
+        }
+      }
+      for (final day in _daySessions.keys) {
+        if (day >= 1 && day <= 7) {
+          defaultDays.add(day);
+        }
+      }
+      selectedDays = defaultDays.toList()..sort();
     }
 
     // 선택된 코스 정보 가져오기 (UI 표시용)
@@ -621,7 +618,7 @@ class _WeeklyOverrideScheduleScreenState
               ),
             ),
             Text(
-              '정기 일정 취소 및 추가 일정 등록',
+              '비정기 일정 설정',
               style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
             ),
           ],
@@ -653,114 +650,93 @@ class _WeeklyOverrideScheduleScreenState
                 ],
               ),
             ),
-            // 메인 콘텐츠
+            // 메인 콘텐츠 (주차 변경 시에도 바깥 표는 유지, 안쪽만 로딩)
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child:
-                        _isLoadingData
-                            ? Center(
-                              child: CircularProgressIndicator(
-                                valueColor: AlwaysStoppedAnimation<Color>(
-                                  AppColors.primaryGreen,
+                  // 요일 헤더 (항상 표시)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 12,
+                    ),
+                    color: AppColors.backgroundWhite,
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 35,
+                          child: Center(
+                            child: Padding(
+                              padding: const EdgeInsets.only(left: 2),
+                              child: Text(
+                                '시간',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                  color: AppColors.textSecondary,
                                 ),
                               ),
-                            )
-                            : Column(
-                              children: [
-                                // 요일 헤더
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 12,
-                                  ),
-                                  color: AppColors.backgroundWhite,
-                                  child: Row(
-                                    children: [
-                                      // 시간 컬럼 헤더
-                                      SizedBox(
-                                        width: 35,
-                                        child: Center(
-                                          child: Padding(
-                                            padding: const EdgeInsets.only(
-                                              left: 2,
-                                            ),
-                                            child: Text(
-                                              '시간',
-                                              style: TextStyle(
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.w500,
-                                                color: AppColors.textSecondary,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                      // 각 요일 헤더
-                                      ...selectedDays.map((day) {
-                                        const dayNames = [
-                                          '',
-                                          '월',
-                                          '화',
-                                          '수',
-                                          '목',
-                                          '금',
-                                          '토',
-                                          '일',
-                                        ];
-                                        final date = _dateForDayOfWeek(day);
-                                        final dateStr =
-                                            '${date.month}/${date.day}';
-                                        return Expanded(
-                                          child: Center(
-                                            child: Column(
-                                              children: [
-                                                Text(
-                                                  dayNames[day],
-                                                  style: TextStyle(
-                                                    fontSize: 16,
-                                                    fontWeight: FontWeight.bold,
-                                                    color:
-                                                        AppColors.textPrimary,
-                                                  ),
-                                                ),
-                                                Text(
-                                                  dateStr,
-                                                  style: TextStyle(
-                                                    fontSize: 12,
-                                                    color:
-                                                        AppColors.textSecondary,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        );
-                                      }).toList(),
-                                    ],
-                                  ),
-                                ),
-                                // 캘린더
-                                Expanded(
-                                  child: LayoutBuilder(
-                                    builder: (context, constraints) {
-                                      return _buildAllDaysCalendar(
-                                        constraints.maxHeight,
-                                        selectedDays,
-                                      );
-                                    },
-                                  ),
-                                ),
-                              ],
                             ),
+                          ),
+                        ),
+                        ...selectedDays.map((day) {
+                          const dayNames = [
+                            '', '월', '화', '수', '목', '금', '토', '일',
+                          ];
+                          final date = _dateForDayOfWeek(day);
+                          final dateStr = '${date.month}/${date.day}';
+                          return Expanded(
+                            child: Center(
+                              child: Column(
+                                children: [
+                                  Text(
+                                    dayNames[day],
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppColors.textPrimary,
+                                    ),
+                                  ),
+                                  Text(
+                                    dateStr,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: AppColors.textSecondary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ],
+                    ),
+                  ),
+                  // 캘린더 영역: 로딩 중이면 스피너만, 아니면 그리드
+                  Expanded(
+                    child: _isLoadingData
+                        ? Center(
+                            child: CircularProgressIndicator(
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                AppColors.primaryGreen,
+                              ),
+                            ),
+                          )
+                        : LayoutBuilder(
+                            builder: (context, constraints) {
+                              return _buildAllDaysCalendar(
+                                constraints.maxHeight,
+                                selectedDays,
+                              );
+                            },
+                          ),
                   ),
                 ],
               ),
             ),
             // 하단 버튼
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
               decoration: BoxDecoration(
                 color: AppColors.backgroundWhite,
                 border: Border(
@@ -779,7 +755,7 @@ class _WeeklyOverrideScheduleScreenState
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primaryGreen,
                     disabledBackgroundColor: AppColors.borderLight,
-                    padding: const EdgeInsets.symmetric(vertical: 18),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(20),
                     ),
@@ -825,63 +801,44 @@ class _WeeklyOverrideScheduleScreenState
     );
     final totalHeight = hours.length * hourSlotHeight;
 
-    // 초기 진입 시 스크롤 위치 결정
+    // 주차별 진입/전환 시 스크롤을 해당 주의 첫 세션 시작 위치로 이동
     if (!_didInitialJump && _calendarScrollController != null) {
       _didInitialJump = true;
+      final slotHeight = hourSlotHeight; // 콜백에서 사용할 값 캡처
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_calendarScrollController!.hasClients) {
-          // 모든 세션의 시작 시간 수집 (정기 일정 + 비정기 일정)
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || _calendarScrollController == null || !_calendarScrollController!.hasClients) return;
+          // 현재 주의 정기+비정기 세션에서 첫 시작 시간 계산
           final allStartTimes = <int>[];
-
-          // 정기 일정 (취소되지 않은 것만)
           for (final entry in _regularSessions.entries) {
             for (final session in entry.value) {
               final dayOfWeek = session.dayOfWeek;
               final isCancelled =
-                  _cancelledSessions[dayOfWeek]?.contains(session.startTime) ??
-                  false;
+                  _cancelledSessions[dayOfWeek]?.contains(session.startTime) ?? false;
               if (!isCancelled) {
-                final startMinutes = _parseTimeToMinutes(session.startTime);
-                allStartTimes.add(startMinutes);
+                allStartTimes.add(_parseTimeToMinutes(session.startTime));
               }
             }
           }
-
-          // 비정기 일정
           for (final entry in _daySessions.entries) {
             for (final session in entry.value) {
-              final startMinutes = _parseTimeToMinutes(session.startTime);
-              allStartTimes.add(startMinutes);
+              allStartTimes.add(_parseTimeToMinutes(session.startTime));
             }
           }
-
-          // 스크롤 위치 결정
           double targetY;
           if (allStartTimes.isEmpty) {
-            // 세션이 없으면 10시로 스크롤
-            targetY = 10 * hourSlotHeight;
+            targetY = 10 * slotHeight;
           } else {
-            // 세션이 있으면 첫 세션의 시작 시간으로 스크롤
-            final firstStartMinutes = allStartTimes.reduce(
-              (a, b) => a < b ? a : b,
-            );
+            final firstStartMinutes = allStartTimes.reduce((a, b) => a < b ? a : b);
             final firstStartHour = firstStartMinutes ~/ 60;
-            // 세션 시작 시간에서 약간 위로 (30분 전)
-            targetY =
-                (firstStartHour * hourSlotHeight) +
-                ((firstStartMinutes % 60) / 60.0 * hourSlotHeight) -
-                (0.5 * hourSlotHeight); // 30분 전
-            // 최소 0 이상으로 제한
+            targetY = (firstStartHour * slotHeight) +
+                ((firstStartMinutes % 60) / 60.0 * slotHeight) -
+                (0.5 * slotHeight);
             targetY = targetY.clamp(0.0, double.infinity);
           }
-
-          _calendarScrollController!.jumpTo(
-            targetY.clamp(
-              0.0,
-              _calendarScrollController!.position.maxScrollExtent,
-            ),
-          );
-        }
+          final maxExtent = _calendarScrollController!.position.maxScrollExtent;
+          _calendarScrollController!.jumpTo(targetY.clamp(0.0, maxExtent));
+        });
       });
     }
 
@@ -1429,39 +1386,7 @@ class _WeeklyOverrideScheduleScreenState
                       ],
                     ),
                     const SizedBox(height: 24),
-                    // 알림 전송 체크박스
-                    InkWell(
-                      onTap: () {
-                        setDialogState(() {
-                          sendNotification = !sendNotification;
-                        });
-                      },
-                      child: Row(
-                        children: [
-                          Checkbox(
-                            value: sendNotification,
-                            onChanged: (value) {
-                              setDialogState(() {
-                                sendNotification = value ?? true;
-                              });
-                            },
-                            activeColor: AppColors.primaryGreen,
-                            shape: const CircleBorder(),
-                          ),
 
-                          Expanded(
-                            child: Text(
-                              '예약자에게 취소 알림 전송',
-                              style: TextStyle(
-                                fontSize: 16,
-                                color: AppColors.textPrimary,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
                     const SizedBox(height: 24),
                     // 취소 버튼
                     SizedBox(
@@ -1494,7 +1419,7 @@ class _WeeklyOverrideScheduleScreenState
                         ),
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    SizedBox(height: MediaQuery.of(context).padding.bottom + 4),
                   ],
                 ),
               );
@@ -1509,12 +1434,7 @@ class _WeeklyOverrideScheduleScreenState
           _cancelledSessions[dayOfWeek]!.add(startTime);
           _cancelNotificationFlags[key] = shouldSendNotification;
         });
-        SnackbarUtil.showSuccess(
-          context,
-          shouldSendNotification
-              ? '정기 일정이 취소되었습니다. (알림 전송)'
-              : '정기 일정이 취소되었습니다. (알림 없음)',
-        );
+        SnackbarUtil.showSuccess(context, '정기 일정이 취소되었습니다.');
       }
     }
   }
@@ -1720,10 +1640,7 @@ class _WeeklyOverrideScheduleScreenState
       }
 
       if (mounted) {
-        SnackbarUtil.showSuccess(
-          context,
-          isPreOpen ? '비정기 일정이 저장되었고 예약이 미리 열렸습니다.' : '비정기 일정이 저장되었습니다.',
-        );
+        SnackbarUtil.showSuccess(context, '저장되었습니다.');
 
         // 저장 성공 후 화면을 닫고 부모 화면에서 데이터를 다시 로드하도록 함
         Navigator.of(context).pop(true);

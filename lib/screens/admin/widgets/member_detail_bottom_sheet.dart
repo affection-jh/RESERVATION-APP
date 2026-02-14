@@ -251,55 +251,59 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
               child: Container(color: Colors.transparent),
             ),
           ),
-          // 바텀시트 컨텐츠
+          // 바텀시트 컨텐츠 (키보드 올라올 때 시트 전체를 viewInsets만큼 위로 밀어 입력란 가림 방지)
           Align(
             alignment: Alignment.bottomCenter,
-            child: GestureDetector(
-              onTap: () {},
-              child: Container(
-                constraints: BoxConstraints(
-                  maxHeight:
-                      MediaQuery.of(context).size.height * 0.9 -
-                      MediaQuery.of(context).viewInsets.bottom,
-                ),
-                decoration: BoxDecoration(
-                  color: AppColors.backgroundWhite,
-                  borderRadius: BorderRadius.circular(30),
-                ),
-                padding: EdgeInsets.only(
-                  left: 20,
-                  right: 24,
-                  top: 24,
-                  bottom: 40 +
-                      MediaQuery.of(context).padding.bottom +
-                      MediaQuery.of(context).viewInsets.bottom,
-                ),
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // 헤더
-                      Padding(
-                        padding: const EdgeInsets.only(left: 4, top: 4),
-                        child: _buildHeader(),
-                      ),
-                      const SizedBox(height: 24),
+            child: Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+              ),
+              child: GestureDetector(
+                onTap: () {},
+                child: Container(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(context).size.height * 0.9,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.backgroundWhite,
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(20),
+                      topRight: Radius.circular(20),
+                    ),
+                  ),
+                  padding: EdgeInsets.only(
+                    left: 20,
+                    right: 24,
+                    top: 24,
+                    bottom: 40 + MediaQuery.of(context).padding.bottom,
+                  ),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // 헤더
+                        Padding(
+                          padding: const EdgeInsets.only(left: 4, top: 4),
+                          child: _buildHeader(),
+                        ),
+                        const SizedBox(height: 24),
 
-                      if (_isLoading)
-                        const Center(
-                          child: Padding(
-                            padding: EdgeInsets.all(32.0),
-                            child: CircularProgressIndicator(
-                              color: AppColors.primaryGreen,
+                        if (_isLoading)
+                          const Center(
+                            child: Padding(
+                              padding: EdgeInsets.all(32.0),
+                              child: CircularProgressIndicator(
+                                color: AppColors.primaryGreen,
+                              ),
                             ),
-                          ),
-                        )
-                      else ...[
-                        // 등록된 코스 목록
-                        _buildEnrollmentsSection(),
+                          )
+                        else ...[
+                          // 등록된 코스 목록
+                          _buildEnrollmentsSection(),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -464,19 +468,24 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
         _nameController = null;
       });
 
+      final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+      final placeId = placeProvider.currentPlace?.id;
+      if (placeId == null) return;
+
       final memberService = MemberService();
-      final updatedUser = await memberService.updateMemberName(
+      final ok = await memberService.updateMemberName(
+        placeId: placeId,
         phoneNumber: widget.member.phoneNumber,
         newName: newName,
       );
 
-      if (updatedUser == null) {
+      if (!ok) {
         // 실패 시 원래 이름으로 복구
         if (mounted) {
           setState(() {
             _currentMemberName = currentName;
           });
-          SnackbarUtil.showError(context, '멤버를 찾을 수 없습니다.');
+          SnackbarUtil.showError(context, '이름 수정에 실패했습니다.');
         }
         return;
       }
@@ -486,27 +495,23 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
         context,
         listen: false,
       );
-      final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
-      final placeId = placeProvider.currentPlace?.id;
-      if (placeId != null) {
-        // 비동기로 새로고침 (UI 블로킹 방지)
-        memberProvider.loadMembers(placeId).then((_) {
-          // MemberProvider에서 업데이트된 member 찾기
-          try {
-            final updatedMember = memberProvider.members.firstWhere(
-              (m) => m.phoneNumber == widget.member.phoneNumber,
-            );
-            if (mounted && updatedMember.name != _currentMemberName) {
-              setState(() {
-                _currentMemberName = updatedMember.name;
-              });
-            }
-          } catch (e) {
-            // member를 찾을 수 없으면 무시 (이미 로컬 상태 업데이트됨)
-            debugPrint('업데이트된 member를 찾을 수 없음: $e');
+      // 비동기로 새로고침 (UI 블로킹 방지)
+      memberProvider.loadMembers(placeId, forceRefreshUsers: true).then((_) {
+        // MemberProvider에서 업데이트된 member 찾기
+        try {
+          final updatedMember = memberProvider.members.firstWhere(
+            (m) => m.phoneNumber == widget.member.phoneNumber,
+          );
+          if (mounted && updatedMember.name != _currentMemberName) {
+            setState(() {
+              _currentMemberName = updatedMember.name;
+            });
           }
-        });
-      }
+        } catch (e) {
+          // member를 찾을 수 없으면 무시 (이미 로컬 상태 업데이트됨)
+          debugPrint('업데이트된 member를 찾을 수 없음: $e');
+        }
+      });
 
       SnackbarUtil.showSuccess(context, '이름이 수정되었습니다.');
     } catch (e) {
@@ -532,7 +537,7 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
       context: rootContext,
       title: '멤버 삭제',
       message: '이 멤버는 더이상 접속할 수 없어요',
-      secondaryMessage: '이 사용자를 추방하시겠습니까?',
+      secondaryMessage: '이 멤버를 플레이스에서 제거할까요?',
       cancelText: '취소',
       confirmText: '삭제',
       confirmButtonColor: Colors.red,
@@ -579,7 +584,7 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
       // users.placeIds는 더 이상 사용하지 않음 (courseMembers 기반으로 조회)
 
       // 스트림으로 자동 반영되지만, 즉시 갱신이 필요하면 재로드
-      await memberProvider.loadMembers(placeId);
+      await memberProvider.loadMembers(placeId, forceRefreshUsers: true);
     } catch (e) {
       // 에러 발생 시 바텀시트 다시 열기
       MemberDetailBottomSheet.show(context: rootContext, member: widget.member);
@@ -726,7 +731,10 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                           context,
                           listen: false,
                         );
-                        await memberProvider.loadMembers(placeId);
+                        await memberProvider.loadMembers(
+                          placeId,
+                          forceRefreshUsers: true,
+                        );
                         setState(() {
                           // 상태 업데이트
                         });
@@ -780,7 +788,10 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                           context,
                           listen: false,
                         );
-                        await memberProvider.loadMembers(placeId);
+                        await memberProvider.loadMembers(
+                          placeId,
+                          forceRefreshUsers: true,
+                        );
                         setState(() {
                           // 상태 업데이트
                         });

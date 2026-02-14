@@ -161,6 +161,7 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
                   : _buildMemberList(
                     memberProvider.members,
                     memberProvider.pendingMembers,
+                    memberProvider.membershipDisplayNamesByUserId,
                   ),
         ),
       ],
@@ -396,17 +397,44 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
     );
   }
 
+  /// 전화번호 정규화 (숫자만)
+  static String _normalizePhone(String phone) {
+    return phone.replaceAll(RegExp(r'[^\d]'), '');
+  }
+
+  /// 관리자 화면에서 표시할 이름: 동일 전화번호의 pendingMember가 있으면 관리자가 지정한 이름, 없으면 user.name
+  String _getAdminDisplayNameForUser(
+    User user,
+    List<PendingMember> pendingMembers,
+    Map<String, String> membershipDisplayNamesByUserId,
+  ) {
+    // 1) placeMemberships.displayName (관리자 지정 이름) 우선
+    final membershipName = membershipDisplayNamesByUserId[user.userId];
+    if (membershipName != null && membershipName.trim().isNotEmpty) {
+      return membershipName;
+    }
+
+    final normalized = _normalizePhone(user.phoneNumber);
+    for (final p in pendingMembers) {
+      if (_normalizePhone(p.phoneNumber) == normalized) {
+        return p.name ?? user.name;
+      }
+    }
+    return user.name;
+  }
+
   // User를 MemberData로 변환
   // 주의: enrollments는 users 문서에 없으므로 빈 배열 반환
   // 실제 enrollments는 enrollments 컬렉션에서 조회해야 함
-  MemberData _userToMemberData(User user) {
+  // [displayName]이 있으면 표시 이름으로 사용 (관리자 지정 이름 우선)
+  MemberData _userToMemberData(User user, {String? displayName}) {
     // users 문서의 enrollments 필드는 더 이상 사용하지 않음
     // 실제 enrollments는 enrollments 컬렉션에서 조회해야 하지만,
     // MemberData에는 enrolledCourseIds만 필요하므로 빈 배열 반환
     // (코스별 탭에서는 courseMembers에서 이미 필터링됨)
     return MemberData(
       userId: user.userId,
-      name: user.name,
+      name: displayName ?? user.name,
       phoneNumber: user.phoneNumber,
       role: '일반',
       isActive: true,
@@ -553,7 +581,14 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
                               (pm) => 'pending_${pm.id}' == member.userId,
                             ),
                           )
-                          : _userToMemberData(member),
+                          : _userToMemberData(
+                            member,
+                            displayName: _getAdminDisplayNameForUser(
+                              member,
+                              pendingMembers,
+                              memberProvider.membershipDisplayNamesByUserId,
+                            ),
+                          ),
                   onMemberTapped: () {},
                 ),
               );
@@ -666,7 +701,14 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
                               (pm) => 'pending_${pm.id}' == member.userId,
                             ),
                           )
-                          : _userToMemberData(member),
+                          : _userToMemberData(
+                            member,
+                            displayName: _getAdminDisplayNameForUser(
+                              member,
+                              pendingMembers,
+                              memberProvider.membershipDisplayNamesByUserId,
+                            ),
+                          ),
                   onMemberTapped: () {},
                 ),
               );
@@ -822,7 +864,14 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
                             (pm) => 'pending_${pm.id}' == member.userId,
                           ),
                         )
-                        : _userToMemberData(member),
+                        : _userToMemberData(
+                          member,
+                          displayName: _getAdminDisplayNameForUser(
+                            member,
+                            memberProvider.pendingMembers,
+                            memberProvider.membershipDisplayNamesByUserId,
+                          ),
+                        ),
                 onMemberTapped: () {},
               ),
             );
@@ -836,6 +885,7 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
   Widget _buildMemberList(
     List<User> members,
     List<PendingMember> pendingMembers,
+    Map<String, String> membershipDisplayNamesByUserId,
   ) {
     // pendingMembers를 User로 변환 (임시)
     final pendingAsUsers =
@@ -903,7 +953,14 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
                         (pm) => 'pending_${pm.id}' == member.userId,
                       ),
                     )
-                    : _userToMemberData(member),
+                    : _userToMemberData(
+                      member,
+                      displayName: _getAdminDisplayNameForUser(
+                        member,
+                        pendingMembers,
+                        membershipDisplayNamesByUserId,
+                      ),
+                    ),
             onMemberTapped: () {},
           ),
         );
@@ -1091,7 +1148,8 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
         context,
         listen: false,
       );
-      await memberProvider.loadMembers(placeId);
+      // 멤버 등록 직후: User 이름(관리자 지정) 등 최신 반영을 위해 강제 새로고침
+      await memberProvider.loadMembers(placeId, forceRefreshUsers: true);
     } catch (e) {
       SnackbarUtil.showError(context, '멤버 등록 중 오류가 발생했습니다: $e');
     }

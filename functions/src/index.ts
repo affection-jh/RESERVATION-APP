@@ -2101,13 +2101,66 @@ export const removeMemberFromPlace = functions.https.onCall(async (data, context
     );
 
     // 4) reservations 삭제 (places/{placeId}/reservations)
-    const deletedReservations = await deleteByQuery(
-        db,
-        db.collection('places')
-            .doc(placeId)
-            .collection('reservations')
-            .where('userId', '==', targetUserId),
-    );
+    // ✅ 정합성: 현재 트리거(onReservationDeleted)는 비활성화되어 있으므로,
+    // 여기서 직접 sessionReservations.reservedCount도 함께 감소시켜야 함.
+    const reservationsSnap = await db
+        .collection('places')
+        .doc(placeId)
+        .collection('reservations')
+        .where('userId', '==', targetUserId)
+        .get();
+
+    let deletedReservations = 0;
+    if (!reservationsSnap.empty) {
+        const docs = reservationsSnap.docs;
+        const chunkSize = 200; // worst-case (delete 200 + sr update 200) < 500 writes
+
+        for (let i = 0; i < docs.length; i += chunkSize) {
+            const chunk = docs.slice(i, i + chunkSize);
+            const srDecrements = new Map<string, number>();
+
+            for (const d of chunk) {
+                const r = d.data() as any;
+                const courseId = String(r?.courseId ?? '');
+                const dayOfWeek = Number(r?.dayOfWeek ?? 0);
+                const startTime = String(r?.startTime ?? '');
+                const reservedDateString = String(r?.reservedDateString ?? '');
+                if (!courseId || !startTime || !reservedDateString || !Number.isFinite(dayOfWeek)) continue;
+                const sessionId = `${courseId}_${dayOfWeek}_${startTime}`;
+                const srKey = `${sessionId}_${reservedDateString}`;
+                srDecrements.set(srKey, (srDecrements.get(srKey) ?? 0) + 1);
+            }
+
+            await db.runTransaction(async (tx) => {
+                // read sr docs first (read-before-write)
+                const srDocs = new Map<string, FirebaseFirestore.DocumentSnapshot>();
+                for (const srKey of srDecrements.keys()) {
+                    const srRef = db.collection('sessionReservations').doc(srKey);
+                    srDocs.set(srKey, await tx.get(srRef));
+                }
+
+                // update sr reservedCount (clamp >= 0)
+                for (const [srKey, dec] of srDecrements.entries()) {
+                    const srRef = db.collection('sessionReservations').doc(srKey);
+                    const srDoc = srDocs.get(srKey)!;
+                    if (!srDoc.exists) continue;
+                    const current = Number((srDoc.data() as any)?.reservedCount ?? 0);
+                    const next = Math.max(0, current - dec);
+                    tx.update(srRef, {
+                        reservedCount: next,
+                        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+                    });
+                }
+
+                // delete reservations
+                for (const d of chunk) {
+                    tx.delete(d.ref);
+                }
+            });
+
+            deletedReservations += chunk.length;
+        }
+    }
 
     // 5) pendingMembers 삭제 (있으면)
     const phoneDigits = phoneNumberRaw.replace(/[^\d]/g, '');
@@ -3507,11 +3560,22 @@ export const batchCancelReservations = functions.https.onCall(async (data, conte
     // 트랜잭션 밖에서 enrollment 조회
     const enrollmentRefs = new Map<string, FirebaseFirestore.DocumentReference>();
     const enrollmentDocs = new Map<string, FirebaseFirestore.DocumentSnapshot>();
+    const pendingRefs = new Map<string, FirebaseFirestore.DocumentReference>(); // key: pendingId (placeId_phoneNumber)
 
     for (const { reservation } of reservationsToCancel) {
         const userId = String(reservation.userId);
         const courseId = String(reservation.courseId);
         const enrollmentId = `${userId}_${placeId}_${courseId}`;
+
+        // pending 멤버는 enrollments가 아니라 pendingMembers.courseEnrollments로 크레딧 복구해야 함
+        if (userId.startsWith('pending_')) {
+            const pendingId = userId.replace('pending_', '');
+            if (pendingId) {
+                pendingRefs.set(pendingId, db.collection('pendingMembers').doc(pendingId));
+            }
+            continue;
+        }
+
         if (!enrollmentRefs.has(enrollmentId)) {
             const enrollmentQuery = db
                 .collection('enrollments')
@@ -3534,6 +3598,10 @@ export const batchCancelReservations = functions.https.onCall(async (data, conte
         for (const [enrollmentId, ref] of enrollmentRefs.entries()) {
             enrollmentDocsInTx.set(enrollmentId, await tx.get(ref));
         }
+        const pendingDocsInTx = new Map<string, FirebaseFirestore.DocumentSnapshot>();
+        for (const [pendingId, ref] of pendingRefs.entries()) {
+            pendingDocsInTx.set(pendingId, await tx.get(ref));
+        }
 
         // 2) 모든 sessionReservations 조회 (선행 read)
         const srRefs = new Map<string, { ref: FirebaseFirestore.DocumentReference; doc: FirebaseFirestore.DocumentSnapshot }>();
@@ -3554,12 +3622,23 @@ export const batchCancelReservations = functions.https.onCall(async (data, conte
 
         // 3) enrollment remainingReservations 업데이트 (write)
         const enrollmentUpdates = new Map<string, { remaining: number; total: number }>();
+        const pendingCreditAdds = new Map<string, Map<string, number>>(); // pendingId -> (courseId -> count)
 
         for (const { reservation } of reservationsToCancel) {
             const userId = String(reservation.userId);
             const courseId = String(reservation.courseId);
             const enrollmentId = `${userId}_${placeId}_${courseId}`;
             const enrollmentDoc = enrollmentDocsInTx.get(enrollmentId);
+
+            if (userId.startsWith('pending_')) {
+                const pendingId = userId.replace('pending_', '');
+                if (pendingId) {
+                    if (!pendingCreditAdds.has(pendingId)) pendingCreditAdds.set(pendingId, new Map());
+                    const m = pendingCreditAdds.get(pendingId)!;
+                    m.set(courseId, (m.get(courseId) ?? 0) + 1);
+                }
+                continue;
+            }
 
             if (enrollmentDoc?.exists) {
                 if (!enrollmentUpdates.has(enrollmentId)) {
@@ -3576,6 +3655,25 @@ export const batchCancelReservations = functions.https.onCall(async (data, conte
         for (const [enrollmentId, update] of enrollmentUpdates.entries()) {
             const ref = enrollmentRefs.get(enrollmentId)!;
             tx.update(ref, { remainingReservations: update.remaining });
+        }
+
+        // pendingMembers 크레딧 복구
+        for (const [pendingId, byCourse] of pendingCreditAdds.entries()) {
+            const pendingDoc = pendingDocsInTx.get(pendingId);
+            if (!pendingDoc?.exists) continue;
+            const pendingData = pendingDoc.data() as any;
+            if (!Array.isArray(pendingData?.courseEnrollments)) continue;
+            const courseEnrollments = pendingData.courseEnrollments;
+            const updated = courseEnrollments.map((ce: any) => {
+                const ceCourseId = String(ce?.courseId ?? '');
+                const add = byCourse.get(ceCourseId) ?? 0;
+                if (add <= 0) return ce;
+                const total = Number(ce?.totalReservations ?? 0);
+                const remainingBase = Number(ce?.remainingReservations ?? total);
+                const newRemaining = Math.min(total, remainingBase + add);
+                return { ...ce, remainingReservations: newRemaining };
+            });
+            tx.update(pendingDoc.ref, { courseEnrollments: updated });
         }
 
         // 4) sessionReservations reservedCount 업데이트 (write)

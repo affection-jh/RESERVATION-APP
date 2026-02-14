@@ -36,9 +36,10 @@ class CustomCheckbox extends StatelessWidget {
           ),
           color: value ? activeColor : Colors.transparent,
         ),
-        child: value
-            ? Icon(Icons.check, size: size * 0.6, color: Colors.white)
-            : null,
+        child:
+            value
+                ? Icon(Icons.check, size: size * 0.6, color: Colors.white)
+                : null,
       ),
     );
   }
@@ -144,9 +145,10 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
     _endMinuteController = FixedExtentScrollController(initialItem: _endMinute);
 
     _capacityController = TextEditingController(
-      text: (widget.initialCapacity == -1 || widget.initialCapacity == 0)
-          ? ''
-          : widget.initialCapacity.toString(),
+      text:
+          (widget.initialCapacity == -1 || widget.initialCapacity == 0)
+              ? ''
+              : widget.initialCapacity.toString(),
     );
     _capacityController.addListener(() {
       setState(() {
@@ -188,15 +190,16 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
     final newEnd = _parseTimeToMinutes(endHour, endMinute);
 
     // 편집 모드인 경우, 현재 편집 중인 세션은 제외하고 체크
-    final sessionsToCheck = widget.isEditMode
-        ? widget.existingSessions!
-              .where(
-                (s) =>
-                    s.startTime != widget.initialStartTime ||
-                    s.endTime != widget.initialEndTime,
-              )
-              .toList()
-        : widget.existingSessions!;
+    final sessionsToCheck =
+        widget.isEditMode
+            ? widget.existingSessions!
+                .where(
+                  (s) =>
+                      s.startTime != widget.initialStartTime ||
+                      s.endTime != widget.initialEndTime,
+                )
+                .toList()
+            : widget.existingSessions!;
 
     for (final session in sessionsToCheck) {
       final sessionStartParts = session.startTime.split(':');
@@ -227,15 +230,16 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
     final checkTime = _parseTimeToMinutes(hour, minute);
 
     // 편집 모드인 경우, 현재 편집 중인 세션은 제외하고 체크
-    final sessionsToCheck = widget.isEditMode
-        ? widget.existingSessions!
-              .where(
-                (s) =>
-                    s.startTime != widget.initialStartTime ||
-                    s.endTime != widget.initialEndTime,
-              )
-              .toList()
-        : widget.existingSessions!;
+    final sessionsToCheck =
+        widget.isEditMode
+            ? widget.existingSessions!
+                .where(
+                  (s) =>
+                      s.startTime != widget.initialStartTime ||
+                      s.endTime != widget.initialEndTime,
+                )
+                .toList()
+            : widget.existingSessions!;
 
     for (final session in sessionsToCheck) {
       final sessionStartParts = session.startTime.split(':');
@@ -273,9 +277,8 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
     // 편집 모드가 아닌 경우 (드래그로 새로 추가하는 경우)
     if (!widget.isEditMode && widget.allDaySessions != null) {
       // 현재 요일을 제외한 다른 선택된 요일들 확인
-      final otherSelectedDays = widget.selectedDays
-          .where((day) => day != widget.dayOfWeek)
-          .toList();
+      final otherSelectedDays =
+          widget.selectedDays.where((day) => day != widget.dayOfWeek).toList();
 
       // 다른 요일들 중 하나라도 해당 시간대에 세션이 있으면 일괄 적용 숨김
       for (final day in otherSelectedDays) {
@@ -548,41 +551,41 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
                       focusNode: _capacityFocusNode,
                       keyboardType: TextInputType.number,
                       inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                      decoration:
-                          TextFieldDecorationUtil.defaultDecoration(
-                            hintText: '수용인원을 입력하세요',
-                            hasFocus: _capacityFocusNode.hasFocus,
-                            borderRadius: 12,
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 16,
-                            ),
-                          ).copyWith(
-                            suffixIcon: _capacityFocusNode.hasFocus
+                      decoration: TextFieldDecorationUtil.defaultDecoration(
+                        hintText: '수용인원을 입력하세요',
+                        hasFocus: _capacityFocusNode.hasFocus,
+                        borderRadius: 12,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 16,
+                        ),
+                      ).copyWith(
+                        suffixIcon:
+                            _capacityFocusNode.hasFocus
                                 ? Padding(
-                                    padding: const EdgeInsets.only(right: 8),
-                                    child: TextButton(
-                                      onPressed: () {
-                                        _capacityFocusNode.unfocus();
-                                      },
-                                      child: Text(
-                                        '완료',
-                                        style: TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w600,
-                                          color: widget.courseColor,
-                                        ),
+                                  padding: const EdgeInsets.only(right: 8),
+                                  child: TextButton(
+                                    onPressed: () {
+                                      _capacityFocusNode.unfocus();
+                                    },
+                                    child: Text(
+                                      '완료',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                        color: AppColors.primaryGreen,
                                       ),
                                     ),
-                                  )
-                                : Icon(
-                                    Icons.edit,
-                                    size: 18,
-                                    color: AppColors.textSecondary.withOpacity(
-                                      0.5,
-                                    ),
                                   ),
-                          ),
+                                )
+                                : Icon(
+                                  Icons.edit,
+                                  size: 18,
+                                  color: AppColors.textSecondary.withOpacity(
+                                    0.5,
+                                  ),
+                                ),
+                      ),
                     ),
                   ],
                 ),
@@ -745,21 +748,23 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
                   children: [
                     Expanded(
                       child: OutlinedButton(
-                        onPressed: widget.isEditMode
-                            ? _handleDelete
-                            : () {
-                                widget.onCancel();
-                                Navigator.of(context).pop();
-                              },
+                        onPressed:
+                            widget.isEditMode
+                                ? _handleDelete
+                                : () {
+                                  widget.onCancel();
+                                  Navigator.of(context).pop();
+                                },
                         style: OutlinedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
                           ),
                           side: BorderSide(
-                            color: widget.isEditMode
-                                ? Colors.red
-                                : AppColors.borderLight,
+                            color:
+                                widget.isEditMode
+                                    ? Colors.red
+                                    : AppColors.borderLight,
                             width: 1,
                           ),
                         ),
@@ -768,9 +773,10 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
-                            color: widget.isEditMode
-                                ? Colors.red
-                                : AppColors.textPrimary,
+                            color:
+                                widget.isEditMode
+                                    ? Colors.red
+                                    : AppColors.textPrimary,
                           ),
                         ),
                       ),
@@ -912,79 +918,82 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
               duration: const Duration(milliseconds: 300),
               curve: Curves.easeInOut,
               height: isExpanded ? 200 : 0,
-              child: isExpanded
-                  ? Row(
-                      children: [
-                        Expanded(
-                          child: CupertinoPicker(
-                            scrollController: hourController,
-                            itemExtent: 40,
-                            diameterRatio: 0.8,
-                            useMagnifier: false,
-                            onSelectedItemChanged: onHourChanged,
-                            children: List.generate(24, (index) {
-                              final isConflict = _isTimeInConflict(
-                                index,
-                                minute,
-                                isStartTime: isStartTime,
-                              );
-                              return Center(
-                                child: Text(
-                                  index.toString().padLeft(2, '0'),
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w500,
-                                    color: isConflict
-                                        ? AppColors.borderLight
-                                        : AppColors.textPrimary,
+              child:
+                  isExpanded
+                      ? Row(
+                        children: [
+                          Expanded(
+                            child: CupertinoPicker(
+                              scrollController: hourController,
+                              itemExtent: 40,
+                              diameterRatio: 0.8,
+                              useMagnifier: false,
+                              onSelectedItemChanged: onHourChanged,
+                              children: List.generate(24, (index) {
+                                final isConflict = _isTimeInConflict(
+                                  index,
+                                  minute,
+                                  isStartTime: isStartTime,
+                                );
+                                return Center(
+                                  child: Text(
+                                    index.toString().padLeft(2, '0'),
+                                    style: TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.w500,
+                                      color:
+                                          isConflict
+                                              ? AppColors.borderLight
+                                              : AppColors.textPrimary,
+                                    ),
                                   ),
-                                ),
-                              );
-                            }),
-                          ),
-                        ),
-                        const Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 8),
-                          child: Text(
-                            ':',
-                            style: TextStyle(
-                              fontSize: 24,
-                              fontWeight: FontWeight.bold,
-                              color: AppColors.textPrimary,
+                                );
+                              }),
                             ),
                           ),
-                        ),
-                        Expanded(
-                          child: CupertinoPicker(
-                            scrollController: minuteController,
-                            itemExtent: 40,
-                            diameterRatio: 0.8,
-                            useMagnifier: false,
-                            onSelectedItemChanged: onMinuteChanged,
-                            children: List.generate(60, (index) {
-                              final isConflict = _isTimeInConflict(
-                                hour,
-                                index,
-                                isStartTime: isStartTime,
-                              );
-                              return Center(
-                                child: Text(
-                                  index.toString().padLeft(2, '0'),
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w500,
-                                    color: isConflict
-                                        ? AppColors.borderLight
-                                        : AppColors.textPrimary,
-                                  ),
-                                ),
-                              );
-                            }),
+                          const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 8),
+                            child: Text(
+                              ':',
+                              style: TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.textPrimary,
+                              ),
+                            ),
                           ),
-                        ),
-                      ],
-                    )
-                  : const SizedBox.shrink(),
+                          Expanded(
+                            child: CupertinoPicker(
+                              scrollController: minuteController,
+                              itemExtent: 40,
+                              diameterRatio: 0.8,
+                              useMagnifier: false,
+                              onSelectedItemChanged: onMinuteChanged,
+                              children: List.generate(60, (index) {
+                                final isConflict = _isTimeInConflict(
+                                  hour,
+                                  index,
+                                  isStartTime: isStartTime,
+                                );
+                                return Center(
+                                  child: Text(
+                                    index.toString().padLeft(2, '0'),
+                                    style: TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.w500,
+                                      color:
+                                          isConflict
+                                              ? AppColors.borderLight
+                                              : AppColors.textPrimary,
+                                    ),
+                                  ),
+                                );
+                              }),
+                            ),
+                          ),
+                        ],
+                      )
+                      : const SizedBox.shrink(),
             ),
           ),
           SizedBox(height: MediaQuery.of(context).padding.bottom),

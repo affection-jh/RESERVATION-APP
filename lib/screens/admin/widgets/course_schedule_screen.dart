@@ -223,7 +223,7 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
             ),
             // 하단 버튼
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
               decoration: BoxDecoration(
                 color: AppColors.backgroundWhite,
                 border: Border(
@@ -237,7 +237,7 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primaryGreen,
                     disabledBackgroundColor: AppColors.borderLight,
-                    padding: const EdgeInsets.symmetric(vertical: 18),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(20),
                     ),
@@ -262,8 +262,8 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
 
   // 모든 요일의 캘린더를 동시에 표시
   Widget _buildAllDaysCalendar(double viewportHeight) {
-    final selectedDaysList = widget.colorSelectionData.selectedDays.toList()
-      ..sort();
+    final selectedDaysList =
+        widget.colorSelectionData.selectedDays.toList()..sort();
     if (selectedDaysList.isEmpty) {
       return const Center(child: Text('요일을 선택해주세요.'));
     }
@@ -297,9 +297,10 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
       color: AppColors.backgroundWhite,
       child: SingleChildScrollView(
         controller: _calendarScrollController,
-        physics: _isAnyDragging
-            ? const NeverScrollableScrollPhysics()
-            : const AlwaysScrollableScrollPhysics(),
+        physics:
+            _isAnyDragging
+                ? const NeverScrollableScrollPhysics()
+                : const AlwaysScrollableScrollPhysics(),
         child: SizedBox(
           height: totalHeight,
           child: Row(
@@ -316,47 +317,51 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
                 ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
-                  children: hours.map((hour) {
-                    return Container(
-                      height: hourSlotHeight,
-                      alignment: Alignment.topRight,
-                      padding: const EdgeInsets.only(right: 8, top: 0),
-                      child: Text(
-                        hour.toString().padLeft(2, '0'),
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w400,
-                          color: AppColors.textSecondary,
-                          height: 1.0,
-                        ),
-                      ),
-                    );
-                  }).toList(),
+                  children:
+                      hours.map((hour) {
+                        return Container(
+                          height: hourSlotHeight,
+                          alignment: Alignment.topRight,
+                          padding: const EdgeInsets.only(right: 8, top: 0),
+                          child: Text(
+                            hour.toString().padLeft(2, '0'),
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w400,
+                              color: AppColors.textSecondary,
+                              height: 1.0,
+                            ),
+                          ),
+                        );
+                      }).toList(),
                 ),
               ),
               // 각 요일의 캘린더 (세로 스크롤은 바깥 SingleChildScrollView 하나만 사용 → 롱프레스 드래그 인식 보장)
               Expanded(
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  children: selectedDaysList.map((day) {
-                    return SizedBox(
-                      width:
-                          (MediaQuery.of(context).size.width - 35) /
-                          selectedDaysList.length,
-                      child: _buildDayScheduleEditor(
-                        day,
-                        hourSlotHeight: hourSlotHeight,
-                        totalHeight: totalHeight,
-                        scrollController: _calendarScrollController!,
-                        onDragStateChanged: (isDragging) {
-                          debugPrint('[CourseScheduleScreen] onDragStateChanged($isDragging)');
-                          setState(() {
-                            _isAnyDragging = isDragging;
-                          });
-                        },
-                      ),
-                    );
-                  }).toList(),
+                  children:
+                      selectedDaysList.map((day) {
+                        return SizedBox(
+                          width:
+                              (MediaQuery.of(context).size.width - 35) /
+                              selectedDaysList.length,
+                          child: _buildDayScheduleEditor(
+                            day,
+                            hourSlotHeight: hourSlotHeight,
+                            totalHeight: totalHeight,
+                            scrollController: _calendarScrollController!,
+                            onDragStateChanged: (isDragging) {
+                              debugPrint(
+                                '[CourseScheduleScreen] onDragStateChanged($isDragging)',
+                              );
+                              setState(() {
+                                _isAnyDragging = isDragging;
+                              });
+                            },
+                          ),
+                        );
+                      }).toList(),
                 ),
               ),
             ],
@@ -433,7 +438,9 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
         },
         onDragStateChanged: onDragStateChanged,
         onScrollBlockRequested: (block) {
-          debugPrint('[CourseScheduleScreen] onScrollBlockRequested($block) → _isAnyDragging=$block');
+          debugPrint(
+            '[CourseScheduleScreen] onScrollBlockRequested($block) → _isAnyDragging=$block',
+          );
           setState(() {
             _isAnyDragging = block;
           });
@@ -492,105 +499,145 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
       isDismissible: true,
       enableDrag: true,
       useSafeArea: true,
-      builder: (context) => Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom,
-        ),
-        child: SessionEditBottomSheet(
-          initialStartTime: startTime,
-          initialEndTime: endTime,
-          initialCapacity:
-              existingSession?.capacity ??
-              (_defaultCapacity == -1 ? 0 : _defaultCapacity),
-          courseName: widget.colorSelectionData.basicInfo.name,
-          dayOfWeek: dayOfWeek,
-          selectedDays: widget.colorSelectionData.selectedDays,
-          courseColor: Color(widget.colorSelectionData.selectedColor),
-          canBulkCancel: false,
-          existingSessions: existingSessionsForDay,
-          allDaySessions: _daySessions, // 모든 요일의 세션 정보 전달 (일괄 적용 가능 여부 확인용)
-          isEditMode: isEditMode,
-          onBulkRegistrationChanged: (isBulkRegistration) {
-            setState(() {
-              _isBulkPreview = isBulkRegistration;
-              _previewStartTime = startTime;
-              _previewEndTime = endTime;
-              _previewDayOfWeek = dayOfWeek;
-            });
-          },
-          onCancel: () {
-            // 미리보기 초기화
-            setState(() {
-              _previewStartTime = null;
-              _previewEndTime = null;
-              _previewDayOfWeek = null;
-              _isBulkPreview = false;
-            });
-            // 선택 영역 초기화
-            _clearSelectionForDay(dayOfWeek);
-          },
-          onRegister: (newStartTime, newEndTime, capacity, bulkDays) {
-            setState(() {
-              // 미리보기 초기화
-              _previewStartTime = null;
-              _previewEndTime = null;
-              _previewDayOfWeek = null;
-              _isBulkPreview = false;
+      builder:
+          (context) => Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(context).viewInsets.bottom,
+            ),
+            child: SessionEditBottomSheet(
+              initialStartTime: startTime,
+              initialEndTime: endTime,
+              initialCapacity:
+                  existingSession?.capacity ??
+                  (_defaultCapacity == -1 ? 0 : _defaultCapacity),
+              courseName: widget.colorSelectionData.basicInfo.name,
+              dayOfWeek: dayOfWeek,
+              selectedDays: widget.colorSelectionData.selectedDays,
+              courseColor: Color(widget.colorSelectionData.selectedColor),
+              canBulkCancel: false,
+              existingSessions: existingSessionsForDay,
+              allDaySessions: _daySessions, // 모든 요일의 세션 정보 전달 (일괄 적용 가능 여부 확인용)
+              isEditMode: isEditMode,
+              onBulkRegistrationChanged: (isBulkRegistration) {
+                setState(() {
+                  _isBulkPreview = isBulkRegistration;
+                  _previewStartTime = startTime;
+                  _previewEndTime = endTime;
+                  _previewDayOfWeek = dayOfWeek;
+                });
+              },
+              onCancel: () {
+                // 미리보기 초기화
+                setState(() {
+                  _previewStartTime = null;
+                  _previewEndTime = null;
+                  _previewDayOfWeek = null;
+                  _isBulkPreview = false;
+                });
+                // 선택 영역 초기화
+                _clearSelectionForDay(dayOfWeek);
+              },
+              onRegister: (newStartTime, newEndTime, capacity, bulkDays) {
+                setState(() {
+                  // 미리보기 초기화
+                  _previewStartTime = null;
+                  _previewEndTime = null;
+                  _previewDayOfWeek = null;
+                  _isBulkPreview = false;
 
-              // 수용인원 기억
-              _defaultCapacity = capacity;
+                  // 수용인원 기억
+                  _defaultCapacity = capacity;
 
-              // 일괄 적용 처리 (등록/수정 모두)
-              if (bulkDays != null && bulkDays.isNotEmpty) {
-                if (isEditMode) {
-                  // 수정 모드: 모든 요일에 동일하게 적용
-                  for (final bulkDay in bulkDays) {
-                    if (!_daySessions.containsKey(bulkDay)) {
-                      _daySessions[bulkDay] = [];
+                  // 일괄 적용 처리 (등록/수정 모두)
+                  if (bulkDays != null && bulkDays.isNotEmpty) {
+                    if (isEditMode) {
+                      // 수정 모드: 모든 요일에 동일하게 적용
+                      for (final bulkDay in bulkDays) {
+                        if (!_daySessions.containsKey(bulkDay)) {
+                          _daySessions[bulkDay] = [];
+                        }
+                        final sessions = _daySessions[bulkDay] ?? [];
+
+                        // 기존 세션 찾기 (동일 시간대)
+                        final existingIndex = sessions.indexWhere((session) {
+                          return session.startTime == startTime &&
+                              session.endTime == endTime;
+                        });
+
+                        if (existingIndex != -1) {
+                          // 기존 세션 수정 (겹침 방지)
+                          final temp = List<SessionDraft>.from(sessions);
+                          temp[existingIndex] = SessionDraft(
+                            startTime: newStartTime,
+                            endTime: newEndTime,
+                            capacity: capacity,
+                          );
+                          final hasOverlap = _hasAnyOverlapInDay(temp);
+                          if (!hasOverlap) {
+                            sessions[existingIndex] = temp[existingIndex];
+                          }
+                        } else {
+                          // 새 세션 추가 (겹침 체크)
+                          if (!_hasOverlap(bulkDay, newStartTime, newEndTime)) {
+                            sessions.add(
+                              SessionDraft(
+                                startTime: newStartTime,
+                                endTime: newEndTime,
+                                capacity: capacity,
+                              ),
+                            );
+                          }
+                        }
+                        _daySessions[bulkDay] = sessions;
+                      }
+                    } else {
+                      // 등록 모드: 겹치지 않는 요일에만 추가
+                      for (final bulkDay in bulkDays) {
+                        if (!_daySessions.containsKey(bulkDay)) {
+                          _daySessions[bulkDay] = [];
+                        }
+                        // 겹침 체크
+                        if (!_hasOverlap(bulkDay, newStartTime, newEndTime)) {
+                          _daySessions[bulkDay]!.add(
+                            SessionDraft(
+                              startTime: newStartTime,
+                              endTime: newEndTime,
+                              capacity: capacity,
+                            ),
+                          );
+                        }
+                      }
                     }
-                    final sessions = _daySessions[bulkDay] ?? [];
+                    widget.onSessionsChanged?.call(
+                      _daySessions,
+                      _defaultCapacity,
+                    );
+                    return;
+                  }
 
-                    // 기존 세션 찾기 (동일 시간대)
-                    final existingIndex = sessions.indexWhere((session) {
-                      return session.startTime == startTime &&
-                          session.endTime == endTime;
-                    });
-
-                    if (existingIndex != -1) {
-                      // 기존 세션 수정 (겹침 방지)
+                  if (isEditMode) {
+                    // 기존 세션 수정 (단일 요일)
+                    final sessions = _daySessions[dayOfWeek] ?? [];
+                    final index = sessions.indexOf(existingSession);
+                    if (index != -1) {
                       final temp = List<SessionDraft>.from(sessions);
-                      temp[existingIndex] = SessionDraft(
+                      temp[index] = SessionDraft(
                         startTime: newStartTime,
                         endTime: newEndTime,
                         capacity: capacity,
                       );
-                      final hasOverlap = _hasAnyOverlapInDay(temp);
-                      if (!hasOverlap) {
-                        sessions[existingIndex] = temp[existingIndex];
-                      }
-                    } else {
-                      // 새 세션 추가 (겹침 체크)
-                      if (!_hasOverlap(bulkDay, newStartTime, newEndTime)) {
-                        sessions.add(
-                          SessionDraft(
-                            startTime: newStartTime,
-                            endTime: newEndTime,
-                            capacity: capacity,
-                          ),
-                        );
+                      if (!_hasAnyOverlapInDay(temp)) {
+                        sessions[index] = temp[index];
+                        _daySessions[dayOfWeek] = sessions;
                       }
                     }
-                    _daySessions[bulkDay] = sessions;
-                  }
-                } else {
-                  // 등록 모드: 겹치지 않는 요일에만 추가
-                  for (final bulkDay in bulkDays) {
-                    if (!_daySessions.containsKey(bulkDay)) {
-                      _daySessions[bulkDay] = [];
+                  } else {
+                    // 새 세션 추가 (단일 요일)
+                    if (!_daySessions.containsKey(dayOfWeek)) {
+                      _daySessions[dayOfWeek] = [];
                     }
-                    // 겹침 체크
-                    if (!_hasOverlap(bulkDay, newStartTime, newEndTime)) {
-                      _daySessions[bulkDay]!.add(
+                    if (!_hasOverlap(dayOfWeek, newStartTime, newEndTime)) {
+                      _daySessions[dayOfWeek]!.add(
                         SessionDraft(
                           startTime: newStartTime,
                           endTime: newEndTime,
@@ -599,71 +646,39 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
                       );
                     }
                   }
-                }
-                widget.onSessionsChanged?.call(_daySessions, _defaultCapacity);
-                return;
-              }
-
-              if (isEditMode) {
-                // 기존 세션 수정 (단일 요일)
-                final sessions = _daySessions[dayOfWeek] ?? [];
-                final index = sessions.indexOf(existingSession);
-                if (index != -1) {
-                  final temp = List<SessionDraft>.from(sessions);
-                  temp[index] = SessionDraft(
-                    startTime: newStartTime,
-                    endTime: newEndTime,
-                    capacity: capacity,
-                  );
-                  if (!_hasAnyOverlapInDay(temp)) {
-                    sessions[index] = temp[index];
-                    _daySessions[dayOfWeek] = sessions;
-                  }
-                }
-              } else {
-                // 새 세션 추가 (단일 요일)
-                if (!_daySessions.containsKey(dayOfWeek)) {
-                  _daySessions[dayOfWeek] = [];
-                }
-                if (!_hasOverlap(dayOfWeek, newStartTime, newEndTime)) {
-                  _daySessions[dayOfWeek]!.add(
-                    SessionDraft(
-                      startTime: newStartTime,
-                      endTime: newEndTime,
-                      capacity: capacity,
-                    ),
-                  );
-                }
-              }
-              // 세션 변경 시 콜백 호출 (단일 요일)
-              widget.onSessionsChanged?.call(_daySessions, _defaultCapacity);
-            });
-            // 선택 영역 초기화
-            _clearSelectionForDay(dayOfWeek);
-          },
-          onDelete: isEditMode
-              ? (bulkDays) {
-                  setState(() {
-                    // 미리보기 초기화
-                    _previewStartTime = null;
-                    _previewEndTime = null;
-                    _previewDayOfWeek = null;
-                    _isBulkPreview = false;
-                    // 단일 삭제만 지원 (일괄 삭제 제거)
-                    final sessions = _daySessions[dayOfWeek] ?? [];
-                    sessions.remove(existingSession);
-                    _daySessions[dayOfWeek] = sessions;
-                  });
+                  // 세션 변경 시 콜백 호출 (단일 요일)
                   widget.onSessionsChanged?.call(
                     _daySessions,
                     _defaultCapacity,
                   );
-                  // 선택 영역 초기화
-                  _clearSelectionForDay(dayOfWeek);
-                }
-              : null,
-        ),
-      ),
+                });
+                // 선택 영역 초기화
+                _clearSelectionForDay(dayOfWeek);
+              },
+              onDelete:
+                  isEditMode
+                      ? (bulkDays) {
+                        setState(() {
+                          // 미리보기 초기화
+                          _previewStartTime = null;
+                          _previewEndTime = null;
+                          _previewDayOfWeek = null;
+                          _isBulkPreview = false;
+                          // 단일 삭제만 지원 (일괄 삭제 제거)
+                          final sessions = _daySessions[dayOfWeek] ?? [];
+                          sessions.remove(existingSession);
+                          _daySessions[dayOfWeek] = sessions;
+                        });
+                        widget.onSessionsChanged?.call(
+                          _daySessions,
+                          _defaultCapacity,
+                        );
+                        // 선택 영역 초기화
+                        _clearSelectionForDay(dayOfWeek);
+                      }
+                      : null,
+            ),
+          ),
     ).then((_) {
       // 바텀시트가 닫힐 때 (dismissed) 미리보기 및 선택 영역 초기화
       setState(() {

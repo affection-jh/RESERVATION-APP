@@ -21,7 +21,8 @@ enum MemberRegistrationMode {
 
 /// 멤버 등록 화면 (사이드 패널)
 class MemberRegistrationScreen extends StatefulWidget {
-  final Function(List<Map<String, dynamic>>) onSave;
+  /// 저장 완료(DB 반영 포함) 후에만 pop 되도록 반드시 Future를 반환해야 합니다.
+  final Future<void> Function(List<Map<String, dynamic>>) onSave;
   final String? initialName;
   final String? initialPhone;
   final List<String>? initialCourseIds;
@@ -409,6 +410,40 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
     }
   }
 
+  /// 등록한 멤버가 구독(members/pendingMembers)에 실제로 반영될 때까지 대기
+  Future<void> _waitUntilMembersVisibleInList() async {
+    final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+    final memberProvider = Provider.of<MemberProvider>(context, listen: false);
+    final placeId = placeProvider.currentPlace?.id;
+    if (placeId == null) return;
+
+    final phonesWeAdded = _memberList
+        .map((m) => _normalizePhone(m['phoneNumber'] as String))
+        .toSet()
+        .toList();
+    if (phonesWeAdded.isEmpty) return;
+
+    const maxWait = Duration(seconds: 15);
+    const interval = Duration(milliseconds: 300);
+    final deadline = DateTime.now().add(maxWait);
+
+    while (DateTime.now().isBefore(deadline)) {
+      if (!mounted) return;
+      final members = memberProvider.members;
+      final pending = memberProvider.pendingMembers;
+      final foundPhones = <String>{};
+      for (final m in members) {
+        foundPhones.add(_normalizePhone(m.phoneNumber));
+      }
+      for (final p in pending) {
+        foundPhones.add(_normalizePhone(p.phoneNumber));
+      }
+      final allFound = phonesWeAdded.every((phone) => foundPhones.contains(phone));
+      if (allFound) return;
+      await Future.delayed(interval);
+    }
+  }
+
   Future<void> _handleSave() async {
     if (_memberList.isEmpty || _isSaving) return;
 
@@ -418,6 +453,9 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
 
     try {
       await widget.onSave(_memberList);
+      if (!mounted) return;
+      // 구독에서 새 멤버가 실제로 감지될 때까지 로딩 유지
+      await _waitUntilMembersVisibleInList();
       if (mounted) {
         Navigator.of(context).pop();
       }

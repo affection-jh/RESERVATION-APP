@@ -517,6 +517,8 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
             if (distanceSquared > thresholdSquared) {
               _longPressTimer?.cancel();
               _longPressStartPosition = null;
+              // 스크롤로 간주했으므로 막았던 스크롤 해제 → 그냥 드래그(스크롤) 시 리스트가 움직이도록
+              widget.onScrollBlockRequested?.call(false);
             }
           }
         },

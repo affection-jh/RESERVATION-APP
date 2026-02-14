@@ -70,6 +70,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
   String? _errorMessage;
   String? _errorType;
   bool _isLoading = false;
+  // 주차 전환 후 로딩이 끝나도 레이아웃이 잡힐 때까지 그리드 숨김 (요동 방지)
+  bool _showGridAfterLoad = true;
 
   // UI 상수 정의
   static const double _minHourSlotHeight = 120.0; // 세션이 있는 구간의 최소 한 시간당 높이 (px)
@@ -163,6 +165,15 @@ class _CalendarScreenState extends State<CalendarScreen> {
       setState(() {
         _isLoading = nextLoading;
       });
+      // 로딩이 끝난 뒤 잠시 뒤에 그리드 표시 (레이아웃 안정화 후 세션 박스 요동 방지)
+      if (!nextLoading) {
+        Future.delayed(const Duration(milliseconds: 350), () {
+          if (!mounted) return;
+          setState(() {
+            _showGridAfterLoad = true;
+          });
+        });
+      }
     }
   }
 
@@ -378,6 +389,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
   }
 
   /// 정책 기반 주차 범위 계산 (미리 열린 주차 포함)
+  /// 이번 주(0)는 항상 탭에 포함.
   void _updateAvailableWeekOffsets(CoursePolicy policy) {
     // 정책 기반 기본 주차 범위
     final baseOffsets = WeekRangeCalculator.getAvailableWeekOffsets(policy);
@@ -404,17 +416,26 @@ class _CalendarScreenState extends State<CalendarScreen> {
       }
     }
 
-    // 정책 기반 주차 + 미리 열린 주차 합치기
-    final allOffsets = <int>{...baseOffsets, ...openedOffsets};
-    final sortedOffsets = allOffsets.toList()..sort();
+    // 정책 기반 주차 + 미리 열린 주차 합치기 (이번 주 0은 항상 포함)
+    var sortedOffsets = <int>[0, ...baseOffsets, ...openedOffsets].toSet().toList()..sort();
 
+    // 빈 리스트 방지 (clamp(0, -1) 예외 방지)
+    if (sortedOffsets.isEmpty) {
+      sortedOffsets = [0];
+    }
+
+    var didChangeWeek = false;
     setState(() {
       _availableWeekOffsets = sortedOffsets;
-      // 선택된 주차가 범위를 벗어나면 조정
-      if (_weekOffset >= _availableWeekOffsets.length) {
-        _weekOffset = _availableWeekOffsets.length - 1;
+      // 선택된 주가 범위를 벗어나면 마지막 탭으로
+      if (_availableWeekOffsets.isNotEmpty && _weekOffset > _availableWeekOffsets.last) {
+        _weekOffset = _availableWeekOffsets.last;
+        didChangeWeek = true;
       }
     });
+    if (didChangeWeek && mounted) {
+      _subscribeWeekSessionReservations();
+    }
   }
 
   void _ensureUserDataLoaded() {
@@ -465,7 +486,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
         // 정책 기반 주차 범위 계산 (미리 열린 주차 포함)
         _updateAvailableWeekOffsets(policy);
         // 선택된 주차가 범위를 벗어나면 조정
-        if (_weekOffset >= _availableWeekOffsets.length) {
+        if (_availableWeekOffsets.isNotEmpty &&
+            _weekOffset >= _availableWeekOffsets.length) {
           _weekOffset = _availableWeekOffsets.length - 1;
         }
       });
@@ -479,7 +501,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
         _coursePolicy = defaultPolicy;
         // 정책 기반 주차 범위 계산 (미리 열린 주차 포함)
         _updateAvailableWeekOffsets(defaultPolicy);
-        if (_weekOffset >= _availableWeekOffsets.length) {
+        if (_availableWeekOffsets.isNotEmpty &&
+            _weekOffset >= _availableWeekOffsets.length) {
           _weekOffset = _availableWeekOffsets.length - 1;
         }
       });
@@ -857,14 +880,20 @@ class _CalendarScreenState extends State<CalendarScreen> {
             ),
             Expanded(
               child: WeekTabBar(
-                selectedIndex: _availableWeekOffsets
-                    .indexOf(_weekOffset)
-                    .clamp(0, _availableWeekOffsets.length - 1),
+                selectedIndex: _availableWeekOffsets.isEmpty
+                    ? 0
+                    : _availableWeekOffsets
+                        .indexOf(_weekOffset)
+                        .clamp(0, _availableWeekOffsets.length - 1),
                 onTabChanged: (index) {
                   if (index < _availableWeekOffsets.length) {
                     setState(() {
                       _weekOffset = _availableWeekOffsets[index];
                       _didInitialJump = false;
+                      _isLoading = true;
+                      _showGridAfterLoad = false;
+                      _sessionReservationsLoaded = false;
+                      _courseOverridesLoaded = false;
                     });
                     _subscribeWeekSessionReservations();
                   }
@@ -895,6 +924,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
                               _weekOffset =
                                   _availableWeekOffsets[currentIndex - 1];
                               _didInitialJump = false;
+                              _isLoading = true;
+                              _showGridAfterLoad = false;
+                              _sessionReservationsLoaded = false;
+                              _courseOverridesLoaded = false;
                             });
                             _subscribeWeekSessionReservations();
                           }
@@ -905,6 +938,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
                               _weekOffset =
                                   _availableWeekOffsets[currentIndex + 1];
                               _didInitialJump = false;
+                              _isLoading = true;
+                              _showGridAfterLoad = false;
+                              _sessionReservationsLoaded = false;
+                              _courseOverridesLoaded = false;
                             });
                             _subscribeWeekSessionReservations();
                           }
@@ -915,31 +952,25 @@ class _CalendarScreenState extends State<CalendarScreen> {
                           // 요일 헤더
                           _buildDayHeaders(sessionDates),
 
-                          // 주차 변경 시 로딩 중이면 스피너만 표시, 완료 후 카드 표시
+                          // 주차 변경 시 로딩 중·레이아웃 대기 중에는 스피너만, 그 후 세션 그리드 표시 (요동 방지)
                           Expanded(
-                            child:
-                                _isLoading
-                                    ? Center(
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          CircularProgressIndicator(
-                                            valueColor:
-                                                AlwaysStoppedAnimation<Color>(
-                                                  AppColors.primaryGreen,
-                                                ),
+                            child: (_isLoading || !_showGridAfterLoad)
+                                ? Center(
+                                    child: CircularProgressIndicator(
+                                      valueColor:
+                                          AlwaysStoppedAnimation<Color>(
+                                            AppColors.primaryGreen,
                                           ),
-                                        ],
-                                      ),
-                                    )
-                                    : LayoutBuilder(
-                                      builder: (context, constraints) {
-                                        return _buildCalendarGrid(
-                                          sessionDates,
-                                          viewportHeight: constraints.maxHeight,
-                                        );
-                                      },
                                     ),
+                                  )
+                                : LayoutBuilder(
+                                    builder: (context, constraints) {
+                                      return _buildCalendarGrid(
+                                        sessionDates,
+                                        viewportHeight: constraints.maxHeight,
+                                      );
+                                    },
+                                  ),
                           ),
                         ],
                       ),

@@ -59,19 +59,44 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
         const existingDoc = await overrideRef.get();
         const existingData = existingDoc.exists ? (existingDoc.data() as any) : null;
         const existingIsCancelled = existingData?.isCancelled === true;
+        const effDate = String(existingData?.date ?? date);
+        const effDayOfWeek = Number(existingData?.dayOfWeek ?? dayOfWeek);
+        const effStartTime = String(existingData?.startTime ?? startTime ?? '');
 
         // cancel override 삭제는 복원 목적이므로 예약은 유지
         if (existingIsCancelled) {
-        await overrideRef.delete();
+            if (!effDate || !effStartTime || !effDayOfWeek) {
+                // 문서가 오염된 경우라도 override 삭제는 진행
+                await overrideRef.delete();
+                logFunctionSuccess(functionName, { overrideId: finalOverrideId, action: 'delete', restored: true, clearedSrCancel: false });
+                return { success: true, overrideId: finalOverrideId };
+            }
+
+            // ✅ createReservation은 sessionReservations.isCancelled로 취소 여부를 판단하므로,
+            // cancel override 삭제(복원) 시 sessionReservations의 취소 마커도 함께 해제해야 함.
+            const sessionId = `${courseId}_${effDayOfWeek}_${effStartTime}`;
+            const srRef = db.collection('sessionReservations').doc(`${sessionId}_${effDate}`);
+            await db.runTransaction(async (tx) => {
+                const srDoc = await tx.get(srRef);
+                if (srDoc.exists) {
+                    const reservedCount = Number((srDoc.data() as any)?.reservedCount ?? 0);
+                    // 예약이 0이면 문서 자체를 제거(유령 cancel 마커 방지), 아니면 cancel만 해제
+                    if (reservedCount <= 0) {
+                        tx.delete(srRef);
+                    } else {
+                        tx.update(srRef, {
+                            isCancelled: false,
+                            lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+                        });
+                    }
+                }
+                tx.delete(overrideRef);
+            });
             logFunctionSuccess(functionName, { overrideId: finalOverrideId, action: 'delete', restored: true });
             return { success: true, overrideId: finalOverrideId };
         }
 
         // add override 삭제: 세션 자체 삭제로 간주 → 해당 세션 예약/크레딧/sessionReservations 정리
-        const effDate = String(existingData?.date ?? date);
-        const effDayOfWeek = Number(existingData?.dayOfWeek ?? dayOfWeek);
-        const effStartTime = String(existingData?.startTime ?? startTime ?? '');
-
         if (!effDate || !effStartTime || !effDayOfWeek) {
             throw new functions.https.HttpsError(
                 'invalid-argument',
@@ -92,31 +117,47 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
         const reservationSnapshot = await reservationQuery.get();
         const reservationIds: string[] = [];
         const userIds = new Set<string>();
-        const enrollmentRefs = new Map<string, FirebaseFirestore.DocumentReference>();
+        const enrollmentRefByUserId = new Map<string, FirebaseFirestore.DocumentReference>();
+        const pendingRefByPendingId = new Map<string, FirebaseFirestore.DocumentReference>();
 
         for (const doc of reservationSnapshot.docs) {
             const r = doc.data() as any;
             reservationIds.push(doc.id);
-            userIds.add(r.userId);
+            const uid = String(r?.userId ?? '');
+            if (!uid) continue;
+            userIds.add(uid);
+
+            // pending 멤버 크레딧 복구 준비
+            if (uid.startsWith('pending_')) {
+                const pendingId = uid.replace('pending_', '');
+                if (pendingId) {
+                    pendingRefByPendingId.set(pendingId, db.collection('pendingMembers').doc(pendingId));
+                }
+                continue;
+            }
 
             // enrollment 조회
             const enrollmentQuery = db
                 .collection('enrollments')
-                .where('userId', '==', r.userId)
+                .where('userId', '==', uid)
                 .where('courseId', '==', courseId)
                 .where('placeId', '==', placeId)
                 .limit(1);
             const enrollmentSnapshot = await enrollmentQuery.get();
             if (!enrollmentSnapshot.empty) {
-                enrollmentRefs.set(enrollmentSnapshot.docs[0].id, enrollmentSnapshot.docs[0].ref);
+                enrollmentRefByUserId.set(uid, enrollmentSnapshot.docs[0].ref);
             }
         }
 
         await db.runTransaction(async (tx) => {
             // enrollment 문서 다시 읽기
-            const enrollmentDocsInTx = new Map<string, FirebaseFirestore.DocumentSnapshot>();
-            for (const [enrollmentId, ref] of enrollmentRefs.entries()) {
-                enrollmentDocsInTx.set(enrollmentId, await tx.get(ref));
+            const enrollmentDocsByUserId = new Map<string, FirebaseFirestore.DocumentSnapshot>();
+            for (const [uid, ref] of enrollmentRefByUserId.entries()) {
+                enrollmentDocsByUserId.set(uid, await tx.get(ref));
+            }
+            const pendingDocsByPendingId = new Map<string, FirebaseFirestore.DocumentSnapshot>();
+            for (const [pendingId, ref] of pendingRefByPendingId.entries()) {
+                pendingDocsByPendingId.set(pendingId, await tx.get(ref));
             }
 
             // sessionReservations 조회 (비정기 세션도 동일한 sessionId 규칙)
@@ -129,18 +170,32 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
                 const r = doc.data() as any;
                 tx.delete(doc.ref);
 
-                // enrollment 복구
-                const enrollmentId = Array.from(enrollmentRefs.keys()).find(id => {
-                    const enrollmentDoc = enrollmentDocsInTx.get(id);
-                    return enrollmentDoc?.data()?.userId === r.userId;
-                });
-                if (enrollmentId) {
-                    const enrollmentDoc = enrollmentDocsInTx.get(enrollmentId);
-                    if (enrollmentDoc?.exists) {
-                        const currentRemaining = Number(enrollmentDoc.data()?.remainingReservations ?? 0);
-                        tx.update(enrollmentDoc.ref, {
-                            remainingReservations: currentRemaining + 1,
+                const uid = String(r?.userId ?? '');
+                if (!uid) continue;
+
+                // ✅ enrollment/pending 크레딧 복구(최대 total까지 clamp)
+                if (uid.startsWith('pending_')) {
+                    const pendingId = uid.replace('pending_', '');
+                    const pendingDoc = pendingDocsByPendingId.get(pendingId);
+                    if (pendingDoc?.exists) {
+                        const pendingData = pendingDoc.data() as any;
+                        const courseEnrollments = Array.isArray(pendingData?.courseEnrollments) ? pendingData.courseEnrollments : [];
+                        const updated = courseEnrollments.map((ce: any) => {
+                            if (String(ce?.courseId ?? '') !== courseId) return ce;
+                            const total = Number(ce?.totalReservations ?? 0);
+                            const remainingBase = Number(ce?.remainingReservations ?? total);
+                            const newRemaining = Math.min(total, remainingBase + 1);
+                            return { ...ce, remainingReservations: newRemaining };
                         });
+                        tx.update(pendingDoc.ref, { courseEnrollments: updated });
+                    }
+                } else {
+                    const enrollmentDoc = enrollmentDocsByUserId.get(uid);
+                    if (enrollmentDoc?.exists) {
+                        const currentRemaining = Number((enrollmentDoc.data() as any)?.remainingReservations ?? 0);
+                        const total = Number((enrollmentDoc.data() as any)?.totalReservations ?? 0);
+                        const newRemaining = Math.min(total, currentRemaining + 1);
+                        tx.update(enrollmentDoc.ref, { remainingReservations: newRemaining });
                     }
                 }
             }
@@ -205,32 +260,47 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
         const reservationSnapshot = await reservationQuery.get();
         const reservationIds: string[] = [];
         const userIds = new Set<string>();
-        const enrollmentRefs = new Map<string, FirebaseFirestore.DocumentReference>();
+        const enrollmentRefByUserId = new Map<string, FirebaseFirestore.DocumentReference>();
+        const pendingRefByPendingId = new Map<string, FirebaseFirestore.DocumentReference>();
 
         for (const doc of reservationSnapshot.docs) {
             const r = doc.data() as any;
             reservationIds.push(doc.id);
-            userIds.add(r.userId);
+            const uid = String(r?.userId ?? '');
+            if (!uid) continue;
+            userIds.add(uid);
+
+            if (uid.startsWith('pending_')) {
+                const pendingId = uid.replace('pending_', '');
+                if (pendingId) {
+                    pendingRefByPendingId.set(pendingId, db.collection('pendingMembers').doc(pendingId));
+                }
+                continue;
+            }
 
             // enrollment 조회
             const enrollmentQuery = db
                 .collection('enrollments')
-                .where('userId', '==', r.userId)
+                .where('userId', '==', uid)
                 .where('courseId', '==', courseId)
                 .where('placeId', '==', placeId)
                 .limit(1);
             const enrollmentSnapshot = await enrollmentQuery.get();
             if (!enrollmentSnapshot.empty) {
-                enrollmentRefs.set(enrollmentSnapshot.docs[0].id, enrollmentSnapshot.docs[0].ref);
+                enrollmentRefByUserId.set(uid, enrollmentSnapshot.docs[0].ref);
             }
         }
 
         // 트랜잭션: 예약 취소 + enrollment 복구 + sessionReservations 업데이트
         await db.runTransaction(async (tx) => {
             // enrollment 문서 다시 읽기
-            const enrollmentDocsInTx = new Map<string, FirebaseFirestore.DocumentSnapshot>();
-            for (const [enrollmentId, ref] of enrollmentRefs.entries()) {
-                enrollmentDocsInTx.set(enrollmentId, await tx.get(ref));
+            const enrollmentDocsByUserId = new Map<string, FirebaseFirestore.DocumentSnapshot>();
+            for (const [uid, ref] of enrollmentRefByUserId.entries()) {
+                enrollmentDocsByUserId.set(uid, await tx.get(ref));
+            }
+            const pendingDocsByPendingId = new Map<string, FirebaseFirestore.DocumentSnapshot>();
+            for (const [pendingId, ref] of pendingRefByPendingId.entries()) {
+                pendingDocsByPendingId.set(pendingId, await tx.get(ref));
             }
 
             // sessionReservations 조회
@@ -243,29 +313,60 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
                 const r = doc.data() as any;
                 tx.delete(doc.ref);
 
-                // enrollment 복구
-                const enrollmentId = Array.from(enrollmentRefs.keys()).find(id => {
-                    const enrollmentDoc = enrollmentDocsInTx.get(id);
-                    return enrollmentDoc?.data()?.userId === r.userId;
-                });
-                if (enrollmentId) {
-                    const enrollmentDoc = enrollmentDocsInTx.get(enrollmentId);
-                    if (enrollmentDoc?.exists) {
-                        const currentRemaining = Number(enrollmentDoc.data()?.remainingReservations ?? 0);
-                        tx.update(enrollmentDoc.ref, {
-                            remainingReservations: currentRemaining + 1,
+                const uid = String(r?.userId ?? '');
+                if (!uid) continue;
+
+                // ✅ enrollment/pending 크레딧 복구(최대 total까지 clamp)
+                if (uid.startsWith('pending_')) {
+                    const pendingId = uid.replace('pending_', '');
+                    const pendingDoc = pendingDocsByPendingId.get(pendingId);
+                    if (pendingDoc?.exists) {
+                        const pendingData = pendingDoc.data() as any;
+                        const courseEnrollments = Array.isArray(pendingData?.courseEnrollments) ? pendingData.courseEnrollments : [];
+                        const updated = courseEnrollments.map((ce: any) => {
+                            if (String(ce?.courseId ?? '') !== courseId) return ce;
+                            const total = Number(ce?.totalReservations ?? 0);
+                            const remainingBase = Number(ce?.remainingReservations ?? total);
+                            const newRemaining = Math.min(total, remainingBase + 1);
+                            return { ...ce, remainingReservations: newRemaining };
                         });
+                        tx.update(pendingDoc.ref, { courseEnrollments: updated });
+                    }
+                } else {
+                    const enrollmentDoc = enrollmentDocsByUserId.get(uid);
+                    if (enrollmentDoc?.exists) {
+                        const currentRemaining = Number((enrollmentDoc.data() as any)?.remainingReservations ?? 0);
+                        const total = Number((enrollmentDoc.data() as any)?.totalReservations ?? 0);
+                        const newRemaining = Math.min(total, currentRemaining + 1);
+                        tx.update(enrollmentDoc.ref, { remainingReservations: newRemaining });
                     }
                 }
             }
 
             // sessionReservations 업데이트
+            // ✅ createReservation은 sessionReservations.isCancelled를 보고 취소를 강제하므로,
+            // sr 문서가 없더라도 "취소 마커"는 반드시 남겨야 함.
+            const currentReservedCount = srDoc.exists ? Number((srDoc.data() as any)?.reservedCount ?? 0) : 0;
+            const nextReservedCount = Math.max(0, currentReservedCount - reservationIds.length);
             if (srDoc.exists) {
-                const currentReservedCount = Number(srDoc.data()?.reservedCount ?? 0);
                 tx.update(srRef, {
-                    reservedCount: Math.max(0, currentReservedCount - reservationIds.length),
+                    reservedCount: nextReservedCount,
                     isCancelled: true,
                     lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+                });
+            } else {
+                tx.set(srRef, {
+                    id: `${sessionId}_${date}`,
+                    sessionId,
+                    courseId,
+                    placeId,
+                    dayOfWeek,
+                    startTime,
+                    date,
+                    reservedCount: 0,
+                    isCancelled: true,
+                    lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+                    createdAt: admin.firestore.FieldValue.serverTimestamp(),
                 });
             }
         });

@@ -20,6 +20,10 @@ class MemberProvider with ChangeNotifier {
   String? _error;
   StreamSubscription<List<User>>? _memberSubscription;
   StreamSubscription<List<PendingMember>>? _pendingMemberSubscription;
+  StreamSubscription<Map<String, String>>? _membershipDisplayNameSubscription;
+
+  // userId -> 관리자 표시 이름 (placeMemberships.displayName)
+  Map<String, String> _membershipDisplayNamesByUserId = {};
 
   // 코스별 멤버 캐시 (courseId -> List<User>)
   final Map<String, List<User>> _courseMembersCache = {};
@@ -32,6 +36,8 @@ class MemberProvider with ChangeNotifier {
 
   List<User> get members => List.unmodifiable(_members);
   List<PendingMember> get pendingMembers => List.unmodifiable(_pendingMembers);
+  Map<String, String> get membershipDisplayNamesByUserId =>
+      Map.unmodifiable(_membershipDisplayNamesByUserId);
   bool get isLoading => _isLoading;
   String? get error => _error;
   Set<String> get deletingMemberIds => Set.unmodifiable(_deletingMemberIds);
@@ -81,21 +87,47 @@ class MemberProvider with ChangeNotifier {
     }
   }
 
+  /// 등록 직후 등: 첫 emit이 이전 상태(0명)일 수 있으므로, 첫 emit 후 이 시간만큼 대기해
+  /// Firestore 반영된 두 번째 emit이 올 때까지 기다린 뒤 완료합니다.
+  static const Duration _loadMembersStabilizeDelay = Duration(milliseconds: 550);
+
   /// 플레이스 멤버 목록 로드 (courseMembers 기반 + pendingMembers)
   /// users.placeIds는 더 이상 사용하지 않으므로 courseMembers에서 조회
-  Future<void> loadMembers(String placeId) async {
+  /// 반환된 Future는 양쪽 스트림에서 최소 1회 emit된 뒤, 잠시 대기 후 완료됩니다.
+  Future<void> loadMembers(String placeId, {bool forceRefreshUsers = false}) async {
     if (kDebugMode) {
       debugPrint('[MemberProvider] loadMembers start placeId=$placeId');
     }
     // 기존 구독이 있으면 취소
     await _memberSubscription?.cancel();
     await _pendingMemberSubscription?.cancel();
+    await _membershipDisplayNameSubscription?.cancel();
     _memberSubscription = null;
     _pendingMemberSubscription = null;
+    _membershipDisplayNameSubscription = null;
 
     _isLoading = true;
     _error = null;
     notifyListeners();
+
+    final completer = Completer<void>();
+    var membersEmitted = false;
+    var pendingEmitted = false;
+    var membershipNamesEmitted = false;
+    var delayScheduled = false;
+    void maybeComplete() {
+      if (membersEmitted &&
+          pendingEmitted &&
+          membershipNamesEmitted &&
+          !completer.isCompleted &&
+          !delayScheduled) {
+        delayScheduled = true;
+        // 첫 emit은 등록 직후엔 이전 상태(0명)일 수 있음. 잠시 대기해 두 번째 emit 반영 후 완료.
+        Future.delayed(_loadMembersStabilizeDelay, () {
+          if (!completer.isCompleted) completer.complete();
+        });
+      }
+    }
 
     try {
       final enrollmentService = EnrollmentService();
@@ -128,15 +160,17 @@ class MemberProvider with ChangeNotifier {
               );
             }
 
-            // 캐시에 없는 userId만 조회
-            final missingUserIds =
-                userIds.where((id) => !_userCache.containsKey(id)).toList();
+            // ✅ 이름 등 최신 정보 보장을 위해 필요 시 강제 재조회
+            final userIdsToFetch =
+                forceRefreshUsers
+                    ? userIds
+                    : userIds.where((id) => !_userCache.containsKey(id)).toList();
 
             // 배치 조회
-            if (missingUserIds.isNotEmpty) {
+            if (userIdsToFetch.isNotEmpty) {
               try {
                 final fetchedUsers = await _userService.getUsersByIds(
-                  missingUserIds,
+                  userIdsToFetch,
                 );
                 // 캐시에 저장
                 for (final user in fetchedUsers) {
@@ -169,6 +203,8 @@ class MemberProvider with ChangeNotifier {
               _members = members;
               _error = null;
               _isLoading = false;
+              membersEmitted = true;
+              maybeComplete();
               if (kDebugMode) {
                 debugPrint(
                   '[MemberProvider] members updated placeId=$placeId count=${members.length}',
@@ -180,6 +216,8 @@ class MemberProvider with ChangeNotifier {
               _error = error.toString();
               _members = [];
               _isLoading = false;
+              membersEmitted = true;
+              maybeComplete();
               if (kDebugMode) {
                 debugPrint(
                   '[MemberProvider] courseMembers error placeId=$placeId error=$_error',
@@ -195,6 +233,8 @@ class MemberProvider with ChangeNotifier {
           .listen(
             (pendingMembers) {
               _pendingMembers = pendingMembers;
+              pendingEmitted = true;
+              maybeComplete();
               if (kDebugMode) {
                 debugPrint(
                   '[MemberProvider] pendingMembers updated placeId=$placeId count=${pendingMembers.length}',
@@ -205,6 +245,8 @@ class MemberProvider with ChangeNotifier {
             onError: (error) {
               // pendingMembers 에러는 무시
               _pendingMembers = [];
+              pendingEmitted = true;
+              maybeComplete();
               if (kDebugMode) {
                 debugPrint(
                   '[MemberProvider] pendingMembers error placeId=$placeId error=$error',
@@ -212,11 +254,37 @@ class MemberProvider with ChangeNotifier {
               }
             },
           );
+
+      // placeMemberships.displayName Stream 구독 (관리자 지정 표시 이름)
+      _membershipDisplayNameSubscription = _memberService
+          .watchPlaceMembershipDisplayNamesByPlace(placeId)
+          .listen(
+            (displayNames) {
+              _membershipDisplayNamesByUserId = displayNames;
+              membershipNamesEmitted = true;
+              maybeComplete();
+              notifyListeners();
+            },
+            onError: (error) {
+              _membershipDisplayNamesByUserId = {};
+              membershipNamesEmitted = true;
+              maybeComplete();
+              if (kDebugMode) {
+                debugPrint(
+                  '[MemberProvider] membership displayName error placeId=$placeId error=$error',
+                );
+              }
+            },
+          );
+
+      await completer.future;
     } catch (e) {
       _error = e.toString();
       _members = [];
       _pendingMembers = [];
+      _membershipDisplayNamesByUserId = {};
       _isLoading = false;
+      if (!completer.isCompleted) completer.complete();
       if (kDebugMode) {
         debugPrint(
           '[MemberProvider] loadMembers catch placeId=$placeId error=$_error',
@@ -285,10 +353,13 @@ class MemberProvider with ChangeNotifier {
   Future<void> clear() async {
     await _memberSubscription?.cancel();
     await _pendingMemberSubscription?.cancel();
+    await _membershipDisplayNameSubscription?.cancel();
     _memberSubscription = null;
     _pendingMemberSubscription = null;
+    _membershipDisplayNameSubscription = null;
     _members = [];
     _pendingMembers = [];
+    _membershipDisplayNamesByUserId = {};
     _isLoading = false;
     _error = null;
     // 캐시도 초기화

@@ -602,9 +602,10 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       // 초기 로드 (이후에는 CourseProvider 스트림으로 자동 업데이트)
       await _loadOverridesForWeek(placeId, weekStartDate, course.id);
     } finally {
-      // admin_home_screen 모드에서 로딩 종료 (성공/실패 관계없이)
+      // admin_home_screen 모드: 오버라이드 반영 후 UI 안정될 때까지 로딩 유지 (최소 500ms)
       if (!widget.hideCourseSelector && _isLoadingWeek) {
-        if (mounted) {
+        await Future.delayed(const Duration(milliseconds: 300));
+        if (mounted && _isLoadingWeek) {
           setState(() {
             _isLoadingWeek = false;
           });
@@ -1225,20 +1226,29 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       return weekStart.add(Duration(days: index));
     });
 
-    // 토일(6, 7)에 세션이 없으면 필터링
+    // 토일(6, 7): 정기 세션 또는 비정기 일정이 있으면 표시
     final hasSaturdaySession = selectedCourseSessions.any(
       (s) => s.dayOfWeek == 6,
     );
     final hasSundaySession = selectedCourseSessions.any(
       (s) => s.dayOfWeek == 7,
     );
+    final saturdayDate = allWeekDates[5];
+    final sundayDate = allWeekDates[6];
+    final saturdayDateStr = TimezoneUtils.formatDateToSeoul(saturdayDate);
+    final sundayDateStr = TimezoneUtils.formatDateToSeoul(sundayDate);
+    final hasSaturdayOverride = (_overridesByDate[saturdayDateStr] ?? []).any(
+      (o) => o.isCancelled != true && o.startTime != null && o.endTime != null,
+    );
+    final hasSundayOverride = (_overridesByDate[sundayDateStr] ?? []).any(
+      (o) => o.isCancelled != true && o.startTime != null && o.endTime != null,
+    );
 
     final weekDates =
         allWeekDates.where((date) {
-          // 토요일이고 세션이 없으면 제외
-          if (date.weekday == 6 && !hasSaturdaySession) return false;
-          // 일요일이고 세션이 없으면 제외
-          if (date.weekday == 7 && !hasSundaySession) return false;
+          if (date.weekday == 6)
+            return hasSaturdaySession || hasSaturdayOverride;
+          if (date.weekday == 7) return hasSundaySession || hasSundayOverride;
           return true;
         }).toList();
 
@@ -1252,30 +1262,24 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
           if (!widget.hideCourseSelector) _buildCourseSelector(),
           // 요일 헤더 (축 유지 → 깜빡임 방지)
           _buildDayHeaders(weekDates),
-          // 캘린더 그리드 (축 유지, 하위 영역에만 로딩 스피너)
+          // 캘린더 그리드 (로딩 중에는 시간 축만 보이고 세션 박스 숨김 + 스피너)
           Expanded(
-            child: Stack(
-              children: [
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    return _buildCalendarGrid(
-                      weekDates,
-                      viewportHeight: constraints.maxHeight,
-                    );
-                  },
-                ),
-                if (isLoading)
-                  Positioned.fill(
-                    child: Center(
-                      child: CircularProgressIndicator(
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          AppColors.primaryGreen,
-                        ),
-                      ),
-                    ),
+            child: isLoading
+                ? LayoutBuilder(
+                    builder: (context, constraints) {
+                      return _buildLoadingGridWithTimeAxis(
+                        viewportHeight: constraints.maxHeight,
+                      );
+                    },
+                  )
+                : LayoutBuilder(
+                    builder: (context, constraints) {
+                      return _buildCalendarGrid(
+                        weekDates,
+                        viewportHeight: constraints.maxHeight,
+                      );
+                    },
                   ),
-              ],
-            ),
           ),
         ],
       ),
@@ -1465,59 +1469,61 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     return Container(
       height: showAddButton ? 140 : _emptyStateHeight,
       color: widget.backgroundColor ?? AppColors.backgroundWhite,
-      padding: showAddButton
-          ? const EdgeInsets.symmetric(horizontal: 16, vertical: 24)
-          : null,
-      child: showAddButton
-          ? Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
+      padding:
+          showAddButton
+              ? const EdgeInsets.symmetric(horizontal: 16, vertical: 24)
+              : null,
+      child:
+          showAddButton
+              ? Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    message,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textSecondary.withOpacity(0.6),
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 10),
+                  Center(
+                    child: ElevatedButton(
+                      onPressed: widget.onAddCourseTap,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primaryGreen,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 16,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        elevation: 0,
+                      ),
+                      child: const Text(
+                        '코스 추가하기',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              )
+              : Center(
+                child: Text(
                   message,
                   style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
                     color: AppColors.textSecondary.withOpacity(0.6),
                   ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 10),
-                Center(
-                  child: ElevatedButton(
-                    onPressed: widget.onAddCourseTap,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primaryGreen,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 16,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      elevation: 0,
-                    ),
-                    child: const Text(
-                      '코스 추가하기',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            )
-          : Center(
-              child: Text(
-                message,
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textSecondary.withOpacity(0.6),
                 ),
               ),
-            ),
     );
   }
 
@@ -1557,6 +1563,61 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
               ),
             );
           }).toList(),
+        ],
+      ),
+    );
+  }
+
+  /// 로딩 중 표시: 시간 축만 보이고 세션 영역에는 스피너 (높이를 viewport에 맞춰 오버플로우 방지)
+  Widget _buildLoadingGridWithTimeAxis({required double viewportHeight}) {
+    const hours = 24;
+    final slotHeight = viewportHeight / hours; // viewport 안에 맞춤
+    return Container(
+      height: viewportHeight,
+      color: widget.backgroundColor ?? AppColors.backgroundWhite,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 시간 축
+          SizedBox(
+            width: _timeColumnWidth,
+            height: viewportHeight,
+            child: ListView.builder(
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: hours,
+              itemExtent: slotHeight,
+              itemBuilder: (context, i) {
+                return Align(
+                  alignment: Alignment.topRight,
+                  child: Padding(
+                    padding: const EdgeInsets.only(
+                      right: _timeTextPaddingRight,
+                      top: 0,
+                    ),
+                    child: Text(
+                      i.toString().padLeft(2, '0'),
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w400,
+                        color: AppColors.textSecondary.withOpacity(0.4),
+                        height: 1.0,
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          // 세션 영역 (빈 공간 + 스피너)
+          Expanded(
+            child: Center(
+              child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(
+                  AppColors.primaryGreen,
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );

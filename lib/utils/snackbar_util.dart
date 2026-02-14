@@ -336,7 +336,7 @@ class _LoadingSnackBar extends StatelessWidget {
                       ),
                     ),
                   ),
-                  const SizedBox(width: 14),
+                  const SizedBox(width: 10),
                   Flexible(
                     child: Text(
                       message,

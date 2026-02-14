@@ -297,28 +297,43 @@ class MemberService {
           }
         }
 
-        // 2-2. placeMembership 보장 (User가 존재하는 경우에만)
+        // 2-2. placeMembership 보장 + 관리자 지정 표시 이름 저장 (User가 존재하는 경우에만)
         if (existingUserId != null &&
             membershipRef != null &&
-            membershipDoc != null &&
-            !membershipDoc.exists) {
-          debugPrint('📝 [MemberService] placeMembership 생성 시작');
+            membershipDoc != null) {
           final now = TimezoneUtils.getSeoulDateTime();
-          final membership = PlaceMembership(
-            id: membershipRef.id,
-            userId: existingUserId,
-            placeId: placeId,
-            requestedAt: now,
-            approvedAt: now, // status 제거로 항상 멤버
-            invitedBy: adminId,
-          );
-
-          final membershipData = membership.toJson();
           final ts = _firestoreService.dateTimeToTimestamp(now);
-          membershipData['requestedAt'] = ts;
-          membershipData['approvedAt'] = ts;
-          tx.set(membershipRef, membershipData);
-          debugPrint('✅ [MemberService] placeMembership 생성 완료');
+          final trimmedName = name.trim();
+
+          if (!membershipDoc.exists) {
+            debugPrint('📝 [MemberService] placeMembership 생성 시작');
+            final membership = PlaceMembership(
+              id: membershipRef.id,
+              userId: existingUserId,
+              placeId: placeId,
+              requestedAt: now,
+              approvedAt: now, // status 제거로 항상 멤버
+              invitedBy: adminId,
+            );
+
+            final membershipData = membership.toJson();
+            membershipData['requestedAt'] = ts;
+            membershipData['approvedAt'] = ts;
+            if (trimmedName.isNotEmpty) {
+              membershipData['displayName'] = trimmedName;
+            }
+            membershipData['updatedAt'] = ts;
+            tx.set(membershipRef, membershipData);
+            debugPrint('✅ [MemberService] placeMembership 생성 완료');
+          } else {
+            // 이미 멤버십이 있더라도, 관리자가 멤버 등록 시 입력한 이름을 표시 이름으로 최신화
+            if (trimmedName.isNotEmpty) {
+              tx.update(membershipRef, {
+                'displayName': trimmedName,
+                'updatedAt': ts,
+              });
+            }
+          }
         }
 
         // 2-3. users 문서는 관리자/클라이언트가 타인 uid로 생성/수정할 수 없음 (rules).
@@ -454,27 +469,32 @@ class MemberService {
     }
   }
 
-  /// 멤버 이름 업데이트
+  /// 멤버 표시 이름 업데이트 (관리자용)
   ///
+  /// Firestore rules 상 타인 `users` 문서는 수정이 막혀있을 수 있으므로,
+  /// `placeMemberships.displayName`(또는 pendingMembers.name)으로 저장한다.
+  ///
+  /// [placeId] 플레이스 ID
   /// [phoneNumber] 전화번호
-  /// [newName] 새로운 이름
+  /// [newName] 새로운 표시 이름
   ///
-  /// Returns: 업데이트된 User 또는 null
-  Future<User?> updateMemberName({
+  /// Returns: 업데이트 성공 여부
+  Future<bool> updateMemberName({
+    required String placeId,
     required String phoneNumber,
     required String newName,
   }) async {
     try {
       debugPrint('🔥 [MemberService] 멤버 이름 업데이트 시작');
       debugPrint(
-        '🔥 [MemberService] phoneNumber: $phoneNumber, newName: $newName',
+        '🔥 [MemberService] placeId: $placeId, phoneNumber: $phoneNumber, newName: $newName',
       );
 
       // 전화번호 정규화
       final normalizedPhone = _normalizePhone(phoneNumber);
       if (normalizedPhone.length != 11) {
         debugPrint('❌ [MemberService] 전화번호 형식 오류: $normalizedPhone');
-        return null;
+        return false;
       }
 
       // User 찾기
@@ -485,76 +505,52 @@ class MemberService {
       if (user != null) {
         debugPrint('✅ [MemberService] User 발견: ${user.userId}');
 
-        // 이름이 같으면 업데이트 불필요
-        if (user.name == newName) {
-          debugPrint('ℹ️ [MemberService] 이름이 동일하여 업데이트 불필요');
-          return user;
+        final trimmed = newName.trim();
+        if (trimmed.isEmpty) {
+          debugPrint('❌ [MemberService] newName empty');
+          return false;
         }
 
-        // 이름 업데이트
-        final updatedUser = user.copyWith(
-          name: newName,
-          updatedAt: TimezoneUtils.getSeoulDateTime(),
-        );
-
-        debugPrint('📝 [MemberService] User 업데이트 시작');
-        await _userService.updateUserDirect(updatedUser);
-        debugPrint('✅ [MemberService] User 업데이트 완료');
-
-        return updatedUser;
+        // ✅ users.name 대신 placeMemberships.displayName 업데이트 (현재 place 기준)
+        final membershipId = '${user.userId}_$placeId';
+        final membershipRef = _firestore
+            .collection('placeMemberships')
+            .doc(membershipId);
+        await membershipRef.set({
+          'id': membershipId,
+          'userId': user.userId,
+          'placeId': placeId,
+          'displayName': trimmed,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+        debugPrint('✅ [MemberService] placeMembership displayName 업데이트 완료');
+        return true;
       }
 
       // User가 없으면 pending 멤버 확인
       debugPrint('🔍 [MemberService] User 없음, pendingMembers 조회 시작');
-      final pendingQuery = _firestore
-          .collection('pendingMembers')
-          .where('phoneNumber', isEqualTo: normalizedPhone);
-      final pendingSnapshot = await pendingQuery.get();
+      final trimmed = newName.trim();
+      if (trimmed.isEmpty) return false;
 
-      if (pendingSnapshot.docs.isEmpty) {
+      final pendingId = '${placeId}_$normalizedPhone';
+      final pendingRef = _firestore.collection('pendingMembers').doc(pendingId);
+      final pendingDoc = await pendingRef.get();
+
+      if (!pendingDoc.exists) {
         debugPrint('❌ [MemberService] User와 pendingMembers 모두 찾을 수 없음');
-        return null;
+        return false;
       }
 
-      // pending 멤버 이름 업데이트 (여러 플레이스에 있을 수 있으므로 모두 업데이트)
-      debugPrint(
-        '✅ [MemberService] pendingMembers 발견: ${pendingSnapshot.docs.length}개',
-      );
-      final batch = _firestore.batch();
-      for (final doc in pendingSnapshot.docs) {
-        final data = doc.data();
-        final currentName = data['name'] as String? ?? '';
-        if (currentName != newName) {
-          batch.update(doc.reference, {
-            'name': newName,
-            'updatedAt': FieldValue.serverTimestamp(),
-          });
-          debugPrint(
-            '📝 [MemberService] pendingMembers 업데이트: ${doc.id} ($currentName -> $newName)',
-          );
-        }
-      }
-      await batch.commit();
-      debugPrint('✅ [MemberService] pendingMembers 업데이트 완료');
-
-      // User 객체로 변환하여 반환 (첫 번째 pending 멤버 기준)
-      final firstPending = pendingSnapshot.docs.first.data();
-      return User(
-        userId: 'pending_${pendingSnapshot.docs.first.id}',
-        name: newName,
-        phoneNumber: normalizedPhone,
-        placeIds: [firstPending['placeId'] as String? ?? ''],
-        enrollments: const [],
-        reservations: const [],
-        notificationsEnabled: false,
-        createdAt:
-            (firstPending['createdAt'] as Timestamp?)?.toDate() ??
-            TimezoneUtils.getSeoulDateTime(),
-        updatedAt: TimezoneUtils.getSeoulDateTime(),
-      );
+      debugPrint('📝 [MemberService] pendingMembers 이름 업데이트 시작: $pendingId');
+      await pendingRef.update({
+        'name': trimmed,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      debugPrint('✅ [MemberService] pendingMembers 이름 업데이트 완료');
+      return true;
     } catch (e) {
       debugPrint('❌ [MemberService] 멤버 이름 업데이트 실패: $e');
-      return null;
+      return false;
     }
   }
 
@@ -792,6 +788,32 @@ class MemberService {
               })
               .whereType<PendingMember>()
               .toList();
+        });
+  }
+
+  /// 플레이스별 placeMemberships의 관리자 표시 이름(displayName) 맵
+  ///
+  /// Returns: userId -> displayName
+  Stream<Map<String, String>> watchPlaceMembershipDisplayNamesByPlace(
+    String placeId,
+  ) {
+    return _firestore
+        .collection('placeMemberships')
+        .where('placeId', isEqualTo: placeId)
+        .snapshots()
+        .map((snapshot) {
+          final map = <String, String>{};
+          for (final doc in snapshot.docs) {
+            final data = doc.data();
+            final userId = data['userId'] as String?;
+            final displayName = data['displayName'] as String?;
+            if (userId == null) continue;
+            final trimmed = (displayName ?? '').trim();
+            if (trimmed.isNotEmpty) {
+              map[userId] = trimmed;
+            }
+          }
+          return map;
         });
   }
 
