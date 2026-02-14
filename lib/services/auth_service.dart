@@ -14,6 +14,7 @@ import '../utils/timezone_utils.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart' hide User;
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth show User;
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import '../firebase_options.dart';
 
@@ -115,9 +116,12 @@ class AuthService {
     if (kIsWeb) {
       try {
         // 이미 같은 번호로 발송 완료된 경우 리캡챠 없이 기존 결과 재사용 (이중 호출/재발송 시 리캡챠 중복 방지)
-        if (_webConfirmationResult != null && _webLastSentPhone == formattedPhone) {
+        if (_webConfirmationResult != null &&
+            _webLastSentPhone == formattedPhone) {
           final verificationId = _webConfirmationResult!.verificationId;
-          debugPrint('[AuthService.sendVerificationCode] (web) 기존 발송 결과 재사용 (리캡챠 스킵)');
+          debugPrint(
+            '[AuthService.sendVerificationCode] (web) 기존 발송 결과 재사용 (리캡챠 스킵)',
+          );
           await _storageService.saveVerificationId(verificationId, phoneNumber);
           return verificationId;
         }
@@ -206,10 +210,10 @@ class AuthService {
               );
             } else if (e.code == 'web-context-cancelled' ||
                 (e.message != null &&
-                    e.message!.toLowerCase().contains('cancelled by the user'))) {
-              completer.completeError(
-                Exception('인증이 취소되었습니다. 다시 시도해주세요.'),
-              );
+                    e.message!.toLowerCase().contains(
+                      'cancelled by the user',
+                    ))) {
+              completer.completeError(Exception('인증이 취소되었습니다. 다시 시도해주세요.'));
             } else if (e.code == 'invalid-phone-number') {
               completer.completeError(Exception('전화번호 형식이 올바르지 않습니다.'));
             } else if (e.code == 'too-many-requests') {
@@ -458,8 +462,16 @@ class AuthService {
         name: name,
       );
     } else {
-      // 기존 사용자 - userId가 Firebase UID와 다를 수 있으므로 업데이트 고려
-      // (선택적: 기존 userId 유지 또는 Firebase UID로 업데이트)
+      // 기존 사용자: Firestore 규칙이 users/request.auth.uid 존재를 요구하므로,
+      // 예전 문서 ID(user_123 등)만 있는 경우 users/{auth.uid} 문서를 생성해 둠.
+      // (pendingMembers 읽기 시 hasUserDoc() && phoneNumber 일치로 권한 통과)
+      if (user.userId != firebaseUser.uid) {
+        await _ensureAuthUidUserDoc(
+          authUid: firebaseUser.uid,
+          phoneNumber: finalPhoneNumber,
+          name: user.name,
+        );
+      }
     }
 
     // 인증 정보 삭제
@@ -1008,6 +1020,27 @@ class AuthService {
               .toIso8601String();
     }
     return models.User.fromJson(data);
+  }
+
+  /// Firestore 규칙이 users/request.auth.uid 존재를 요구할 때 사용.
+  /// 기존 사용자가 예전 문서 ID(user_123 등)로만 있으면 pendingMembers 읽기에서
+  /// hasUserDoc()가 false가 되어 권한 오류가 난다. 이 메서드로 users/{authUid} 문서를
+  /// 최소한(phoneNumber, name)만 넣어 두면 규칙 통과 후 나머지 로직은 기존 userId로 동작.
+  Future<void> _ensureAuthUidUserDoc({
+    required String authUid,
+    required String phoneNumber,
+    required String name,
+  }) async {
+    final firestore = _firestoreService.firestore;
+    final ref = firestore.collection('users').doc(authUid);
+    await ref.set({
+      'userId': authUid,
+      'phoneNumber': phoneNumber,
+      'name': name,
+      'updatedAt': _firestoreService.dateTimeToTimestamp(
+        TimezoneUtils.getSeoulDateTime(),
+      ),
+    }, SetOptions(merge: true));
   }
 
   /// 신규 사용자 생성

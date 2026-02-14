@@ -314,7 +314,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primaryGreen,
                     foregroundColor: Colors.white,
-                    disabledBackgroundColor: AppColors.borderLight,
+                    disabledBackgroundColor: AppColors.backgroundLight,
                     disabledForegroundColor: AppColors.textLight,
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
