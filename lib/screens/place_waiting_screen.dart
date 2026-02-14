@@ -1027,7 +1027,9 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
                                   },
                                 )
                                 : firebaseUser != null
-                                ? _buildNoInvitedPlacesPlaceholder()
+                                ? (MediaQuery.of(context).viewInsets.bottom == 0
+                                    ? _buildNoInvitedPlacesPlaceholder()
+                                    : const SizedBox.shrink())
                                 : (MediaQuery.of(context).viewInsets.bottom == 0
                                     ? _buildNoVisitHistoryPlaceholder()
                                     : const SizedBox.shrink())),

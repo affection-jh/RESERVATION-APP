@@ -58,9 +58,11 @@ class ReservationCompleteBottomSheet extends StatelessWidget {
                   color: AppColors.backgroundWhite,
                   borderRadius: BorderRadius.circular(30),
                 ),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 32,
+                padding: EdgeInsets.only(
+                  left: 24,
+                  right: 24,
+                  top: 32,
+                  bottom: 32 + MediaQuery.of(context).padding.bottom,
                 ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,

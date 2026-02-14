@@ -105,7 +105,12 @@ class ReservationManageBottomSheet extends StatelessWidget {
         color: AppColors.backgroundWhite,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 32),
+      padding: EdgeInsets.only(
+        left: 0,
+        right: 0,
+        top: 32,
+        bottom: 32 + MediaQuery.of(context).padding.bottom,
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,

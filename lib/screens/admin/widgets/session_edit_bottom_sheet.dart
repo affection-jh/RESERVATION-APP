@@ -987,6 +987,7 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
                   : const SizedBox.shrink(),
             ),
           ),
+          SizedBox(height: MediaQuery.of(context).padding.bottom),
         ],
       ),
     );

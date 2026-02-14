@@ -270,7 +270,9 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                   left: 20,
                   right: 24,
                   top: 24,
-                  bottom: 40 + MediaQuery.of(context).viewInsets.bottom,
+                  bottom: 40 +
+                      MediaQuery.of(context).padding.bottom +
+                      MediaQuery.of(context).viewInsets.bottom,
                 ),
                 child: SingleChildScrollView(
                   child: Column(

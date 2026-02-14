@@ -62,8 +62,9 @@ class _MemberEditBottomSheetState extends State<MemberEditBottomSheet> {
     return StatefulBuilder(
       builder: (context, setState) {
         final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+        final paddingBottom = MediaQuery.of(context).padding.bottom;
         return Container(
-          padding: EdgeInsets.only(bottom: bottomInset),
+          padding: EdgeInsets.only(bottom: bottomInset + paddingBottom),
           child: Stack(
             children: [
               Positioned.fill(
@@ -87,9 +88,11 @@ class _MemberEditBottomSheetState extends State<MemberEditBottomSheet> {
                         topRight: Radius.circular(30),
                       ),
                     ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 32,
+                    padding: EdgeInsets.only(
+                      left: 24,
+                      right: 24,
+                      top: 32,
+                      bottom: 32 + MediaQuery.of(context).padding.bottom,
                     ),
                     child: SingleChildScrollView(
                       child: Column(

@@ -65,10 +65,15 @@ class _SessionManageBottomSheetState extends State<SessionManageBottomSheet> {
         ),
       ),
       child: SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // 핸들 바
+        bottom: false,
+        child: Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).padding.bottom,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 핸들 바
             Container(
               margin: const EdgeInsets.only(top: 12, bottom: 8),
               width: 40,
@@ -283,6 +288,7 @@ class _SessionManageBottomSheetState extends State<SessionManageBottomSheet> {
             ),
             SizedBox(height: MediaQuery.of(context).viewInsets.bottom),
           ],
+        ),
         ),
       ),
     );

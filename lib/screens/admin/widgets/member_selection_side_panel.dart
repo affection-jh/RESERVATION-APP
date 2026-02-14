@@ -252,11 +252,12 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final paddingBottom = MediaQuery.of(context).padding.bottom;
     final screenHeight = MediaQuery.of(context).size.height;
     final maxHeight = screenHeight * 0.7;
 
     return Container(
-      padding: EdgeInsets.only(bottom: bottomInset),
+      padding: EdgeInsets.only(bottom: bottomInset + paddingBottom),
       decoration: const BoxDecoration(color: Colors.transparent),
       child: Stack(
         children: [

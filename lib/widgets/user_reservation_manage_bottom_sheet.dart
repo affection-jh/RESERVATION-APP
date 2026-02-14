@@ -240,9 +240,11 @@ class _UserReservationManageBottomSheetState
                       top: Radius.circular(30),
                     ),
                   ),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 12,
+                  padding: EdgeInsets.only(
+                    left: 20,
+                    right: 20,
+                    top: 12,
+                    bottom: 12 + MediaQuery.of(context).padding.bottom,
                   ),
                   child: SingleChildScrollView(
                     child: Column(

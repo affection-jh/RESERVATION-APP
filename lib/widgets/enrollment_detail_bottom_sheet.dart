@@ -72,7 +72,9 @@ class _EnrollmentDetailBottomSheetState
                   child: SingleChildScrollView(
                     child: Padding(
                       padding: EdgeInsets.only(
-                        bottom: MediaQuery.of(context).viewInsets.bottom + 32,
+                        bottom: MediaQuery.of(context).padding.bottom +
+                            MediaQuery.of(context).viewInsets.bottom +
+                            32,
                       ),
                       child: Column(
                         mainAxisSize: MainAxisSize.min,

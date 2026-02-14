@@ -27,7 +27,8 @@ class NameEditBottomSheet extends StatefulWidget {
       useSafeArea: true,
       builder: (context) => Padding(
         padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom,
+          bottom: MediaQuery.of(context).padding.bottom +
+              MediaQuery.of(context).viewInsets.bottom,
         ),
         child: NameEditBottomSheet(initialName: initialName),
       ),

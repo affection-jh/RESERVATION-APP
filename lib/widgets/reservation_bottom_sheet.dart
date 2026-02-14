@@ -218,9 +218,11 @@ class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
                     color: AppColors.backgroundWhite,
                     borderRadius: BorderRadius.circular(30),
                   ),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 24,
+                  padding: EdgeInsets.only(
+                    left: 24,
+                    right: 24,
+                    top: 24,
+                    bottom: 24 + MediaQuery.of(context).padding.bottom,
                   ),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,

@@ -449,7 +449,9 @@ class _CourseColorPickerBottomSheetState
                     ),
                   ),
 
-                  SizedBox(height: 30),
+                  SizedBox(
+                    height: 30 + MediaQuery.of(context).padding.bottom,
+                  ),
                 ],
               ),
             ),
