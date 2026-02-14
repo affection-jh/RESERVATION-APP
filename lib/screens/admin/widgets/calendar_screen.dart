@@ -952,7 +952,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                           // 요일 헤더
                           _buildDayHeaders(sessionDates),
 
-                          // 주차 변경 시 로딩 중·레이아웃 대기 중에는 스피너만, 그 후 세션 그리드 표시 (요동 방지)
+                          // 주차 변경 시 로딩 중·레이아웃 대기 중에는 스피너만, 그 후 세션 그리드 페이드 인
                           Expanded(
                             child: (_isLoading || !_showGridAfterLoad)
                                 ? Center(
@@ -963,13 +963,25 @@ class _CalendarScreenState extends State<CalendarScreen> {
                                           ),
                                     ),
                                   )
-                                : LayoutBuilder(
-                                    builder: (context, constraints) {
-                                      return _buildCalendarGrid(
-                                        sessionDates,
-                                        viewportHeight: constraints.maxHeight,
+                                : TweenAnimationBuilder<double>(
+                                    key: ValueKey('grid_$_weekOffset'),
+                                    tween: Tween(begin: 0, end: 1),
+                                    duration: const Duration(milliseconds: 320),
+                                    curve: Curves.easeOut,
+                                    builder: (context, value, child) {
+                                      return Opacity(
+                                        opacity: value,
+                                        child: child,
                                       );
                                     },
+                                    child: LayoutBuilder(
+                                      builder: (context, constraints) {
+                                        return _buildCalendarGrid(
+                                          sessionDates,
+                                          viewportHeight: constraints.maxHeight,
+                                        );
+                                      },
+                                    ),
                                   ),
                           ),
                         ],

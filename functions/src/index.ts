@@ -6,7 +6,7 @@ import type { Change } from 'firebase-functions';
 import { logFunctionStart, logFunctionSuccess, logFunctionError, logWarn } from './logger';
 import { assertAdminUid, assertAdminForPlaceUid, isAdminForPlaceUid } from './admin_auth';
 import { getPlaceOrThrow, getCourseName, findCourse } from './course_catalog';
-import { throwRequiresForce, throwRequiresCascade, throwRequiresBulkMove } from './action_protocol';
+import { throwRequiresForce, throwRequiresCascade, throwRequiresCascadeDeleteCourse, throwRequiresBulkMove } from './action_protocol';
 import {
     incrementSessionReservedCountUpsert,
 } from './reservation_ops';
@@ -2386,6 +2386,273 @@ export const updateCourseSchedule = functions.https.onCall(async (data, context)
 });
 
 /**
+ * 코스 삭제 (관리자, 서버 단일 진실)
+ *
+ * 요구사항:
+ * - 코스를 places/{placeId}.courses 에서 제거
+ * - 관련 데이터(예약/세션카운트/오버라이드/정책/주차오픈/멤버데이터)를 모두 정리
+ * - 미래 예약이 남아있으면 cascade=false일 때 requiresCascade로 차단
+ *
+ * 주의:
+ * - 대량 데이터 대비: batch + pagination
+ * - 예약 트리거는 비활성화 상태이므로(sessionReservations 정리 포함) 서버에서 직접 삭제
+ */
+export const deleteCourse = functions.https.onCall(async (data, context) => {
+    const functionName = 'deleteCourse';
+    logFunctionStart(functionName, { userId: context.auth?.uid, ...data });
+
+    if (!context.auth?.uid) {
+        throw new functions.https.HttpsError('unauthenticated', '로그인이 필요합니다.');
+    }
+
+    const callerId = context.auth.uid;
+    const placeId = String(data?.placeId ?? '');
+    const courseId = String(data?.courseId ?? '');
+    const cascade = data?.cascade === true;
+
+    if (!placeId || !courseId) {
+        throw new functions.https.HttpsError('invalid-argument', 'placeId, courseId가 필요합니다.');
+    }
+
+    await assertAdminForPlaceUid(callerId, placeId);
+
+    const db = admin.firestore();
+    const now = getSeoulDateTime();
+    const todayString = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+
+    // 0) place + course 확인
+    const placeDoc = await db.collection('places').doc(placeId).get();
+    if (!placeDoc.exists) {
+        throw new functions.https.HttpsError('not-found', '플레이스를 찾을 수 없습니다.');
+    }
+    const placeData = placeDoc.data() as any;
+    const course = findCourse(placeData, courseId);
+    if (!course) {
+        throw new functions.https.HttpsError('not-found', '코스를 찾을 수 없습니다.');
+    }
+    const courseName = getCourseName(placeData, courseId);
+
+    // 1) 미래 예약 존재 확인 (cascade=false면 차단)
+    // - today 포함: 실제 취소 가능한 예약만 계산(세션 시작 전)
+    const futureQuery = db
+        .collection('places')
+        .doc(placeId)
+        .collection('reservations')
+        .where('courseId', '==', courseId)
+        .where('reservedDateString', '>=', todayString)
+        .orderBy('reservedDateString')
+        .limit(500);
+
+    let cancellableFutureCount = 0;
+    let lastDoc: FirebaseFirestore.QueryDocumentSnapshot | null = null;
+    const futureUserCounts = new Map<string, number>(); // userId -> cancellable count
+
+    while (true) {
+        let q: FirebaseFirestore.Query = futureQuery;
+        if (lastDoc) q = q.startAfter(lastDoc);
+        const snap = await q.get();
+        if (snap.empty) break;
+
+        for (const d of snap.docs) {
+            const r = d.data() as any;
+            const dateStr = String(r?.reservedDateString ?? '');
+            const startTime = String(r?.startTime ?? '');
+            const uid = String(r?.userId ?? '');
+            if (!dateStr || !startTime || !uid) continue;
+            try {
+                const { y, mo, d: dd } = parseYYYYMMDD(dateStr);
+                const { h, m } = parseHHmm(startTime);
+                const sessionStart = makeSeoulDateTime(y, mo, dd, h, m);
+                if (now.getTime() < sessionStart.getTime()) {
+                    cancellableFutureCount++;
+                    futureUserCounts.set(uid, (futureUserCounts.get(uid) ?? 0) + 1);
+                }
+            } catch {
+                // 날짜/시간 형식 오류는 무시(삭제 진행 시에도 결국 문서 삭제로 정리)
+            }
+        }
+
+        if (snap.docs.length < 500) break;
+        lastDoc = snap.docs[snap.docs.length - 1];
+    }
+
+    if (cancellableFutureCount > 0 && !cascade) {
+        // UI가 확인 후 cascade=true로 재호출할 수 있도록 상세 정보 반환
+        throwRequiresCascadeDeleteCourse({
+            courseId,
+            courseName,
+            reservationCount: cancellableFutureCount,
+        });
+    }
+
+    // 2) place.courses 에서 코스 제거
+    const placeRef = db.collection('places').doc(placeId);
+    await db.runTransaction(async (tx) => {
+        const doc = await tx.get(placeRef);
+        if (!doc.exists) throw new functions.https.HttpsError('not-found', '플레이스를 찾을 수 없습니다.');
+        const data = doc.data() as any;
+        const list = Array.isArray(data?.courses) ? data.courses : [];
+        const updated = list.filter((c: any) => String(c?.id ?? '') !== courseId);
+        tx.update(placeRef, { courses: updated });
+    });
+
+    // 3) 예약 삭제 (해당 코스의 모든 예약)
+    const deletedReservations = await deleteByQuery(
+        db,
+        db.collection('places').doc(placeId).collection('reservations').where('courseId', '==', courseId),
+    );
+
+    // 4) sessionReservations 삭제 (유령 카운트 방지)
+    const deletedSessionReservations = await deleteByQuery(
+        db,
+        db.collection('sessionReservations').where('placeId', '==', placeId).where('courseId', '==', courseId),
+    );
+
+    // 5) courseOverrides / dateCapacityOverrides / bookingWeekOpens 정리
+    const deletedCourseOverrides = await deleteByQuery(
+        db,
+        db.collection('courseOverrides').where('placeId', '==', placeId).where('courseId', '==', courseId),
+    );
+    const deletedDateCapacityOverrides = await deleteByQuery(
+        db,
+        db.collection('dateCapacityOverrides').where('placeId', '==', placeId).where('courseId', '==', courseId),
+    );
+    const deletedBookingWeekOpens = await deleteByQuery(
+        db,
+        db.collection('bookingWeekOpens').where('placeId', '==', placeId).where('courseId', '==', courseId),
+    );
+
+    // 6) enrollments / courseMembers 정리
+    const deletedEnrollments = await deleteByQuery(
+        db,
+        db.collection('enrollments').where('placeId', '==', placeId).where('courseId', '==', courseId),
+    );
+    const deletedCourseMembers = await deleteByQuery(
+        db,
+        db.collection('courseMembers').where('placeId', '==', placeId).where('courseId', '==', courseId),
+    );
+
+    // 7) pendingMembers에서 해당 course 제거 (courseIds, courseEnrollments)
+    // - 규모가 커질 수 있어 pagination + batch update
+    let updatedPendingMembers = 0;
+    let lastPendingId: string | null = null;
+    const pendingPageSize = 300;
+    while (true) {
+        let q: FirebaseFirestore.Query = db
+            .collection('pendingMembers')
+            .where('placeId', '==', placeId)
+            .orderBy(admin.firestore.FieldPath.documentId())
+            .limit(pendingPageSize);
+        if (lastPendingId) q = q.startAfter(lastPendingId);
+        const snap = await q.get();
+        if (snap.empty) break;
+
+        const batch = db.batch();
+        let wrote = 0;
+        for (const d of snap.docs) {
+            const p = d.data() as any;
+            const beforeCourseIds = Array.isArray(p?.courseIds) ? (p.courseIds as any[]) : null;
+            const beforeEnrollments = Array.isArray(p?.courseEnrollments) ? (p.courseEnrollments as any[]) : null;
+
+            let changed = false;
+            let nextCourseIds = beforeCourseIds;
+            let nextEnrollments = beforeEnrollments;
+
+            if (beforeCourseIds) {
+                const filtered = beforeCourseIds.filter((x) => String(x ?? '') !== courseId);
+                if (filtered.length !== beforeCourseIds.length) {
+                    nextCourseIds = filtered;
+                    changed = true;
+                }
+            }
+
+            if (beforeEnrollments) {
+                const filtered = beforeEnrollments.filter((ce) => String((ce as any)?.courseId ?? '') !== courseId);
+                if (filtered.length !== beforeEnrollments.length) {
+                    nextEnrollments = filtered;
+                    changed = true;
+                }
+            }
+
+            if (changed) {
+                const update: any = {};
+                if (nextCourseIds !== beforeCourseIds) update.courseIds = nextCourseIds;
+                if (nextEnrollments !== beforeEnrollments) update.courseEnrollments = nextEnrollments;
+                batch.update(d.ref, update);
+                wrote++;
+            }
+        }
+        if (wrote > 0) {
+            await batch.commit();
+            updatedPendingMembers += wrote;
+        }
+
+        if (snap.docs.length < pendingPageSize) break;
+        lastPendingId = snap.docs[snap.docs.length - 1].id;
+    }
+
+    // 8) coursePolicies 정리 (courseId docId, placeId가 일치할 때만 삭제)
+    let deletedCoursePolicy = false;
+    const policyRef = db.collection('coursePolicies').doc(courseId);
+    const policySnap = await policyRef.get();
+    if (policySnap.exists) {
+        const policyData = policySnap.data() as any;
+        const policyPlaceId =
+            String(policyData?.placeId ?? policyData?.active?.placeId ?? policyData?.scheduled?.placeId ?? '');
+        if (policyPlaceId === placeId) {
+            await policyRef.delete();
+            deletedCoursePolicy = true;
+        }
+    }
+
+    // 9) 알림(선택): 실제로 "취소 가능한 미래 예약"이 있던 사용자에게만 1회 발송
+    // - 코스 삭제는 큰 이벤트라서 기본적으로 발송
+    if (futureUserCounts.size > 0) {
+        for (const [uid, cnt] of futureUserCounts.entries()) {
+            await createNotification({
+                userId: uid,
+                type: 'reservation',
+                title: '예약이 취소되었습니다',
+                body: `${courseName} 코스가 삭제되어 향후 예약 ${cnt}건이 취소되었습니다.`,
+                placeId,
+                data: {
+                    kind: 'course-deleted',
+                    courseId,
+                    placeId,
+                    cancelledReservations: cnt,
+                },
+                isAdmin: false,
+            });
+        }
+    }
+
+    logFunctionSuccess(functionName, {
+        callerId,
+        placeId,
+        courseId,
+        courseName,
+        cascade,
+        cancellableFutureCount,
+        deletedReservations,
+        deletedSessionReservations,
+        deletedCourseOverrides,
+        deletedDateCapacityOverrides,
+        deletedBookingWeekOpens,
+        deletedEnrollments,
+        deletedCourseMembers,
+        updatedPendingMembers,
+        deletedCoursePolicy,
+    });
+
+    return {
+        success: true,
+        courseName,
+        cancellableFutureCount,
+        deletedReservations,
+    };
+});
+
+/**
  * 플레이스 삭제 (관리자)
  *
  * 클라이언트에서 대량 삭제를 수행하면 rules/권한/속도 문제로 쉽게 깨지므로
@@ -2703,7 +2970,7 @@ async function createNotification({
     isAdmin?: boolean;
 }): Promise<void> {
     try {
-        await admin.firestore().collection('notifications').add({
+        const ref = await admin.firestore().collection('notifications').add({
             userId,
             type,
             title,
@@ -2714,10 +2981,9 @@ async function createNotification({
             isAdminNotification: isAdmin,
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
         });
-        console.log(`[createNotification] Created notification for user ${userId}, type: ${type}`);
+        console.log(`[createNotification] Firestore 알림 문서 생성됨 notificationId=${ref.id} userId=${userId} type=${type} title=${title?.substring(0, 30)}`);
     } catch (error) {
         console.error(`[createNotification] Error creating notification:`, error);
-        // 알림 생성 실패해도 메인 로직은 계속 진행
     }
 }
 
@@ -2735,31 +3001,30 @@ async function sendPushNotification({
     body: string;
     data?: Record<string, any>;
 }): Promise<void> {
+    console.log(`[sendPushNotification] called userId=${userId} title=${title?.substring(0, 40)}`);
     try {
-        // 사용자 정보 조회
         const userDoc = await admin.firestore().collection('users').doc(userId).get();
         if (!userDoc.exists) {
-            console.warn(`[sendPushNotification] User not found: ${userId}`);
+            console.warn(`[sendPushNotification] User not found: users/${userId}`);
             return;
         }
 
         const userData = userDoc.data();
-        const fcmToken = userData?.fcmToken;
-
-        // 알림 설정 확인
-        const notificationsEnabled = userData?.notificationsEnabled !== false; // 기본값 true
+        const fcmToken = userData?.fcmToken as string | undefined;
+        const notificationsEnabled = userData?.notificationsEnabled !== false;
 
         if (!fcmToken) {
-            console.warn(`[sendPushNotification] No FCM token for user: ${userId}`);
+            console.warn(`[sendPushNotification] No FCM token for user ${userId} (users/${userId}.fcmToken missing or empty)`);
             return;
         }
+        const tokenPreview = fcmToken.length > 20 ? `${fcmToken.substring(0, 10)}...${fcmToken.substring(fcmToken.length - 8)}` : fcmToken;
+        console.log(`[sendPushNotification] userId=${userId} hasToken=true tokenLen=${fcmToken.length} tokenPreview=${tokenPreview} notificationsEnabled=${notificationsEnabled}`);
 
         if (!notificationsEnabled) {
-            console.log(`[sendPushNotification] Notifications disabled for user: ${userId}`);
+            console.log(`[sendPushNotification] Notifications disabled for user ${userId} → skip send`);
             return;
         }
 
-        // FCM 메시지 구성
         const message: admin.messaging.Message = {
             token: fcmToken,
             notification: {
@@ -2786,12 +3051,10 @@ async function sendPushNotification({
             },
         };
 
-        // FCM 전송
         const response = await admin.messaging().send(message);
-        console.log(`[sendPushNotification] Successfully sent message to ${userId}: ${response}`);
-    } catch (error) {
-        console.error(`[sendPushNotification] Error sending push notification to ${userId}:`, error);
-        // FCM 전송 실패해도 알림 생성은 계속 진행
+        console.log(`[sendPushNotification] FCM 전송 성공 userId=${userId} messageId=${response}`);
+    } catch (error: any) {
+        console.error(`[sendPushNotification] FCM 전송 실패 userId=${userId} error=${error?.message ?? error} code=${error?.code ?? '-'}`);
     }
 }
 
@@ -2801,12 +3064,14 @@ async function sendPushNotification({
 export const onNotificationCreated = functions.firestore
     .document('notifications/{notificationId}')
     .onCreate(async (snap: QueryDocumentSnapshot, context: EventContext) => {
+        const notificationId = context.params.notificationId as string;
         const notification = snap.data();
-        const notificationId = context.params.notificationId;
+        const userId = notification.userId;
+        console.log(`[onNotificationCreated] 트리거 실행 notificationId=${notificationId} userId=${userId} title=${notification.title?.substring(0, 30)}`);
 
         try {
             await sendPushNotification({
-                userId: notification.userId,
+                userId,
                 title: notification.title || '알림',
                 body: notification.body || '',
                 data: {
@@ -2815,8 +3080,8 @@ export const onNotificationCreated = functions.firestore
                     ...(notification.data || {}),
                 },
             });
-        } catch (error) {
-            console.error(`[onNotificationCreated] Error sending push notification:`, error);
+        } catch (error: any) {
+            console.error(`[onNotificationCreated] sendPushNotification 실패: ${error?.message ?? error}`);
         }
     });
 

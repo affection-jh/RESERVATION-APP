@@ -179,7 +179,8 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
                     const pendingDoc = pendingDocsByPendingId.get(pendingId);
                     if (pendingDoc?.exists) {
                         const pendingData = pendingDoc.data() as any;
-                        const courseEnrollments = Array.isArray(pendingData?.courseEnrollments) ? pendingData.courseEnrollments : [];
+                        if (!Array.isArray(pendingData?.courseEnrollments)) continue;
+                        const courseEnrollments = pendingData.courseEnrollments;
                         const updated = courseEnrollments.map((ce: any) => {
                             if (String(ce?.courseId ?? '') !== courseId) return ce;
                             const total = Number(ce?.totalReservations ?? 0);
@@ -322,7 +323,8 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
                     const pendingDoc = pendingDocsByPendingId.get(pendingId);
                     if (pendingDoc?.exists) {
                         const pendingData = pendingDoc.data() as any;
-                        const courseEnrollments = Array.isArray(pendingData?.courseEnrollments) ? pendingData.courseEnrollments : [];
+                        if (!Array.isArray(pendingData?.courseEnrollments)) continue;
+                        const courseEnrollments = pendingData.courseEnrollments;
                         const updated = courseEnrollments.map((ce: any) => {
                             if (String(ce?.courseId ?? '') !== courseId) return ce;
                             const total = Number(ce?.totalReservations ?? 0);

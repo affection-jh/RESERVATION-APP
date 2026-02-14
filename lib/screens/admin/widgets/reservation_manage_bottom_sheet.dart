@@ -28,6 +28,8 @@ class ReservationManageBottomSheet extends StatelessWidget {
   final Function(Set<String>)? onMovingStarted;
   final Function(String)? onMovingCompleted;
   final Function()? onAllMovingCompleted;
+  /// 스낵바를 붙일 context (예약 변경 성공/실패 스낵바를 화면에 표시할 때 사용)
+  final BuildContext? snackbarContext;
 
   const ReservationManageBottomSheet({
     super.key,
@@ -41,6 +43,7 @@ class ReservationManageBottomSheet extends StatelessWidget {
     this.onMovingStarted,
     this.onMovingCompleted,
     this.onAllMovingCompleted,
+    this.snackbarContext,
   });
 
   static void show({
@@ -65,7 +68,7 @@ class ReservationManageBottomSheet extends StatelessWidget {
       enableDrag: true,
       useSafeArea: true,
       builder:
-          (context) => ReservationManageBottomSheet(
+          (modalContext) => ReservationManageBottomSheet(
             course: course,
             sourceSession: sourceSession,
             sourceDate: sourceDate,
@@ -76,6 +79,7 @@ class ReservationManageBottomSheet extends StatelessWidget {
             onMovingStarted: onMovingStarted,
             onMovingCompleted: onMovingCompleted,
             onAllMovingCompleted: onAllMovingCompleted,
+            snackbarContext: context,
           ),
     );
   }
@@ -476,6 +480,7 @@ class ReservationManageBottomSheet extends StatelessWidget {
               onMovingStarted: onMovingStarted,
               onMovingCompleted: onMovingCompleted,
               onAllMovingCompleted: onAllMovingCompleted,
+              snackbarContext: snackbarContext,
             ),
       );
     });

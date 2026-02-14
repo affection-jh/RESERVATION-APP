@@ -11,6 +11,7 @@ import '../widgets/place_switch_widget.dart';
 import '../widgets/profile_settings_widget.dart'
     show UserProfileInfoSection, SettingsItemsBuilder;
 import '../widgets/notification_settings_dialog.dart';
+import '../widgets/name_edit_bottom_sheet.dart';
 import '../providers/reservation_provider.dart';
 import '../providers/course_provider.dart';
 import '../providers/auth_provider.dart';
@@ -708,12 +709,17 @@ class _MyPageScreenState extends State<MyPageScreen> {
                                       ? (user.phoneNumber)
                                       : '로그인하고 모든 기능을 이용하세요',
                               onProfileTap: () {
-                                // ✅ 로그인 안 된 경우 로그인 화면으로 이동
                                 if (!isLoggedIn) {
                                   Navigator.of(
                                     context,
                                   ).pushNamed('/phone-number');
+                                  return;
                                 }
+                                // ✅ 로그인된 경우 이름 변경 바텀시트 (Firestore users 반영)
+                                NameEditBottomSheet.show(
+                                  context: context,
+                                  initialName: user.name,
+                                );
                               },
                               profileBottomWidget: const PlaceSwitchWidget(
                                 heroTagSuffix: 'my_page_profile',

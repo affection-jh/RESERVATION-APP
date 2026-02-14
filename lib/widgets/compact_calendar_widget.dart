@@ -898,51 +898,48 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       final newCourseAdded = widget.courses.length > oldWidget.courses.length;
 
       if (newCourseAdded) {
-        // 새 코스가 추가되었으면 마지막 코스(새로 추가된 코스) 선택
         if (widget.courses.isNotEmpty) {
           setState(() {
             _selectedCourse = widget.courses.last;
-            _didInitialJump = false; // 초기 점프 리셋
+            _didInitialJump = false;
           });
-          // 콜백 호출
-          widget.onCourseSelected?.call(widget.courses.last);
+          final course = widget.courses.last;
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;
+            widget.onCourseSelected?.call(course);
             _ensureWeekSubscriptions(resetViewport: true);
           });
         }
       } else {
-        // 선택된 코스가 여전히 목록에 있는지 확인
         if (_selectedCourse != null) {
           final stillExists = widget.courses.any(
             (course) => course.id == _selectedCourse!.id,
           );
           if (!stillExists) {
-            // 선택된 코스가 없어졌으면 첫 번째 코스 선택
             if (widget.courses.isNotEmpty) {
               setState(() {
                 _selectedCourse = widget.courses.first;
-                _didInitialJump = false; // 초기 점프 리셋
+                _didInitialJump = false;
               });
-              // 콜백 호출
-              widget.onCourseSelected?.call(widget.courses.first);
+              final course = widget.courses.first;
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (!mounted) return;
+                widget.onCourseSelected?.call(course);
                 _ensureWeekSubscriptions(resetViewport: true);
               });
             } else {
               setState(() {
                 _selectedCourse = null;
               });
-              // 콜백 호출
-              widget.onCourseSelected?.call(null);
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) return;
+                widget.onCourseSelected?.call(null);
+              });
             }
           } else {
-            // 선택된 코스가 여전히 있으면, 최신 정보로 업데이트 (이름, 색상, 이미지, 세션 등 모든 변경사항 반영)
             final updatedCourse = widget.courses.firstWhere(
               (course) => course.id == _selectedCourse!.id,
             );
-            // 코스 정보가 변경되었는지 확인 (이름, 색상, 이미지, 세션 등)
             final hasChanges =
                 updatedCourse.name != _selectedCourse!.name ||
                 updatedCourse.color != _selectedCourse!.color ||
@@ -963,26 +960,24 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
             if (hasChanges) {
               setState(() {
                 _selectedCourse = updatedCourse;
-                _didInitialJump = false; // 초기 점프 리셋
+                _didInitialJump = false;
               });
-              // 콜백 호출 (업데이트된 코스 정보)
-              widget.onCourseSelected?.call(updatedCourse);
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (!mounted) return;
+                widget.onCourseSelected?.call(updatedCourse);
                 _ensureWeekSubscriptions(resetViewport: true);
               });
             }
           }
         } else if (widget.courses.isNotEmpty) {
-          // 선택된 코스가 없었는데 코스가 추가되었으면 첫 번째 코스 선택
           setState(() {
             _selectedCourse = widget.courses.first;
-            _didInitialJump = false; // 초기 점프 리셋
+            _didInitialJump = false;
           });
-          // 콜백 호출
-          widget.onCourseSelected?.call(widget.courses.first);
+          final course = widget.courses.first;
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;
+            widget.onCourseSelected?.call(course);
             _ensureWeekSubscriptions(resetViewport: true);
           });
         }
@@ -1264,22 +1259,34 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
           _buildDayHeaders(weekDates),
           // 캘린더 그리드 (로딩 중에는 시간 축만 보이고 세션 박스 숨김 + 스피너)
           Expanded(
-            child: isLoading
-                ? LayoutBuilder(
-                    builder: (context, constraints) {
-                      return _buildLoadingGridWithTimeAxis(
-                        viewportHeight: constraints.maxHeight,
-                      );
-                    },
-                  )
-                : LayoutBuilder(
-                    builder: (context, constraints) {
-                      return _buildCalendarGrid(
-                        weekDates,
-                        viewportHeight: constraints.maxHeight,
-                      );
-                    },
-                  ),
+            child:
+                isLoading
+                    ? LayoutBuilder(
+                      builder: (context, constraints) {
+                        return _buildLoadingGridWithTimeAxis(
+                          viewportHeight: constraints.maxHeight,
+                        );
+                      },
+                    )
+                    : TweenAnimationBuilder<double>(
+                      key: ValueKey(
+                        'grid_${widget.weekOffset}_${weekDates.length}',
+                      ),
+                      tween: Tween(begin: 0, end: 1),
+                      duration: const Duration(milliseconds: 320),
+                      curve: Curves.easeOut,
+                      builder: (context, value, child) {
+                        return Opacity(opacity: value, child: child);
+                      },
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          return _buildCalendarGrid(
+                            weekDates,
+                            viewportHeight: constraints.maxHeight,
+                          );
+                        },
+                      ),
+                    ),
           ),
         ],
       ),
@@ -3648,16 +3655,21 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                     mainAxisAlignment: MainAxisAlignment.center,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // 홈 화면이 아닐 때: 코스 이름 표시
+                      // 홈 화면이 아닐 때: 코스 이름 표시 (adminSelectNewSlot은 admin 홈과 동일 포맷/사이즈)
                       if (widget.hideCourseSelector)
                         Text(
                           _selectedCourse!.name,
                           style: TextStyle(
                             color: textColor,
                             fontSize:
-                                sessionHeightPx >= 60
-                                    ? 18
-                                    : (sessionHeightPx >= 40 ? 14 : 12),
+                                _usage ==
+                                        CompactCalendarUsage.adminSelectNewSlot
+                                    ? (sessionHeightPx >= 60
+                                        ? 22
+                                        : (sessionHeightPx >= 40 ? 18 : 16))
+                                    : (sessionHeightPx >= 60
+                                        ? 18
+                                        : (sessionHeightPx >= 40 ? 14 : 12)),
                             fontWeight: FontWeight.bold,
                           ),
                           maxLines: 1,
@@ -3698,14 +3710,18 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                             overflow: TextOverflow.ellipsis,
                           ),
                       ],
-                      // 시간 (높이가 충분할 때만 표시, 줄바꿈)
+                      // 시간 (높이가 충분할 때만 표시, 줄바꿈) — adminSelectNewSlot은 admin 홈과 동일 사이즈
                       if (sessionHeightPx >= 70) ...[
                         SizedBox(height: sessionHeightPx >= 80 ? 4 : 3),
                         Text(
                           '${session.startTime}\n- ${session.endTime}',
                           style: TextStyle(
                             color: iconColor,
-                            fontSize: 14,
+                            fontSize:
+                                _usage ==
+                                        CompactCalendarUsage.adminSelectNewSlot
+                                    ? (sessionHeightPx >= 90 ? 16 : 14)
+                                    : 14,
                             fontWeight: FontWeight.w500,
                             height: 1.2,
                           ),
@@ -3722,7 +3738,11 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                           '$remainingSeats / $totalSeats',
                           style: TextStyle(
                             color: iconColor,
-                            fontSize: sessionHeightPx >= 110 ? 14 : 12,
+                            fontSize:
+                                _usage ==
+                                        CompactCalendarUsage.adminSelectNewSlot
+                                    ? (sessionHeightPx >= 110 ? 16 : 14)
+                                    : (sessionHeightPx >= 110 ? 14 : 12),
                             fontWeight: FontWeight.w500,
                           ),
                           maxLines: 1,
@@ -3734,13 +3754,13 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                 ),
               // 자물쇠 아이콘 표시 조건:
               // 1. 탭 불가능하고 && 현재 예약이 아니고 && 잠겨있고 && 주차가 열리지 않았거나
-              // 2. adminSelectNewSlot 모드에서 지나간 세션인 경우
+              // 2. adminSelectNewSlot: 지나간 세션 또는 현재 이동 소스 세션(같은 세션으로 이동 불가)
               if ((!canTapWithPastCheck &&
                       !isCurrentReservation &&
                       isLocked &&
                       !isBookingWeekOpened) ||
                   (_usage == CompactCalendarUsage.adminSelectNewSlot &&
-                      isPastSession))
+                      (isPastSession || isCurrentReservation)))
                 Positioned(
                   top: 0,
                   right: 0,

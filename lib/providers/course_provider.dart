@@ -269,12 +269,15 @@ class CourseProvider with ChangeNotifier {
   }
 
   /// 코스 삭제
-  Future<void> deleteCourse(String courseId) async {
+  Future<void> deleteCourse(
+    String courseId, {
+    bool cascade = false,
+  }) async {
     _isLoading = true;
     notifyListeners();
 
     try {
-      await _firestoreService.deleteCourse(_placeId!, courseId);
+      await _firestoreService.deleteCourse(_placeId!, courseId, cascade: cascade);
       _courses = _courses.where((c) => c.id != courseId).toList();
       _error = null;
       notifyListeners();

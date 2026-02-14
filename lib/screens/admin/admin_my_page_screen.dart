@@ -10,6 +10,7 @@ import '../../services/auth_service.dart';
 import '../../widgets/profile_settings_widget.dart'
     show UserProfileInfoSection, SettingsItemsBuilder;
 import '../../widgets/notification_settings_dialog.dart';
+import '../../widgets/name_edit_bottom_sheet.dart';
 import '../../widgets/place_switch_widget.dart';
 import '../../providers/place_provider.dart';
 import '../../providers/auth_provider.dart';
@@ -59,7 +60,13 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
                     headerTitle: '관리자 계정',
                     profileName: admin?.name ?? '관리자',
                     profilePhoneNumber: admin?.phoneNumber ?? '',
-                    onProfileTap: () {},
+                    onProfileTap: () {
+                      if (admin == null) return;
+                      NameEditBottomSheet.show(
+                        context: context,
+                        initialName: admin.name,
+                      );
+                    },
                     profileBottomWidget: const PlaceSwitchWidget(
                       heroTagSuffix: 'admin_my_page_profile',
                     ),

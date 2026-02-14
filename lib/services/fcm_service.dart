@@ -80,8 +80,11 @@ class FcmService {
   /// FCM 초기화 및 토큰 저장
   /// 사용자와 관리자 모두 동일하게 처리
   Future<void> initialize(String userId) async {
+    debugPrint(
+      '[FcmService] initialize() called, userId=$userId, _isInitialized=$_isInitialized',
+    );
     if (_isInitialized) {
-      // 이미 초기화된 경우 토큰만 업데이트
+      debugPrint('[FcmService] 이미 초기화됨 → 토큰만 Firestore에 저장');
       await _saveTokenToFirestore(userId);
       return;
     }
@@ -93,10 +96,13 @@ class FcmService {
       sound: true,
       provisional: false,
     );
+    debugPrint(
+      '[FcmService] requestPermission 결과: authorizationStatus=${settings.authorizationStatus}',
+    );
 
     if (settings.authorizationStatus == AuthorizationStatus.authorized ||
         settings.authorizationStatus == AuthorizationStatus.provisional) {
-      debugPrint('[FcmService] FCM 권한 승인됨');
+      debugPrint('[FcmService] FCM 권한 승인됨 → 토큰 저장 및 핸들러 설정');
 
       // FCM 토큰 가져오기 및 저장
       await _saveTokenToFirestore(userId);
@@ -136,12 +142,13 @@ class FcmService {
     _foregroundMessageSubscription = FirebaseMessaging.onMessage.listen((
       RemoteMessage message,
     ) {
+      debugPrint(
+        '[FcmService] onMessage (포그라운드) 수신 → logRemoteMessage + provider + overlay',
+      );
       logRemoteMessage(message, event: 'FOREGROUND_RECEIVED');
 
       try {
-        // NotificationProvider에 새 알림 추가 (먼저 실행하여 빨간 닷 즉시 표시)
         _addNotificationToProvider(message.data);
-        // 포그라운드 알림 UI 표시 (스낵바처럼 상단에)
         _showForegroundNotification(message);
       } catch (e) {
         debugPrint('[FcmService] 포그라운드 알림 처리 오류: $e');
@@ -165,72 +172,86 @@ class FcmService {
 
   /// NotificationProvider에 새 알림 추가
   void _addNotificationToProvider(Map<String, dynamic>? data) {
-    final context = navigatorKey.currentContext;
-    if (context == null) return;
-
     final notificationId = data?['notificationId'];
-    if (notificationId != null && notificationId is String) {
-      try {
-        final authProvider = Provider.of<AuthProvider>(context, listen: false);
-        final notificationProvider = Provider.of<NotificationProvider>(
-          context,
-          listen: false,
-        );
-        final placeProvider = Provider.of<PlaceProvider>(
-          context,
-          listen: false,
-        );
+    debugPrint(
+      '[FcmService] _addNotificationToProvider notificationId=$notificationId dataKeys=${data?.keys.toList()}',
+    );
+    final context = navigatorKey.currentContext;
+    if (context == null) {
+      debugPrint('[FcmService] _addNotificationToProvider context==null → 스킵');
+      return;
+    }
+    if (notificationId == null || notificationId is! String) {
+      debugPrint(
+        '[FcmService] _addNotificationToProvider notificationId 없음 또는 비문자열 → 스킵',
+      );
+      return;
+    }
+    try {
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      final notificationProvider = Provider.of<NotificationProvider>(
+        context,
+        listen: false,
+      );
+      final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
 
-        // 현재 로그인한 사용자 정보 확인
-        final currentAdmin = authProvider.currentAdmin;
-        final currentUser = authProvider.currentUser;
-        final isAdmin = currentAdmin != null;
-        final userId = currentAdmin?.userId ?? currentUser?.userId;
+      final currentAdmin = authProvider.currentAdmin;
+      final currentUser = authProvider.currentUser;
+      final isAdmin = currentAdmin != null;
+      final userId = currentAdmin?.userId ?? currentUser?.userId;
 
-        if (userId == null) {
-          print('[FcmService] _addNotificationToProvider: 사용자 정보 없음');
-          return;
-        }
-
-        // 현재 플레이스 ID 가져오기
-        final currentPlace = placeProvider.currentPlace;
-        final placeId = currentPlace?.id;
-
-        // 비동기로 실행하되 await하지 않음 (즉시 반환하여 UI가 블로킹되지 않도록)
-        // addNotificationFromId 내부에서 notifyListeners()가 호출되므로 빨간 닷이 즉시 표시됨
-        notificationProvider
-            .addNotificationFromId(
-              notificationId,
-              userId,
-              isAdmin,
-              placeId: placeId,
-            )
-            .catchError((e) {
-              debugPrint('[FcmService] _addNotificationToProvider error: $e');
-            });
-      } catch (e) {
-        print('[FcmService] _addNotificationToProvider error: $e');
+      if (userId == null) {
+        debugPrint('[FcmService] _addNotificationToProvider userId==null → 스킵');
+        return;
       }
+
+      final currentPlace = placeProvider.currentPlace;
+      final placeId = currentPlace?.id;
+      debugPrint(
+        '[FcmService] _addNotificationToProvider calling addNotificationFromId userId=$userId isAdmin=$isAdmin placeId=$placeId',
+      );
+      notificationProvider
+          .addNotificationFromId(
+            notificationId,
+            userId,
+            isAdmin,
+            placeId: placeId,
+          )
+          .catchError((e) {
+            debugPrint('[FcmService] _addNotificationToProvider error: $e');
+          });
+    } catch (e) {
+      debugPrint('[FcmService] _addNotificationToProvider error: $e');
     }
   }
 
   /// FCM 토큰을 Firestore에 저장
   Future<void> _saveTokenToFirestore(String userId, {String? token}) async {
+    debugPrint(
+      '[FcmService] _saveTokenToFirestore() userId=$userId, tokenProvided=${token != null}',
+    );
     try {
       // iOS에서 APNS 토큰 먼저 요청 (FCM 토큰을 얻기 위해 필요)
-      // 시뮬레이터에서는 APNS 토큰을 받을 수 없으므로 오류는 무시
       try {
         await _messaging.getAPNSToken();
       } catch (e) {
-        // iOS 시뮬레이터에서는 APNS 토큰 오류가 정상이므로 조용히 처리
         debugPrint('[FcmService] APNS 토큰 요청 (시뮬레이터일 수 있음): $e');
       }
 
       final fcmToken = token ?? await _messaging.getToken();
       if (fcmToken == null) {
-        print('FCM 토큰을 가져올 수 없습니다.');
+        debugPrint(
+          '[FcmService] FCM 토큰을 가져올 수 없습니다. (getToken() returned null)',
+        );
         return;
       }
+      final masked =
+          fcmToken.length > 12
+              ? '${fcmToken.substring(0, 6)}...${fcmToken.substring(fcmToken.length - 6)}'
+              : fcmToken;
+      debugPrint(
+        '[FcmService] FCM 토큰 획득됨 len=${fcmToken.length} masked=$masked',
+      );
 
       // ✅ 트랜잭션으로 원자적 저장 (users 문서 + 서브컬렉션)
       await _firestore.runTransaction((transaction) async {
@@ -252,9 +273,10 @@ class FcmService {
         });
       });
 
-      debugPrint('[FcmService] FCM 토큰이 저장되었습니다: $fcmToken');
-    } catch (e) {
+      debugPrint('[FcmService] FCM 토큰 Firestore 저장 완료 userId=$userId');
+    } catch (e, stack) {
       debugPrint('[FcmService] FCM 토큰 저장 실패: $e');
+      debugPrint('[FcmService] stack: $stack');
     }
   }
 
@@ -530,6 +552,9 @@ class FcmService {
   Future<void> checkInitialMessage() async {
     try {
       final message = await _messaging.getInitialMessage();
+      debugPrint(
+        '[FcmService] checkInitialMessage() getInitialMessage=${message != null}',
+      );
       if (message != null) {
         logRemoteMessage(message, event: 'TAP_LAUNCH_FROM_TERMINATED');
         _handleNotificationTap(message.data);

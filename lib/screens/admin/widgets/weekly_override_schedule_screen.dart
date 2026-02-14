@@ -657,9 +657,7 @@ class _WeeklyOverrideScheduleScreenState
                 children: [
                   // 요일 헤더 (항상 표시)
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                      vertical: 12,
-                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
                     color: AppColors.backgroundWhite,
                     child: Row(
                       children: [
@@ -681,7 +679,14 @@ class _WeeklyOverrideScheduleScreenState
                         ),
                         ...selectedDays.map((day) {
                           const dayNames = [
-                            '', '월', '화', '수', '목', '금', '토', '일',
+                            '',
+                            '월',
+                            '화',
+                            '수',
+                            '목',
+                            '금',
+                            '토',
+                            '일',
                           ];
                           final date = _dateForDayOfWeek(day);
                           final dateStr = '${date.month}/${date.day}';
@@ -712,24 +717,34 @@ class _WeeklyOverrideScheduleScreenState
                       ],
                     ),
                   ),
-                  // 캘린더 영역: 로딩 중이면 스피너만, 아니면 그리드
+                  // 캘린더 영역: 로딩 중이면 스피너만, 로딩 완료 후 그리드 페이드 인
                   Expanded(
-                    child: _isLoadingData
-                        ? Center(
-                            child: CircularProgressIndicator(
-                              valueColor: AlwaysStoppedAnimation<Color>(
-                                AppColors.primaryGreen,
+                    child:
+                        _isLoadingData
+                            ? Center(
+                              child: CircularProgressIndicator(
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  Colors.transparent,
+                                ),
+                              ),
+                            )
+                            : TweenAnimationBuilder<double>(
+                              key: ValueKey('grid_$_currentWeekOffset'),
+                              tween: Tween(begin: 0, end: 1),
+                              duration: const Duration(milliseconds: 320),
+                              curve: Curves.easeOut,
+                              builder: (context, value, child) {
+                                return Opacity(opacity: value, child: child);
+                              },
+                              child: LayoutBuilder(
+                                builder: (context, constraints) {
+                                  return _buildAllDaysCalendar(
+                                    constraints.maxHeight,
+                                    selectedDays,
+                                  );
+                                },
                               ),
                             ),
-                          )
-                        : LayoutBuilder(
-                            builder: (context, constraints) {
-                              return _buildAllDaysCalendar(
-                                constraints.maxHeight,
-                                selectedDays,
-                              );
-                            },
-                          ),
                   ),
                 ],
               ),
@@ -807,14 +822,18 @@ class _WeeklyOverrideScheduleScreenState
       final slotHeight = hourSlotHeight; // 콜백에서 사용할 값 캡처
       WidgetsBinding.instance.addPostFrameCallback((_) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted || _calendarScrollController == null || !_calendarScrollController!.hasClients) return;
+          if (!mounted ||
+              _calendarScrollController == null ||
+              !_calendarScrollController!.hasClients)
+            return;
           // 현재 주의 정기+비정기 세션에서 첫 시작 시간 계산
           final allStartTimes = <int>[];
           for (final entry in _regularSessions.entries) {
             for (final session in entry.value) {
               final dayOfWeek = session.dayOfWeek;
               final isCancelled =
-                  _cancelledSessions[dayOfWeek]?.contains(session.startTime) ?? false;
+                  _cancelledSessions[dayOfWeek]?.contains(session.startTime) ??
+                  false;
               if (!isCancelled) {
                 allStartTimes.add(_parseTimeToMinutes(session.startTime));
               }
@@ -829,9 +848,12 @@ class _WeeklyOverrideScheduleScreenState
           if (allStartTimes.isEmpty) {
             targetY = 10 * slotHeight;
           } else {
-            final firstStartMinutes = allStartTimes.reduce((a, b) => a < b ? a : b);
+            final firstStartMinutes = allStartTimes.reduce(
+              (a, b) => a < b ? a : b,
+            );
             final firstStartHour = firstStartMinutes ~/ 60;
-            targetY = (firstStartHour * slotHeight) +
+            targetY =
+                (firstStartHour * slotHeight) +
                 ((firstStartMinutes % 60) / 60.0 * slotHeight) -
                 (0.5 * slotHeight);
             targetY = targetY.clamp(0.0, double.infinity);

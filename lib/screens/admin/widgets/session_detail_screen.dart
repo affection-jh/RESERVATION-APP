@@ -17,6 +17,7 @@ import '../../../services/enrollment_service.dart';
 import '../../../services/member_service.dart';
 import '../../../widgets/common_dialog.dart';
 import '../../../providers/reservation_provider.dart';
+import '../../../providers/member_provider.dart';
 import 'reservation_manage_bottom_sheet.dart';
 import 'member_selection_side_panel.dart';
 import '../../../utils/snackbar_util.dart';
@@ -563,7 +564,12 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     required Reservation reservation,
   }) {
     final user = _userCache[reservation.userId];
-    final userName = user?.name ?? '예약자 $index';
+    // 관리자 지정 이름(placeMemberships.displayName) 우선, 없으면 user.name
+    final memberProvider = Provider.of<MemberProvider>(context, listen: false);
+    final adminDisplayName = memberProvider.membershipDisplayNamesByUserId[reservation.userId];
+    final userName = (adminDisplayName != null && adminDisplayName.trim().isNotEmpty)
+        ? adminDisplayName.trim()
+        : (user?.name ?? '예약자 $index');
     final phoneNumber = user?.phoneNumber ?? '010-0000-0000';
     final isLoading = _loadingUserIds.contains(reservation.userId);
     final isMoving = _movingReservationIds.contains(reservation.id);

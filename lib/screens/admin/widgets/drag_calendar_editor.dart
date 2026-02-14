@@ -59,6 +59,8 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
   static const double _sessionPadding = 2.0;
   /// 롱프레스 인식 전: 이 거리(px) 이상 움직이면 롱프레스 취소(스크롤로 간주). 실기기 미세 떨림은 무시.
   static const double _longPressMoveThreshold = 14.0;
+  /// 롱프레스/드래그 시 터치 위치가 의도보다 아래로 쳐지므로, slot 계산 시 dy를 이만큼 위로 보정
+  static const double _longPressDyUpwardOffset = 12.0;
 
   bool _isDragging = false;
   int? _dragStartSlot;
@@ -451,15 +453,16 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
           );
 
           if (!isOnSession) {
-            // 빈 영역 터치 직후 스크롤 막기 요청 → 롱프레스/드래그 전에 스크롤이 제스처를 가져가는 것 방지
-            widget.onScrollBlockRequested?.call(true);
             _longPressStartPosition = event.localPosition;
             _longPressTimer?.cancel();
             _longPressTimer = Timer(const Duration(milliseconds: 500), () {
               if (_longPressStartPosition != null) {
                 debugPrint('[DragCalendarEditor] 롱프레스 500ms 완료 → 드래그 시작');
+                // 롱프레스가 인식된 뒤에만 스크롤 막기 (그 전에는 스크롤 가능하도록)
+                widget.onScrollBlockRequested?.call(true);
+                final dy = (_longPressStartPosition!.dy - _longPressDyUpwardOffset).clamp(0.0, double.infinity);
                 final slot = _getSlotFromPosition(
-                  _longPressStartPosition!.dy,
+                  dy,
                   rangeStartMinutes,
                   yForMinute,
                 );
@@ -478,8 +481,9 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
             debugPrint(
               '[DragCalendarEditor] onPointerMove (드래그 중) dy=${event.localPosition.dy}',
             );
+            final dy = (event.localPosition.dy - _longPressDyUpwardOffset).clamp(0.0, double.infinity);
             final slot = _getSlotFromPosition(
-              event.localPosition.dy,
+              dy,
               rangeStartMinutes,
               yForMinute,
             );

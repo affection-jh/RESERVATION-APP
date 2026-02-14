@@ -34,6 +34,8 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
+  // 백그라운드 수신 시 로그 (디버그용)
+  debugPrint('[FCM Background] 메시지 수신 messageId=${message.messageId} notificationId=${message.data['notificationId']}');
   await FcmService.backgroundMessageHandler(message);
 }
 

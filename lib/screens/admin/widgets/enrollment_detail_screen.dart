@@ -1173,7 +1173,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
             context: context,
             title: '수강 취소',
             message:
-                '$courseName\n\n미래 예약 $reservationCount건이 남아있습니다.\n예약 전부 취소 후 수강을 취소할까요?\n\n모든 예약자에게 알림이 발송됩니다.',
+                '$courseName\n\n수강자의 예약 $reservationCount건이 남아있습니다.\n수강취소 처리하시겠습니까?',
             cancelText: '취소',
             confirmText: '예약 전부 취소 후 수강 취소',
             confirmButtonColor: Colors.red,

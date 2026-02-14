@@ -11,8 +11,6 @@ import '../models/course_override.dart';
 import '../providers/story_provider.dart';
 import '../policies/course_policy.dart';
 import '../utils/timezone_utils.dart';
-import 'enrollment_service.dart';
-import 'member_service.dart';
 
 /// Firestore 데이터베이스 서비스
 ///
@@ -327,83 +325,22 @@ class FirestoreService {
 
   /// 코스 삭제
   ///
-  /// 코스 삭제 시 해당 코스의 모든 enrollments도 함께 삭제됩니다.
-  /// 이는 사용자 혼란 방지와 데이터 일관성을 위한 것입니다.
-  Future<void> deleteCourse(String placeId, String courseId) async {
-    final placeRef = _firestore.collection('places').doc(placeId);
-
-    // 0. 활성 예약 확인 (미래 날짜 예약이 있는지 확인)
-    final today = DateTime.now();
-    final todayString = _formatDate(today);
-    // NOTE:
-    // 아래처럼 (courseId == ...) + (reservedDateString >= ...) 조합은
-    // Firestore 복합 인덱스가 필요합니다.
-    // 코스 삭제는 관리자 동작이므로, 인덱스 없이도 동작하도록
-    // reservedDateString 단일 조건으로 페이지네이션 조회 후
-    // courseId를 클라이언트에서 검사합니다.
-    const pageSize = 500;
-    DocumentSnapshot? lastDoc;
-    while (true) {
-      var query = _firestore
-          .collection('places')
-          .doc(placeId)
-          .collection('reservations')
-          .where('reservedDateString', isGreaterThanOrEqualTo: todayString)
-          .orderBy('reservedDateString')
-          .limit(pageSize);
-
-      if (lastDoc != null) {
-        query = query.startAfterDocument(lastDoc);
-      }
-
-      final snap = await query.get();
-      if (snap.docs.isEmpty) break;
-
-      final hasActiveForCourse = snap.docs.any((d) {
-        final data = d.data();
-        return data['courseId']?.toString() == courseId;
-      });
-      if (hasActiveForCourse) {
-        throw Exception('ACTIVE_RESERVATIONS_EXIST');
-      }
-
-      if (snap.docs.length < pageSize) break;
-      lastDoc = snap.docs.last;
-    }
-
-    // 1. 코스 삭제
-    await _firestore.runTransaction((transaction) async {
-      final placeDoc = await transaction.get(placeRef);
-      if (!placeDoc.exists) {
-        throw Exception('플레이스를 찾을 수 없습니다.');
-      }
-
-      final placeData = placeDoc.data()!;
-      final coursesData = (placeData['courses'] as List?) ?? [];
-
-      // 코스 제거
-      final updatedCourses =
-          coursesData.where((c) {
-            final courseData = c as Map<String, dynamic>;
-            return courseData['id'] != courseId;
-          }).toList();
-
-      transaction.update(placeRef, {'courses': updatedCourses});
+  /// 서버에서 코스 삭제를 중앙화합니다.
+  ///
+  /// - 코스 제거 + 관련 데이터 정합성 정리(예약/카운트/오버라이드/정책/주차오픈/멤버데이터)는
+  ///   Callable `deleteCourse`가 단일 진실입니다.
+  /// - cascade=false일 때 미래 예약이 있으면 서버가 requiresCascade=true로 막습니다.
+  Future<void> deleteCourse(
+    String placeId,
+    String courseId, {
+    bool cascade = false,
+  }) async {
+    final callable = FirebaseFunctions.instance.httpsCallable('deleteCourse');
+    await callable.call({
+      'placeId': placeId,
+      'courseId': courseId,
+      'cascade': cascade,
     });
-
-    // 2. 해당 코스의 모든 enrollments 삭제 (enrollments 컬렉션)
-    // 페이지네이션을 사용하여 메모리 효율적으로 처리
-    // 10,000명 이상의 대규모 데이터도 안전하게 처리 가능
-    final enrollmentService = EnrollmentService();
-    await enrollmentService.deleteEnrollmentsByCourse(placeId, courseId);
-
-    // 3. pendingMembers에서 해당 코스 제거
-    // 모든 pendingMembers의 courseIds와 courseEnrollments에서 해당 courseId 제거
-    final memberService = MemberService();
-    await memberService.removeCourseFromAllPendingMembers(
-      placeId: placeId,
-      courseId: courseId,
-    );
   }
 
   // ==================== Reservations ====================

@@ -287,22 +287,20 @@ class AuthProvider with ChangeNotifier {
   /// FCM 초기화 (공통 메서드)
   /// 중복 호출 방지: 같은 userId면 스킵
   Future<void> _initializeFcm(String userId) async {
-    // 이미 같은 userId로 초기화된 경우 스킵
+    debugPrint('[AuthProvider] _initializeFcm() userId=$userId _initializedFcmUserId=$_initializedFcmUserId');
     if (_initializedFcmUserId == userId) {
-      debugPrint('FCM이 이미 초기화되어 있습니다: $userId');
+      debugPrint('[AuthProvider] FCM 이미 초기화됨 → 토큰 갱신만 시도');
+      await _fcmService.initialize(userId);
       return;
     }
 
     try {
       await _fcmService.initialize(userId);
-
-      // 앱이 종료된 상태에서 알림 클릭으로 열렸는지 확인
       await _fcmService.checkInitialMessage();
-
-      // 초기화 성공 시 userId 저장
       _initializedFcmUserId = userId;
+      debugPrint('[AuthProvider] FCM 초기화 완료 _initializedFcmUserId=$userId');
     } catch (e) {
-      debugPrint('FCM 초기화 실패: $e');
+      debugPrint('[AuthProvider] FCM 초기화 실패: $e');
     }
   }
 }

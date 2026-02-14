@@ -28,15 +28,16 @@ class NotificationProvider with ChangeNotifier {
     }).length;
   }
 
-  /// 사용자 알림 목록 로드 (역할별, 플레이스별)
+  /// 사용자 알림 목록 로드 (역할별, 플레이스별) — 일회성 조회, 실시간은 FCM 수신 시 addNotificationFromId
   Future<void> loadNotifications(
     String userId, {
     bool isAdmin = false,
     String? placeId,
   }) async {
+    debugPrint('[NotificationProvider] loadNotifications() start userId=$userId isAdmin=$isAdmin placeId=$placeId');
     _isLoading = true;
     _error = null;
-    _currentPlaceId = placeId; // 현재 플레이스 ID 저장
+    _currentPlaceId = placeId;
     notifyListeners();
 
     try {
@@ -44,26 +45,27 @@ class NotificationProvider with ChangeNotifier {
         userId,
         isAdmin: isAdmin,
       );
+      debugPrint('[NotificationProvider] getUserNotifications 반환 개수: ${allNotifications.length}');
 
-      // 현재 플레이스에 맞는 알림만 필터링
       if (placeId != null) {
         _notifications =
             allNotifications
                 .where((n) => n.placeId == null || n.placeId == placeId)
                 .toList();
+        debugPrint('[NotificationProvider] placeId 필터 후 개수: ${_notifications.length}');
       } else {
         _notifications = allNotifications;
       }
 
       _error = null;
     } catch (e) {
-      // 자세한 오류 메시지는 로그에만 기록하고, UI에는 간단한 메시지만 표시
       debugPrint('[NotificationProvider] 알림 로드 실패: $e');
-      _error = null; // 오류를 null로 설정하여 UI에 오류 메시지 표시하지 않음
-      _notifications = []; // 빈 리스트로 설정하여 "알림이 없습니다" 메시지 표시
+      _error = null;
+      _notifications = [];
     } finally {
       _isLoading = false;
       notifyListeners();
+      debugPrint('[NotificationProvider] loadNotifications() end notifications.length=${_notifications.length}');
     }
   }
 
@@ -118,67 +120,54 @@ class NotificationProvider with ChangeNotifier {
   }
 
   /// 새 알림 추가 (FCM 수신 시 사용)
-  /// [notificationId] 알림 ID
-  /// [currentUserId] 현재 로그인한 사용자 ID (보안 검증용)
-  /// [isAdmin] 관리자 알림인지 여부 (보안 검증용)
-  /// [placeId] 현재 플레이스 ID (필터링용)
   Future<void> addNotificationFromId(
     String notificationId,
     String currentUserId,
     bool isAdmin, {
     String? placeId,
   }) async {
+    debugPrint('[NotificationProvider] addNotificationFromId() notificationId=$notificationId currentUserId=$currentUserId isAdmin=$isAdmin placeId=$placeId');
     try {
-      // 이미 존재하는 알림인지 확인
       if (_notifications.any((n) => n.id == notificationId)) {
+        debugPrint('[NotificationProvider] addNotificationFromId 이미 존재 → 스킵');
         return;
       }
 
-      // Firestore에서 알림 조회
       final notification = await _firestoreService.getNotificationById(
         notificationId,
       );
-      if (notification != null) {
-        // 보안 검증: 현재 사용자의 알림인지 확인
-        if (notification.userId != currentUserId) {
-          debugPrint(
-            '[NotificationProvider] addNotificationFromId: 알림 사용자 불일치 (알림: ${notification.userId}, 현재: $currentUserId)',
-          );
-          return;
-        }
-
-        // 관리자 알림 여부 확인
-        if (notification.isAdminNotification != isAdmin) {
-          debugPrint(
-            '[NotificationProvider] addNotificationFromId: 알림 타입 불일치 (알림: ${notification.isAdminNotification}, 현재: $isAdmin)',
-          );
-          return;
-        }
-
-        // 플레이스 필터링: 현재 플레이스와 일치하는 알림만 추가
-        if (placeId != null && notification.placeId != null) {
-          if (notification.placeId != placeId) {
-            debugPrint(
-              '[NotificationProvider] addNotificationFromId: 알림 플레이스 불일치 (알림: ${notification.placeId}, 현재: $placeId)',
-            );
-            return;
-          }
-        }
-
-        // 최신 알림을 맨 앞에 추가
-        _notifications.insert(0, notification);
-        // createdAt 기준으로 정렬 (최신순)
-        _notifications.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-        // 최대 100개까지만 유지 (메모리 관리)
-        if (_notifications.length > 100) {
-          _notifications = _notifications.take(100).toList();
-        }
-        // 즉시 notifyListeners() 호출하여 빨간 닷 표시
-        notifyListeners();
+      if (notification == null) {
+        debugPrint('[NotificationProvider] addNotificationFromId Firestore에서 알림 없음 (doc 없거나 파싱 실패)');
+        return;
       }
+      debugPrint('[NotificationProvider] addNotificationFromId Firestore 조회됨 userId=${notification.userId} isAdminNotification=${notification.isAdminNotification} placeId=${notification.placeId}');
+
+      if (notification.userId != currentUserId) {
+        debugPrint('[NotificationProvider] addNotificationFromId 알림 사용자 불일치 → 스킵');
+        return;
+      }
+
+      if (notification.isAdminNotification != isAdmin) {
+        debugPrint('[NotificationProvider] addNotificationFromId 알림 타입 불일치 → 스킵');
+        return;
+      }
+
+      if (placeId != null && notification.placeId != null) {
+        if (notification.placeId != placeId) {
+          debugPrint('[NotificationProvider] addNotificationFromId 알림 플레이스 불일치 → 스킵');
+          return;
+        }
+      }
+
+      _notifications.insert(0, notification);
+      _notifications.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      if (_notifications.length > 100) {
+        _notifications = _notifications.take(100).toList();
+      }
+      notifyListeners();
+      debugPrint('[NotificationProvider] addNotificationFromId 추가 완료, 목록 개수=${_notifications.length}');
     } catch (e) {
       debugPrint('[NotificationProvider] addNotificationFromId error: $e');
-      // 에러가 발생해도 조용히 처리 (FCM 수신은 계속 진행)
     }
   }
 

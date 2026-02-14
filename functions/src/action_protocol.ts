@@ -38,6 +38,28 @@ export function throwRequiresCascade(details: Omit<RequiresCascadeDetails, 'requ
   );
 }
 
+export type RequiresCascadeDeleteCourseDetails = {
+  requiresCascade: true;
+  kind: 'deleteCourse';
+  courseId: string;
+  courseName: string;
+  reservationCount: number;
+};
+
+export function throwRequiresCascadeDeleteCourse(
+  details: Omit<RequiresCascadeDeleteCourseDetails, 'requiresCascade' | 'kind'>,
+): never {
+  throw new functions.https.HttpsError(
+    'failed-precondition',
+    '코스 삭제를 위해 먼저 남아있는 예약을 모두 취소해야 합니다.',
+    {
+      requiresCascade: true,
+      kind: 'deleteCourse',
+      ...details,
+    } satisfies RequiresCascadeDeleteCourseDetails,
+  );
+}
+
 export type RequiresBulkMoveDetails = {
   requiresBulkMove: true;
   courseId: string;

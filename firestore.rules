@@ -258,7 +258,9 @@ service cloud.firestore {
     match /notifications/{notificationId} {
       allow read: if signedIn() && resource.data.userId == request.auth.uid;
       // 알림 생성은 서버/관리자에서만
-      allow create, delete: if isAdmin();
+      allow create: if isAdmin();
+      // 본인 알림 삭제 허용, 관리자는 모든 알림 삭제 가능
+      allow delete: if signedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       // 읽음 처리만 유저가 가능
       allow update: if signedIn() && resource.data.userId == request.auth.uid;
     }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'dart:io';
 import 'package:provider/provider.dart';
 import '../../../theme/app_colors.dart';
@@ -64,9 +65,10 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
     // 기존 코스 정보 로드
     _nameController.text = widget.course.name;
     // description이 비어있으면 Place의 description을 기본값으로 사용
-    _descriptionController.text = widget.course.description.isEmpty
-        ? placeDescription
-        : widget.course.description;
+    _descriptionController.text =
+        widget.course.description.isEmpty
+            ? placeDescription
+            : widget.course.description;
     _uploadedImageUrl = widget.course.imageUrl;
     _existingImageUrl = widget.course.imageUrl; // 원본 URL 저장 (삭제용)
     _selectedColor = widget.course.color;
@@ -80,9 +82,10 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
         widget.course.uniformPeriodType ?? reservation_models.PeriodType.weeks;
     _uniformPeriodValue = widget.course.uniformPeriodValue ?? 1;
     // 0이면 빈 문자열로 표시 (hintText로 "0" 표시)
-    _uniformTotalReservationsController.text = _uniformTotalReservations == 0
-        ? ''
-        : _uniformTotalReservations.toString();
+    _uniformTotalReservationsController.text =
+        _uniformTotalReservations == 0
+            ? ''
+            : _uniformTotalReservations.toString();
     _uniformPeriodController.text = _uniformPeriodValue.toString();
 
     // 코스명 입력 시 실시간 검증
@@ -330,9 +333,10 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
       // 기존 코스 정보를 업데이트하여 새 Course 객체 생성
       // 일괄 적용 모드가 켜져 있으면 일괄 적용 수업 횟수를 defaultTotalReservations로 사용
       // 일괄 적용 모드가 꺼져 있으면 기존 defaultTotalReservations 유지
-      final defaultTotalReservations = _useUniformSettings
-          ? _uniformTotalReservations
-          : widget.course.defaultTotalReservations;
+      final defaultTotalReservations =
+          _useUniformSettings
+              ? _uniformTotalReservations
+              : widget.course.defaultTotalReservations;
 
       final updatedCourse = reservation_models.Course(
         id: widget.course.id,
@@ -344,9 +348,8 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
         defaultTotalReservations:
             defaultTotalReservations, // 등록당 수업 횟수 (새로 등록하는 멤버에게만 적용)
         useUniformSettings: _useUniformSettings,
-        uniformTotalReservations: _useUniformSettings
-            ? _uniformTotalReservations
-            : null,
+        uniformTotalReservations:
+            _useUniformSettings ? _uniformTotalReservations : null,
         uniformPeriodType: _useUniformSettings ? _uniformPeriodType : null,
         uniformPeriodValue: _useUniformSettings ? _uniformPeriodValue : null,
       );
@@ -408,24 +411,50 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
         listen: false,
       );
 
-      await courseProvider.deleteCourse(widget.course.id);
+      // 1) cascade=false로 먼저 체크(미래 예약 있으면 requiresCascade로 막힘)
+      try {
+        await courseProvider.deleteCourse(widget.course.id, cascade: false);
+      } on FirebaseFunctionsException catch (e) {
+        final details = e.details;
+        final detailsMap =
+            details is Map ? Map<String, dynamic>.from(details) : null;
+        final requiresCascade = detailsMap?['requiresCascade'] == true;
+        final kind = detailsMap?['kind'];
+
+        if (requiresCascade && kind == 'deleteCourse') {
+          final reservationCount = detailsMap?['reservationCount'];
+
+          final confirmedCascade = await CommonDialog.show(
+            context: context,
+            title: '코스 삭제',
+            message: '$reservationCount건의 예약이 있는 코스입니다.\n삭제 처리하시겠습니까?',
+            cancelText: '취소',
+            confirmText: '코스 삭제',
+            confirmButtonColor: Colors.red,
+          );
+          if (confirmedCascade != true) {
+            return;
+          }
+
+          await courseProvider.deleteCourse(widget.course.id, cascade: true);
+        } else {
+          rethrow;
+        }
+      }
 
       if (mounted) {
         SnackbarUtil.showSuccess(context, '코스가 삭제되었습니다.');
-        // 삭제 시 2개 화면 모두 닫기 (편집 화면 + 상세 화면)
-        Navigator.of(context).pop(); // 편집 화면 닫기
-        Navigator.of(context).pop(); // 상세 화면 닫기
+        // 빌드 단계 종료 후 pop (setState during build 방지)
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          // 편집 화면 + 상세 화면 닫아서 관리자 홈(코스 목록)으로 복귀
+          if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+          if (mounted && Navigator.of(context).canPop()) Navigator.of(context).pop();
+        });
       }
     } catch (e) {
       if (mounted) {
-        // 에러 메시지를 유저 친화적으로 변환
-        String errorMessage;
-        if (e.toString().contains('ACTIVE_RESERVATIONS_EXIST')) {
-          errorMessage = '아직 예약된 수업이 있어서 삭제할 수 없어요.\n먼저 예약을 취소해주세요.';
-        } else {
-          errorMessage = '코스 삭제 중 문제가 발생했어요.\n잠시 후 다시 시도해주세요.';
-        }
-        SnackbarUtil.showError(context, errorMessage);
+        SnackbarUtil.showError(context, '코스 삭제 중 문제가 발생했어요.\n잠시 후 다시 시도해주세요.');
       }
     } finally {
       if (mounted) {
@@ -484,9 +513,10 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                             const Spacer(),
                             // 삭제 버튼
                             GestureDetector(
-                              onTap: (_isSaving || _isDeleting)
-                                  ? null
-                                  : _deleteCourse,
+                              onTap:
+                                  (_isSaving || _isDeleting)
+                                      ? null
+                                      : _deleteCourse,
                               child: Opacity(
                                 opacity: (_isSaving || _isDeleting) ? 0.5 : 1.0,
                                 child: Container(
@@ -496,24 +526,26 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                                     shape: BoxShape.circle,
                                   ),
                                   child: Center(
-                                    child: _isDeleting
-                                        ? const SizedBox(
-                                            width: 20,
-                                            height: 20,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                              color: Colors.red,
+                                    child:
+                                        _isDeleting
+                                            ? const SizedBox(
+                                              width: 20,
+                                              height: 20,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                                color: AppColors.primaryGreen,
+                                              ),
+                                            )
+                                            : SvgPicture.asset(
+                                              'assets/icons/delete.svg',
+                                              width: 20,
+                                              height: 20,
+                                              colorFilter:
+                                                  const ColorFilter.mode(
+                                                    Colors.red,
+                                                    BlendMode.srcIn,
+                                                  ),
                                             ),
-                                          )
-                                        : SvgPicture.asset(
-                                            'assets/icons/delete.svg',
-                                            width: 20,
-                                            height: 20,
-                                            colorFilter: const ColorFilter.mode(
-                                              Colors.red,
-                                              BlendMode.srcIn,
-                                            ),
-                                          ),
                                   ),
                                 ),
                               ),
@@ -591,19 +623,19 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                   child: ElevatedButton(
                     onPressed:
                         (_isFormValid() &&
-                            _hasChanges() &&
-                            !_isSaving &&
-                            !_isUploading)
-                        ? _saveCourse
-                        : null,
+                                _hasChanges() &&
+                                !_isSaving &&
+                                !_isUploading)
+                            ? _saveCourse
+                            : null,
                     style: ElevatedButton.styleFrom(
                       backgroundColor:
                           (_isFormValid() &&
-                              _hasChanges() &&
-                              !_isSaving &&
-                              !_isUploading)
-                          ? AppColors.primaryGreen
-                          : AppColors.borderLight,
+                                  _hasChanges() &&
+                                  !_isSaving &&
+                                  !_isUploading)
+                              ? AppColors.primaryGreen
+                              : AppColors.borderLight,
                       disabledBackgroundColor: AppColors.borderLight,
                       padding: const EdgeInsets.symmetric(vertical: 18),
                       shape: RoundedRectangleBorder(
@@ -611,29 +643,30 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                       ),
                       elevation: 0,
                     ),
-                    child: _isSaving
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
+                    child:
+                        _isSaving
+                            ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                            : Text(
+                              '저장',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color:
+                                    (_isFormValid() &&
+                                            _hasChanges() &&
+                                            !_isSaving &&
+                                            !_isUploading)
+                                        ? Colors.white
+                                        : AppColors.textSecondary,
+                              ),
                             ),
-                          )
-                        : Text(
-                            '저장',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color:
-                                  (_isFormValid() &&
-                                      _hasChanges() &&
-                                      !_isSaving &&
-                                      !_isUploading)
-                                  ? Colors.white
-                                  : AppColors.textSecondary,
-                            ),
-                          ),
                   ),
                 ),
               ),
@@ -663,30 +696,31 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
           ),
           maxLines: null,
           minLines: minLines ?? 1,
-          decoration:
-              TextFieldDecorationUtil.defaultDecoration(
-                hintText: hintText,
-                hasFocus: focusNode.hasFocus,
-                floatingLabelBehavior: FloatingLabelBehavior.always,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 16,
-                ),
-              ).copyWith(
-                errorText: errorText,
-                errorBorder: errorText != null
+          decoration: TextFieldDecorationUtil.defaultDecoration(
+            hintText: hintText,
+            hasFocus: focusNode.hasFocus,
+            floatingLabelBehavior: FloatingLabelBehavior.always,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 16,
+            ),
+          ).copyWith(
+            errorText: errorText,
+            errorBorder:
+                errorText != null
                     ? OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(20),
-                        borderSide: BorderSide.none,
-                      )
+                      borderRadius: BorderRadius.circular(20),
+                      borderSide: BorderSide.none,
+                    )
                     : null,
-                focusedErrorBorder: errorText != null
+            focusedErrorBorder:
+                errorText != null
                     ? OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(20),
-                        borderSide: BorderSide.none,
-                      )
+                      borderRadius: BorderRadius.circular(20),
+                      borderSide: BorderSide.none,
+                    )
                     : null,
-              ),
+          ),
           onChanged: (_) => setState(() {}),
         ),
         if (errorText != null) ...[
@@ -1144,24 +1178,27 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
               Material(
                 color: Colors.transparent,
                 child: InkWell(
-                  onTap: _uniformPeriodValue > 0
-                      ? () {
-                          setState(() {
-                            final newValue = _uniformPeriodValue - 1;
-                            _uniformPeriodValue = newValue;
-                            _uniformPeriodController.text = newValue.toString();
-                          });
-                        }
-                      : null,
+                  onTap:
+                      _uniformPeriodValue > 0
+                          ? () {
+                            setState(() {
+                              final newValue = _uniformPeriodValue - 1;
+                              _uniformPeriodValue = newValue;
+                              _uniformPeriodController.text =
+                                  newValue.toString();
+                            });
+                          }
+                          : null,
                   borderRadius: BorderRadius.circular(8),
                   child: Container(
                     padding: const EdgeInsets.all(8),
                     child: Icon(
                       Icons.remove_rounded,
                       size: 20,
-                      color: _uniformPeriodValue > 0
-                          ? AppColors.primaryGreen
-                          : AppColors.textLight.withOpacity(0.3),
+                      color:
+                          _uniformPeriodValue > 0
+                              ? AppColors.primaryGreen
+                              : AppColors.textLight.withOpacity(0.3),
                     ),
                   ),
                 ),
@@ -1178,9 +1215,10 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                   style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w600,
-                    color: _uniformPeriodValue == 0
-                        ? AppColors.textSecondary.withOpacity(0.4)
-                        : AppColors.textPrimary,
+                    color:
+                        _uniformPeriodValue == 0
+                            ? AppColors.textSecondary.withOpacity(0.4)
+                            : AppColors.textPrimary,
                   ),
                   decoration: InputDecoration(
                     border: InputBorder.none,
@@ -1226,8 +1264,8 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                       } else if (intValue > getMaxValue()) {
                         setState(() {
                           _uniformPeriodValue = getMaxValue();
-                          _uniformPeriodController.text = getMaxValue()
-                              .toString();
+                          _uniformPeriodController.text =
+                              getMaxValue().toString();
                         });
                       } else {
                         setState(() {
@@ -1243,24 +1281,27 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
               Material(
                 color: Colors.transparent,
                 child: InkWell(
-                  onTap: _uniformPeriodValue < getMaxValue()
-                      ? () {
-                          setState(() {
-                            final newValue = _uniformPeriodValue + 1;
-                            _uniformPeriodValue = newValue;
-                            _uniformPeriodController.text = newValue.toString();
-                          });
-                        }
-                      : null,
+                  onTap:
+                      _uniformPeriodValue < getMaxValue()
+                          ? () {
+                            setState(() {
+                              final newValue = _uniformPeriodValue + 1;
+                              _uniformPeriodValue = newValue;
+                              _uniformPeriodController.text =
+                                  newValue.toString();
+                            });
+                          }
+                          : null,
                   borderRadius: BorderRadius.circular(8),
                   child: Container(
                     padding: const EdgeInsets.all(8),
                     child: Icon(
                       Icons.add_rounded,
                       size: 20,
-                      color: _uniformPeriodValue < getMaxValue()
-                          ? AppColors.primaryGreen
-                          : AppColors.textLight.withOpacity(0.3),
+                      color:
+                          _uniformPeriodValue < getMaxValue()
+                              ? AppColors.primaryGreen
+                              : AppColors.textLight.withOpacity(0.3),
                     ),
                   ),
                 ),
@@ -1295,9 +1336,8 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w600,
-              color: isSelected
-                  ? AppColors.textPrimary
-                  : AppColors.textSecondary,
+              color:
+                  isSelected ? AppColors.textPrimary : AppColors.textSecondary,
             ),
           ),
         ),
