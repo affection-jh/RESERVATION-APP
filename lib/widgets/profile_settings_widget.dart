@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:app_settings/app_settings.dart';
 import 'package:provider/provider.dart';
+import '../main.dart';
 import '../theme/app_colors.dart';
 import '../widgets/common_dialog.dart';
 import '../screens/admin/widgets/admin_shared_widgets.dart' show SectionHeader;
@@ -241,20 +244,8 @@ class SettingsItemsBuilder {
       SettingItem(
         icon: Icons.notifications_outlined,
         title: '알림 설정',
-        trailing: Text(
-          isNotificationEnabled != null
-              ? (isNotificationEnabled ? 'ON' : 'OFF')
-              : 'ON',
-          style: TextStyle(
-            fontSize: 15,
-            color:
-                isNotificationEnabled != null
-                    ? (isNotificationEnabled
-                        ? AppColors.primaryGreen
-                        : AppColors.textSecondary)
-                    : AppColors.primaryGreen,
-            fontWeight: FontWeight.w500,
-          ),
+        trailing: _NotificationSettingTrailing(
+          isNotificationEnabled: isNotificationEnabled,
         ),
         showArrow: false,
         onTap:
@@ -269,7 +260,7 @@ class SettingsItemsBuilder {
         icon: Icons.info_outline,
         title: '앱 버전',
         trailing: Text(
-          '1.0.0',
+          AppConfig.appVersion,
           style: TextStyle(
             fontSize: 16,
             color: AppColors.primaryGreen,
@@ -492,6 +483,91 @@ class UserProfileInfoSection extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 알림 설정: 앱 내 ON/OFF 메인 표시, OS 권한 거부 시에만 '권한 설정 필요' 보조 표시
+class _NotificationSettingTrailing extends StatefulWidget {
+  final bool? isNotificationEnabled;
+
+  const _NotificationSettingTrailing({this.isNotificationEnabled});
+
+  @override
+  State<_NotificationSettingTrailing> createState() =>
+      _NotificationSettingTrailingState();
+}
+
+class _NotificationSettingTrailingState extends State<_NotificationSettingTrailing>
+    with WidgetsBindingObserver {
+  bool? _permissionGranted;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _loadPermission();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _loadPermission();
+    }
+  }
+
+  Future<void> _loadPermission() async {
+    final settings =
+        await FirebaseMessaging.instance.getNotificationSettings();
+    final granted =
+        settings.authorizationStatus == AuthorizationStatus.authorized ||
+        settings.authorizationStatus == AuthorizationStatus.provisional;
+    if (mounted) setState(() => _permissionGranted = granted);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isOn = widget.isNotificationEnabled ?? true;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Text(
+          isOn ? 'ON' : 'OFF',
+          style: TextStyle(
+            fontSize: 15,
+            color: isOn ? AppColors.primaryGreen : AppColors.textSecondary,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        if (_permissionGranted == false) ...[
+          const SizedBox(height: 4),
+          GestureDetector(
+            onTap: () => AppSettings.openAppSettings(type: AppSettingsType.notification),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppColors.textSecondary.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                '권한 설정 필요',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: AppColors.textSecondary,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }

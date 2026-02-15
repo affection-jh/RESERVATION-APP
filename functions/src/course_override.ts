@@ -447,22 +447,29 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
             const notifyOnOverrideAdd = placeData?.notifyOnOverrideAdd ?? true; // 기본값: true
 
             if (notifyOnOverrideAdd) {
-                // 해당 코스에 등록된 멤버에게만 알림
+                // 해당 코스에 등록된 멤버에게만 알림 (validUntil >= 오늘인 등록)
                 const enrollmentsSnapshot = await db
                     .collection('enrollments')
                     .where('placeId', '==', placeId)
                     .where('courseId', '==', courseId)
-                    .where('status', '==', 'active')
                     .get();
 
-                const notificationPromises = enrollmentsSnapshot.docs.map(async (doc) => {
+                const todayStr = new Date().toISOString().slice(0, 10);
+                const activeEnrollments = enrollmentsSnapshot.docs.filter((doc) => {
+                    const d = doc.data() as any;
+                    const validUntil = d?.validUntil?.toDate?.();
+                    if (!validUntil) return true;
+                    return validUntil.toISOString().slice(0, 10) >= todayStr;
+                });
+
+                const notificationPromises = activeEnrollments.map(async (doc) => {
                     const enrollment = doc.data();
                     const userId = enrollment.userId;
 
                     return createNotification({
                         userId,
                         type: 'system',
-                        title: '새 수업 일정',
+                        title: '새 수업 일정이 생성되었습니다',
                         body: `${formatDateKr(date)} ${startTime} (${capacity}명)`,
                         placeId,
                         data: {

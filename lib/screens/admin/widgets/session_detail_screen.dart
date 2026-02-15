@@ -1191,8 +1191,12 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
             sendNotification: shouldSendNotification,
           ));
 
-      // 성공 시 화면 닫기
+      // 성공 시 로딩 스낵바를 성공 메시지로 대체한 뒤 화면 닫기
       if (mounted) {
+        SnackbarUtil.showSuccess(
+          context,
+          addedOverride != null ? '세션이 삭제되었습니다.' : '세션이 취소되었습니다.',
+        );
         Navigator.of(context).pop();
       }
     } catch (e) {

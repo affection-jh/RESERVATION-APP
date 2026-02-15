@@ -31,6 +31,11 @@ import 'utils/navigator_key.dart';
 import 'widgets/reservation_feedback_listener.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
+/// 앱 전역 상수 (버전 등)
+abstract class AppConfig {
+  static const String appVersion = '1.0.1';
+}
+
 // 백그라운드 메시지 핸들러 (최상위 함수로 선언, 앱이 백그라운드/종료일 때만 호출)
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -202,6 +207,7 @@ class MyApp extends StatelessWidget {
             final args = ModalRoute.of(context)?.settings.arguments;
             int initialIndex = 0;
             Map<String, dynamic>? highlightReservation;
+            Map<String, dynamic>? highlightNewSession;
 
             if (args is int) {
               initialIndex = args;
@@ -209,11 +215,14 @@ class MyApp extends StatelessWidget {
               initialIndex = args['initialIndex'] as int? ?? 0;
               highlightReservation =
                   args['highlightReservation'] as Map<String, dynamic>?;
+              highlightNewSession =
+                  args['highlightNewSession'] as Map<String, dynamic>?;
             }
 
             return MainScreen(
               initialIndex: initialIndex,
               highlightReservation: highlightReservation,
+              highlightNewSession: highlightNewSession,
             );
           },
           '/admin-register': (context) {
@@ -255,11 +264,13 @@ class MyApp extends StatelessWidget {
 class MainScreen extends StatefulWidget {
   final int initialIndex; // 초기 탭 인덱스
   final Map<String, dynamic>? highlightReservation; // 강조할 예약 정보
+  final Map<String, dynamic>? highlightNewSession; // 새 수업 일정 알림 → 예약 화면에서 해당 세션 표시
 
   const MainScreen({
     super.key,
     this.initialIndex = 0, // 기본값: 홈
     this.highlightReservation,
+    this.highlightNewSession,
   });
 
   @override
@@ -272,11 +283,13 @@ class _MainScreenState extends State<MainScreen> {
 
   // "명시적으로 마이페이지로 이동"했을 때만 1회 소비되는 하이라이트 데이터
   Map<String, dynamic>? _pendingHighlightReservation;
+  Map<String, dynamic>? _pendingHighlightNewSession;
 
   @override
   void initState() {
     super.initState();
     _pendingHighlightReservation = widget.highlightReservation;
+    _pendingHighlightNewSession = widget.highlightNewSession;
     _currentIndex = widget.initialIndex.clamp(0, 2);
     // Provider load → notifyListeners()가 첫 build 중에 발생하면
     // "setState() or markNeedsBuild() called during build"가 터질 수 있어서
@@ -385,7 +398,15 @@ class _MainScreenState extends State<MainScreen> {
             index: _currentIndex,
             children: [
               const HomeScreen(), // 0: 홈
-              const ReservationScreen(), // 1: 예약
+              ReservationScreen(
+                highlightNewSession:
+                    _currentIndex == 1 ? _pendingHighlightNewSession : null,
+                onHighlightConsumed: () {
+                  if (_pendingHighlightNewSession != null) {
+                    setState(() => _pendingHighlightNewSession = null);
+                  }
+                },
+              ), // 1: 예약
             // 2: 마이페이지
             //
             // ⚠️ 바텀 네비로 마이페이지에 "그냥 들어왔을 때"는 하이라이트 애니메이션을 촉발하지 않는다.

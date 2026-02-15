@@ -45,6 +45,7 @@ class _NotificationSettingsDialogState
     if (!_hasChanges || _isSaving) return;
 
     setState(() => _isSaving = true);
+    bool didClose = false;
 
     try {
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
@@ -64,7 +65,8 @@ class _NotificationSettingsDialogState
         // AuthProvider 업데이트
         authProvider.setCurrentAdmin(updatedAdmin);
       } else if (currentUser != null) {
-        // 일반 사용자 정보 업데이트
+        // 일반 사용자: UserService에 현재 유저 동기화 후 업데이트 (권한 체크 통과)
+        await userService.login(currentUser.userId);
         final updatedUser = currentUser.updateProfile(
           notificationsEnabled: _currentValue,
         );
@@ -82,14 +84,17 @@ class _NotificationSettingsDialogState
           context,
           _currentValue ? '알림이 켜졌습니다.' : '알림이 꺼졌습니다.',
         );
+        didClose = true;
         Navigator.of(context).pop(true);
       }
     } catch (e) {
+      debugPrint('알림 설정 변경에 실패했습니다: $e');
       if (mounted) {
         SnackbarUtil.showInfo(context, '알림 설정 변경에 실패했습니다.');
       }
     } finally {
-      if (mounted) {
+      // 성공 후 pop 한 경우 setState 하지 않음 → 닫히는 중 리빌드로 스위치/UI 흔들림 방지
+      if (mounted && !didClose) {
         setState(() => _isSaving = false);
       }
     }
@@ -161,7 +166,7 @@ class _NotificationSettingsDialogState
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      '알림을 해제하면 예약 및 중요 일람을 받지 못할 수 있어요',
+                      '알림을 해제하면 예약 및 변경 등의 중요한 공지를 받지 못할 수 있어요',
                       style: TextStyle(
                         fontSize: 13,
                         color: AppColors.textSecondary,

@@ -51,6 +51,7 @@ dependencies:
   shimmer: ^3.0.0
   dio: ^5.7.0
   google_fonts: ^6.3.2
+  app_settings: ^7.0.0
 
 dev_dependencies:
   flutter_test:

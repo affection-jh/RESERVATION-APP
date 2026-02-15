@@ -96,9 +96,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
             courseId != null &&
             placeId != null) {
           try {
-            // 연장 요청: 탭 1
             final initialTabIndex = 1;
-
             await _navigateToEnrollmentDetail(
               enrollmentId: enrollmentId,
               userId: userId,
@@ -108,6 +106,26 @@ class _NotificationScreenState extends State<NotificationScreen> {
             );
           } catch (e) {
             debugPrint('[NotificationScreen] enrollment 상세 화면 이동 오류: $e');
+          }
+        } else if (courseId != null && placeId != null) {
+          // 새 수업 일정 알림 → 예약 화면으로 이동 + 해당 주차·세션 표시
+          try {
+            final dateStr = data['date'] as String?;
+            final dayOfWeekRaw = data['dayOfWeek'];
+            final dayOfWeek = dayOfWeekRaw is int
+                ? dayOfWeekRaw
+                : (dayOfWeekRaw != null ? int.tryParse('$dayOfWeekRaw') : null);
+            final startTime = data['startTime'] as String?;
+            await _navigateToReservationWithHighlight(
+              courseId: courseId,
+              placeId: placeId,
+              date: dateStr,
+              dayOfWeek: dayOfWeek,
+              startTime: startTime,
+            );
+          } catch (e) {
+            debugPrint(
+                '[NotificationScreen] 예약 화면(새 수업 일정) 이동 오류: $e');
           }
         }
         break;
@@ -213,6 +231,32 @@ class _NotificationScreenState extends State<NotificationScreen> {
     } catch (e) {
       debugPrint('[NotificationScreen] 스토리 상세 화면 이동 오류: $e');
       rethrow;
+    }
+  }
+
+  /// 예약 화면으로 이동 + 해당 주차·세션 강조 (새 수업 일정 알림용)
+  Future<void> _navigateToReservationWithHighlight({
+    required String courseId,
+    required String placeId,
+    String? date,
+    int? dayOfWeek,
+    String? startTime,
+  }) async {
+    if (mounted) {
+      Navigator.of(context).pushNamedAndRemoveUntil(
+        '/main',
+        (route) => false,
+        arguments: {
+          'initialIndex': 1, // 예약 탭
+          'highlightNewSession': {
+            'courseId': courseId,
+            'placeId': placeId,
+            if (date != null) 'date': date,
+            if (dayOfWeek != null) 'dayOfWeek': dayOfWeek,
+            if (startTime != null) 'startTime': startTime,
+          },
+        },
+      );
     }
   }
 
@@ -730,7 +774,7 @@ class _NotificationTile extends StatelessWidget {
   IconData _getNotificationIcon() {
     switch (notification.type) {
       case NotificationType.reservation:
-        return Icons.calendar_today_outlined;
+        return Icons.calendar_today_outlined; // reservation은 SVG 사용
       case NotificationType.story:
         return Icons.article_outlined;
       case NotificationType.promotion:
@@ -738,6 +782,21 @@ class _NotificationTile extends StatelessWidget {
       case NotificationType.system:
         return Icons.info_outline;
     }
+  }
+
+  Widget _buildNotificationIcon() {
+    final color = notification.isRead
+        ? AppColors.textSecondary.withOpacity(0.6)
+        : Colors.white;
+    if (notification.type == NotificationType.reservation) {
+      return SvgPicture.asset(
+        'assets/icons/calendar-icon.svg',
+        width: 28,
+        height: 28,
+        colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
+      );
+    }
+    return Icon(_getNotificationIcon(), size: 28, color: color);
   }
 
   @override
@@ -769,14 +828,7 @@ class _NotificationTile extends StatelessWidget {
                               ? AppColors.backgroundLight
                               : AppColors.primaryGreen,
                     ),
-                    child: Icon(
-                      _getNotificationIcon(),
-                      size: 28,
-                      color:
-                          notification.isRead
-                              ? AppColors.textSecondary.withOpacity(0.6)
-                              : Colors.white,
-                    ),
+                    child: Center(child: _buildNotificationIcon()),
                   ),
                 ],
               ),

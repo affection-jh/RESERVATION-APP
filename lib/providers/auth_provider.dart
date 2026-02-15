@@ -234,14 +234,17 @@ class AuthProvider with ChangeNotifier {
 
   /// 사용자 설정
   void setCurrentUser(User user) {
+    final isProfileUpdate = _currentUser?.userId == user.userId;
     _currentUser = user;
     _isAuthenticated = true;
     notifyListeners();
 
-    // FCM 초기화 (자동 로그인 시)
-    _initializeFcm(user.userId).catchError((e) {
-      debugPrint('FCM 초기화 실패: $e');
-    });
+    // FCM 초기화는 로그인/자동 로그인 시에만. 앱 내 프로필만 갱신(알림 ON/OFF 등) 시에는 재시도하지 않음
+    if (!isProfileUpdate || _initializedFcmUserId != user.userId) {
+      _initializeFcm(user.userId).catchError((e) {
+        debugPrint('FCM 초기화 실패: $e');
+      });
+    }
   }
 
   /// 연결된 관리자 계정 설정 (일반 사용자와 같은 전화번호의 관리자)
@@ -267,14 +270,17 @@ class AuthProvider with ChangeNotifier {
 
   /// 관리자 설정
   void setCurrentAdmin(AdminUser admin) {
+    final isProfileUpdate = _currentAdmin?.userId == admin.userId;
     _currentAdmin = admin;
     _isAuthenticated = true;
     notifyListeners();
 
-    // FCM 초기화 (관리자 자동 로그인 시)
-    _initializeFcm(admin.userId).catchError((e) {
-      debugPrint('FCM 초기화 실패: $e');
-    });
+    // FCM 초기화는 로그인/자동 로그인 시에만. 앱 내 프로필만 갱신(알림 ON/OFF 등) 시에는 재시도하지 않음
+    if (!isProfileUpdate || _initializedFcmUserId != admin.userId) {
+      _initializeFcm(admin.userId).catchError((e) {
+        debugPrint('FCM 초기화 실패: $e');
+      });
+    }
   }
 
   /// 관리자 모드 해제 (멤버 모드로 전환 시 사용)

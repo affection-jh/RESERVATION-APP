@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../../main.dart';
 import '../../../theme/app_colors.dart';
 import '../../../services/auth_service.dart';
 import '../../../widgets/common_dialog.dart';
@@ -80,7 +81,7 @@ class AdminSettingsScreen extends StatelessWidget {
                 icon: Icons.info_outline,
                 label: '앱 버전',
                 trailing: Text(
-                  '1.0.0',
+                  AppConfig.appVersion,
                   style: TextStyle(
                     fontSize: 16,
                     color: AppColors.textSecondary,

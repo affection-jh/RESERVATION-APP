@@ -28,8 +28,9 @@ import 'package:flutter/scheduler.dart';
 
 class CalendarScreen extends StatefulWidget {
   final Course course;
+  final Map<String, dynamic>? highlightSession;
 
-  const CalendarScreen({super.key, required this.course});
+  const CalendarScreen({super.key, required this.course, this.highlightSession});
 
   @override
   State<CalendarScreen> createState() => _CalendarScreenState();
@@ -107,6 +108,23 @@ class _CalendarScreenState extends State<CalendarScreen> {
   void initState() {
     super.initState();
     _effectiveCourse = widget.course;
+    final hl = widget.highlightSession;
+    if (hl != null) {
+      final dateStr = hl['date'] as String?;
+      if (dateStr != null && dateStr.isNotEmpty) {
+        try {
+          final target = DateTime.parse(dateStr);
+          final now = TimezoneUtils.getSeoulDateTime();
+          final thisMonday = _startOfWeekMonday(now);
+          final targetMonday = _startOfWeekMonday(target);
+          final diffDays = targetMonday.difference(thisMonday).inDays;
+          final weekOffset = (diffDays / 7).round();
+          if (weekOffset >= 0) {
+            _weekOffset = weekOffset;
+          }
+        } catch (_) {}
+      }
+    }
     debugPrint('[CalendarScreen] initState: 화면 초기화 시작');
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -395,9 +413,30 @@ class _CalendarScreenState extends State<CalendarScreen> {
       }
     }
 
-    // 정책 기반 주차 + 미리 열린 주차 합치기 (이번 주 0은 항상 포함)
-    var sortedOffsets =
-        <int>[0, ...baseOffsets, ...openedOffsets].toSet().toList()..sort();
+    // highlightSession의 주차도 포함 (새 수업 일정 알림 등)
+    final highlightOffsets = <int>{};
+    final hl = widget.highlightSession;
+    if (hl != null) {
+      final dateStr = hl['date'] as String?;
+      if (dateStr != null && dateStr.isNotEmpty) {
+        try {
+          final target = DateTime.parse(dateStr);
+          final diffDays =
+              _startOfWeekMonday(target).difference(thisWeekMonday).inDays;
+          final weekOffset = (diffDays / 7).round();
+          if (weekOffset >= 0) highlightOffsets.add(weekOffset);
+        } catch (_) {}
+      }
+    }
+
+    // 정책 기반 주차 + 미리 열린 주차 + highlight 주차 합치기
+    var sortedOffsets = <int>[
+      0,
+      ...baseOffsets,
+      ...openedOffsets,
+      ...highlightOffsets
+    ].toSet().toList()
+      ..sort();
 
     // 빈 리스트 방지 (clamp(0, -1) 예외 방지)
     if (sortedOffsets.isEmpty) {
@@ -1233,14 +1272,24 @@ class _CalendarScreenState extends State<CalendarScreen> {
       slotTops[i + 1] = slotTops[i] + slotHeights[i];
     }
 
-    // 초기 점프 위치: 첫 세션 시작 - 2시간 (없으면 rangeStart)
-    final initialJumpMinute =
-        minSessionStart == null
-            ? rangeStartMinutes
-            : (minSessionStart - _basePaddingMinutes).clamp(
-              rangeStartMinutes,
-              rangeEndMinutes,
-            );
+    // 초기 점프 위치: highlightSession 있으면 해당 세션, 없으면 첫 세션 - 2시간
+    int jumpMinute = rangeStartMinutes;
+    final hl = widget.highlightSession;
+    if (hl != null) {
+      final startTime = hl['startTime'] as String?;
+      if (startTime != null && startTime.isNotEmpty) {
+        try {
+          final m = _parseTimeToMinutes(startTime);
+          jumpMinute =
+              (m - _basePaddingMinutes).clamp(rangeStartMinutes, rangeEndMinutes);
+        } catch (_) {}
+      }
+    }
+    if (jumpMinute == rangeStartMinutes && minSessionStart != null) {
+      jumpMinute = (minSessionStart - _basePaddingMinutes)
+          .clamp(rangeStartMinutes, rangeEndMinutes);
+    }
+    final initialJumpMinute = jumpMinute;
 
     return _SlotLayout(
       timeSlots: timeSlots,

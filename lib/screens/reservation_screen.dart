@@ -13,7 +13,14 @@ import '../utils/storage_service.dart';
 import '../utils/snackbar_util.dart';
 
 class ReservationScreen extends StatefulWidget {
-  const ReservationScreen({super.key});
+  final Map<String, dynamic>? highlightNewSession;
+  final VoidCallback? onHighlightConsumed;
+
+  const ReservationScreen({
+    super.key,
+    this.highlightNewSession,
+    this.onHighlightConsumed,
+  });
 
   @override
   State<ReservationScreen> createState() => _ReservationScreenState();
@@ -31,9 +38,46 @@ class _ReservationScreenState extends State<ReservationScreen> {
     super.initState();
     // 빌드 완료 후 데이터 로드 (setState during build 에러 방지)
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _loadDataIfNeeded();
+      _loadDataIfNeeded().then((_) {
+        _tryOpenCalendarForHighlight();
+      });
       _loadFavorites();
     });
+  }
+
+  @override
+  void didUpdateWidget(ReservationScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.highlightNewSession != null &&
+        widget.highlightNewSession != oldWidget.highlightNewSession) {
+      _tryOpenCalendarForHighlight();
+    }
+  }
+
+  void _tryOpenCalendarForHighlight() {
+    final highlight = widget.highlightNewSession;
+    if (highlight == null || widget.onHighlightConsumed == null) return;
+    final courseId = highlight['courseId'] as String?;
+    final placeId = highlight['placeId'] as String?;
+    if (courseId == null || placeId == null) return;
+
+    final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+    final courseProvider = Provider.of<CourseProvider>(context, listen: false);
+    final currentPlace = placeProvider.currentPlace;
+    if (currentPlace?.id != placeId) return;
+
+    final course = courseProvider.getCourse(courseId);
+    if (course == null) return;
+
+    widget.onHighlightConsumed!();
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => CalendarScreen(
+          course: course,
+          highlightSession: highlight,
+        ),
+      ),
+    );
   }
 
   /// 즐겨찾기 목록 로드

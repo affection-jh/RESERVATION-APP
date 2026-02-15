@@ -598,15 +598,6 @@ class _WeeklyOverrideScheduleScreenState
       selectedDays = defaultDays.toList()..sort();
     }
 
-    // 선택된 코스 정보 가져오기 (UI 표시용)
-    final courseProvider = Provider.of<CourseProvider>(context, listen: false);
-    final displayCourse =
-        widget.selectedCourseId != null
-            ? courseProvider.courses
-                .where((c) => c.id == widget.selectedCourseId)
-                .firstOrNull
-            : null;
-
     return PopScope(
       canPop: !_isLeaving && !_isSaving,
       child: Scaffold(
@@ -1686,6 +1677,8 @@ class _WeeklyOverrideScheduleScreenState
       }
 
       if (mounted) {
+        // 성공 시 로딩을 즉시 해제한 뒤 성공 메시지 표시 및 화면 닫기
+        setState(() => _isSaving = false);
         SnackbarUtil.showSuccess(context, '저장되었습니다.');
 
         // 저장 성공 후 화면을 닫고 부모 화면에서 데이터를 다시 로드하도록 함 (한 번만 pop)

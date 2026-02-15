@@ -217,7 +217,10 @@ class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
                 child: Container(
                   decoration: BoxDecoration(
                     color: AppColors.backgroundWhite,
-                    borderRadius: BorderRadius.circular(30),
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(30),
+                      topRight: Radius.circular(30),
+                    ),
                   ),
                   padding: EdgeInsets.only(
                     left: 24,

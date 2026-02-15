@@ -159,8 +159,8 @@ class FcmService {
     }
   }
 
-  /// iOS에서 APNS 지연 시 동기 대기 후 재시도 (2초, 5초, 10초)
-  static const List<int> _iosApnsRetryDelays = [2, 5];
+  /// iOS에서 APNS 지연 시 동기 대기 후 재시도 (2초, 5초)
+  static const List<int> _iosApnsRetryDelays = [2, 5]; // 1+2회 재시도용
 
   /// 유저 정보 로드 시 등에서 호출. 토큰이 없거나 갱신 필요 시 재발급 후 저장.
   Future<void> ensureTokenForUser(String userId) async {
@@ -187,7 +187,8 @@ class FcmService {
 
     for (int attempt = 0; attempt < maxAttempts; attempt++) {
       if (attempt > 0 && isIOS) {
-        final delaySec = _iosApnsRetryDelays[attempt - 1];
+        final idx = (attempt - 1).clamp(0, _iosApnsRetryDelays.length - 1);
+        final delaySec = _iosApnsRetryDelays[idx];
         debugPrint(
           '[FcmService] ${delaySec}초 대기 후 재시도 (${attempt + 1}/$maxAttempts)',
         );

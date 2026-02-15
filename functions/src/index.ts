@@ -3337,12 +3337,16 @@ export const sendUpcomingSessionNotifications = functions.pubsub
                     const course = courseMap.get(courseId);
                     const courseName = course?.name || courseId;
 
+                    const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+                    const tomorrowString = formatDate(tomorrow);
+                    const dateLabel = targetDateString === todayString ? '오늘' : targetDateString === tomorrowString ? '내일' : targetDateString;
+
                     // 알림 생성 (3시간 전, 한 번만)
                     await createNotification({
                         userId,
                         type: 'reservation',
-                        title: `${courseName} 곧 세션이 시작됩니다`,
-                        body: `${courseName} - ${targetDateString} ${targetHHmm} (3시간 전)`,
+                        title: courseName,
+                        body: `${dateLabel} ${targetHHmm}시에 ${courseName} 세션이 시작됩니다.`,
                         placeId,
                         data: {
                             reservationId,
@@ -4051,18 +4055,31 @@ export const batchCancelReservations = functions.https.onCall(async (data, conte
             try {
                 const place = await getPlaceOrThrow(placeId);
                 const courseName = getCourseName(place, Array.from(courseIds)[0]) || '코스';
+                const courseId = Array.from(courseIds)[0];
+                const userIdToFirstRes = new Map<string, { reservedDateString: string; startTime: string }>();
+                for (const { reservation } of reservationsToCancel) {
+                    const uid = String(reservation?.userId ?? '');
+                    if (uid && !userIdToFirstRes.has(uid)) {
+                        userIdToFirstRes.set(uid, {
+                            reservedDateString: String(reservation?.reservedDateString ?? ''),
+                            startTime: String(reservation?.startTime ?? ''),
+                        });
+                    }
+                }
 
-                // 각 사용자에게 알림 전송
                 for (const userId of userIds) {
+                    const first = userIdToFirstRes.get(userId);
+                    const dateTimeStr = first ? formatDateTimeKr(first.reservedDateString, first.startTime).replace('시', '') : '';
+                    const body = dateTimeStr ? `${dateTimeStr} 예약이 취소되었습니다` : '예약이 취소되었습니다.';
                     await createNotification({
                         userId,
                         type: 'reservation',
                         title: `${courseName} 예약이 취소되었습니다`,
-                        body: `${courseName} 예약이 취소되었습니다.`,
+                        body,
                         placeId,
                         data: {
                             reservationIds: reservationIds,
-                            courseId: Array.from(courseIds)[0],
+                            courseId,
                             placeId,
                         },
                         isAdmin: false,

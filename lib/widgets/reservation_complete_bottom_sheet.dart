@@ -24,10 +24,11 @@ class ReservationCompleteBottomSheet extends StatelessWidget {
       isDismissible: true,
       enableDrag: true,
       useSafeArea: true,
-      builder: (context) => ReservationCompleteBottomSheet(
-        onViewReservations: onViewReservations,
-        onClose: onClose,
-      ),
+      builder:
+          (context) => ReservationCompleteBottomSheet(
+            onViewReservations: onViewReservations,
+            onClose: onClose,
+          ),
     );
   }
 
@@ -56,7 +57,10 @@ class ReservationCompleteBottomSheet extends StatelessWidget {
               child: Container(
                 decoration: BoxDecoration(
                   color: AppColors.backgroundWhite,
-                  borderRadius: BorderRadius.circular(30),
+                  borderRadius: BorderRadius.only(
+                    topLeft: Radius.circular(30),
+                    topRight: Radius.circular(30),
+                  ),
                 ),
                 padding: EdgeInsets.only(
                   left: 24,
