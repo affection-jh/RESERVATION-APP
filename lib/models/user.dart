@@ -1,8 +1,8 @@
 import 'course_enrollment.dart';
-import 'reservation.dart';
 import '../utils/timezone_utils.dart';
 
 /// 일반 유저 모델
+/// 예약 데이터는 places/{placeId}/reservations에서 조회 (users.reservations 미사용)
 class User {
   final String userId;
   final String name;
@@ -11,7 +11,6 @@ class User {
   final List<String> placeIds; // (레거시) 속한 플레이스들
   final String? currentPlaceId; // 현재 선택된 플레이스 ID (서버 저장)
   final List<CourseEnrollment> enrollments; // 등록한 코스들
-  final List<Reservation> reservations; // 예약 기록
   final bool notificationsEnabled; // 알림 설정
   final DateTime createdAt;
   final DateTime? updatedAt;
@@ -23,7 +22,6 @@ class User {
     this.placeIds = const [],
     this.currentPlaceId,
     this.enrollments = const [],
-    this.reservations = const [],
     this.notificationsEnabled = true, // 기본값 true
     required this.createdAt,
     this.updatedAt,
@@ -82,11 +80,6 @@ class User {
     return enrollments.where((e) => e.hasPendingExtensionRequest).toList();
   }
 
-  // 특정 코스의 예약 기록
-  List<Reservation> getReservationsByCourse(String courseId) {
-    return reservations.where((r) => r.courseId == courseId).toList();
-  }
-
   // 플레이스 추가
   User addPlace(String placeId) {
     if (placeIds.contains(placeId)) {
@@ -120,18 +113,6 @@ class User {
     return copyWith(enrollments: newEnrollments);
   }
 
-  // 예약 추가
-  User addReservation(Reservation reservation) {
-    return copyWith(reservations: [...reservations, reservation]);
-  }
-
-  // 예약 제거
-  User removeReservation(String reservationId) {
-    return copyWith(
-      reservations: reservations.where((r) => r.id != reservationId).toList(),
-    );
-  }
-
   // 정보 업데이트
   User updateProfile({
     String? name,
@@ -154,7 +135,6 @@ class User {
     List<String>? placeIds,
     String? currentPlaceId,
     List<CourseEnrollment>? enrollments,
-    List<Reservation>? reservations,
     bool? notificationsEnabled,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -166,44 +146,34 @@ class User {
       placeIds: placeIds ?? this.placeIds,
       currentPlaceId: currentPlaceId ?? this.currentPlaceId,
       enrollments: enrollments ?? this.enrollments,
-      reservations: reservations ?? this.reservations,
       notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
   }
 
-  // JSON 변환
+  // JSON 변환 (reservations 필드 없음 — 예약은 places/{placeId}/reservations에서 조회)
   Map<String, dynamic> toJson() {
     return {
       'userId': userId,
       'name': name,
       'phoneNumber': phoneNumber,
-      // users.placeIds는 더 이상 Firestore에 저장하지 않음 (placeMemberships 기반)
-      'currentPlaceId': currentPlaceId, // 현재 선택된 플레이스 ID
-      // enrollments 필드 제거: enrollments 컬렉션에서 직접 조회
-      'reservations': reservations.map((r) => r.toJson()).toList(),
+      'currentPlaceId': currentPlaceId,
       'notificationsEnabled': notificationsEnabled,
       'createdAt': createdAt.toIso8601String(),
       'updatedAt': updatedAt?.toIso8601String(),
     };
   }
 
-  // JSON에서 생성
+  // JSON에서 생성 (reservations 필드는 레거시 문서에 있어도 무시)
   factory User.fromJson(Map<String, dynamic> json) {
     return User(
       userId: json['userId'] as String? ?? '',
       name: json['name'] as String? ?? '이름 없음',
       phoneNumber: json['phoneNumber'] as String? ?? '',
       placeIds: (json['placeIds'] as List?)?.cast<String>() ?? [],
-      currentPlaceId: json['currentPlaceId'] as String?, // 현재 선택된 플레이스 ID
-      // enrollments 필드 무시: enrollments 컬렉션에서 직접 조회
+      currentPlaceId: json['currentPlaceId'] as String?,
       enrollments: const [],
-      reservations:
-          (json['reservations'] as List?)
-              ?.map((r) => Reservation.fromJson(r as Map<String, dynamic>))
-              .toList() ??
-          [],
       notificationsEnabled: json['notificationsEnabled'] as bool? ?? true,
       createdAt:
           json['createdAt'] != null
@@ -222,7 +192,7 @@ class User {
 
   @override
   String toString() {
-    return 'User(userId: $userId, name: $name, places: ${placeIds.length}, enrollments: ${enrollments.length}, reservations: ${reservations.length})';
+    return 'User(userId: $userId, name: $name, places: ${placeIds.length}, enrollments: ${enrollments.length})';
   }
 
   @override

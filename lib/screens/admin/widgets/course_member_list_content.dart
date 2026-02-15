@@ -179,7 +179,6 @@ class CourseMemberListContent extends StatelessWidget {
                     phoneNumber: pm.phoneNumber,
                     placeIds: [pm.placeId],
                     enrollments: const [],
-                    reservations: const [],
                     notificationsEnabled: false,
                     createdAt: pm.createdAt,
                     updatedAt: null,

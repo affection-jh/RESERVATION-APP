@@ -3,9 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user.dart';
 import '../models/admin_user.dart';
 import '../models/course_enrollment.dart';
-import '../models/reservation.dart';
 import '../models/place.dart';
-import '../utils/reservation_utils.dart';
 import '../utils/timezone_utils.dart';
 import 'firestore_service.dart';
 
@@ -222,8 +220,8 @@ class UserService {
     final docRef = _firestore.collection('users').doc(user.userId);
     await docRef.update({
       ...user.toJson(),
-      // users.placeIds는 더 이상 사용하지 않으므로 기존 필드가 남아있다면 제거
       'placeIds': FieldValue.delete(),
+      'reservations': FieldValue.delete(), // 레거시 필드 제거 (예약은 places/xxx/reservations에서 조회)
       'updatedAt': _dateTimeToTimestamp(DateTime.now()),
     });
 
@@ -242,8 +240,8 @@ class UserService {
     final docRef = _firestore.collection('users').doc(user.userId);
     await docRef.update({
       ...user.toJson(),
-      // users.placeIds는 더 이상 사용하지 않으므로 기존 필드가 남아있다면 제거
       'placeIds': FieldValue.delete(),
+      'reservations': FieldValue.delete(),
       'updatedAt': _dateTimeToTimestamp(DateTime.now()),
     });
 
@@ -482,68 +480,6 @@ class UserService {
   ) async {
     final user = await getUser(userId);
     return user.pendingExtensionRequests;
-  }
-
-  // ==================== 예약 기록 관리 ====================
-
-  /// 예약 기록 추가
-  Future<Reservation> addReservation(Reservation reservation) async {
-    final user = await getUser(reservation.userId);
-
-    // 코스 등록 확인
-    if (!user.isEnrolledInCourse(reservation.courseId)) {
-      throw Exception('등록된 코스가 아닙니다.');
-    }
-
-    // 예약 가능 여부 확인
-    if (!user.canReserveCourse(reservation.courseId)) {
-      throw Exception('예약 가능한 횟수가 없거나 유효 기간이 만료되었습니다.');
-    }
-
-    // 예약 사용 (남은 횟수 차감)
-    await useReservation(reservation.userId, reservation.courseId);
-
-    // 예약 기록 추가
-    final updatedUser = user.addReservation(reservation);
-    await updateUser(updatedUser);
-
-    return reservation;
-  }
-
-  /// 예약 기록 제거
-  Future<void> removeReservation(String userId, String reservationId) async {
-    final user = await getUser(userId);
-    final reservation = user.reservations.firstWhere(
-      (r) => r.id == reservationId,
-      orElse: () => throw Exception('예약 기록을 찾을 수 없습니다.'),
-    );
-
-    // 예약 취소 가능 여부 확인 (세션 시작 1시간 전까지)
-    if (!ReservationUtils.isCancellationAvailable(reservation)) {
-      throw Exception('세션 시작 1시간 전까지만 취소 가능합니다.');
-    }
-
-    // 예약 취소 (남은 횟수 복구)
-    await cancelReservationUsage(userId, reservation.courseId);
-
-    // 예약 기록 제거
-    final updatedUser = user.removeReservation(reservationId);
-    await updateUser(updatedUser);
-  }
-
-  /// 유저의 예약 기록 가져오기
-  Future<List<Reservation>> getUserReservations(String userId) async {
-    final user = await getUser(userId);
-    return user.reservations;
-  }
-
-  /// 특정 코스의 예약 기록 가져오기
-  Future<List<Reservation>> getReservationsByCourse(
-    String userId,
-    String courseId,
-  ) async {
-    final user = await getUser(userId);
-    return user.getReservationsByCourse(courseId);
   }
 
   // ==================== 알림 ====================

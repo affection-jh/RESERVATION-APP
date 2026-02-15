@@ -560,7 +560,6 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
                   phoneNumber: pm.phoneNumber,
                   placeIds: [pm.placeId],
                   enrollments: const [], // enrollments 필드 사용 안 함
-                  reservations: const [],
                   notificationsEnabled: false,
                   createdAt: pm.createdAt,
                   updatedAt: null,
@@ -725,7 +724,6 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
                 phoneNumber: pm.phoneNumber,
                 placeIds: [pm.placeId],
                 enrollments: const [], // enrollments 필드 사용 안 함
-                reservations: const [],
                 notificationsEnabled: false,
                 createdAt: pm.createdAt,
                 updatedAt: null,
@@ -812,10 +810,8 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
             userId: 'pending_${pm.id}',
             name: pm.name ?? '이름 없음',
             phoneNumber: pm.phoneNumber,
-
             placeIds: [pm.placeId],
             enrollments: enrollments,
-            reservations: [],
             notificationsEnabled: false,
             createdAt: pm.createdAt,
             updatedAt: null,

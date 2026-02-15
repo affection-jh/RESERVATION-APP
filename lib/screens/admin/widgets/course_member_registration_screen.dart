@@ -889,7 +889,6 @@ class _CourseMemberRegistrationScreenState
                                   phoneNumber: pm.phoneNumber,
                                   placeIds: [pm.placeId],
                                   enrollments: enrollments,
-                                  reservations: const [],
                                   notificationsEnabled: false,
                                   createdAt: pm.createdAt,
                                   updatedAt: null,
