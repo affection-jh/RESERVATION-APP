@@ -134,10 +134,32 @@ class _MyPageScreenState extends State<MyPageScreen> {
   @override
   void initState() {
     super.initState();
+    // 알림 등으로 진입 시 해당 예약 주차 탭을 첫 빌드부터 선택
+    if (widget.highlightReservation != null) {
+      final targetDate =
+          widget.highlightReservation!['reservedDate'] as DateTime?;
+      if (targetDate != null) {
+        final now = TimezoneUtils.getSeoulDateTime();
+        final thisWeekMonday = DateTime(
+          now.year,
+          now.month,
+          now.day,
+        ).subtract(Duration(days: now.weekday - DateTime.monday));
+        final targetDateOnly = DateTime(
+          targetDate.year,
+          targetDate.month,
+          targetDate.day,
+        );
+        final diffDays = targetDateOnly.difference(thisWeekMonday).inDays;
+        final weekOffset = (diffDays / 7).floor();
+        if (weekOffset >= 0) {
+          _selectedWeekTab = weekOffset;
+        }
+      }
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _init();
-      // 초기 로드 시 현재 선택된 주차의 비정기 세션 정보 로드
-      _loadOverridesForWeek(0);
+      _loadOverridesForWeek(_selectedWeekTab);
     });
   }
 
@@ -147,17 +169,12 @@ class _MyPageScreenState extends State<MyPageScreen> {
     // highlightReservation이 있어도 자동으로 애니메이션을 시작하지 않음
     // 명시적으로 클릭한 경우(shouldShowBottomSheet가 true)에만 애니메이션 적용
     if (widget.highlightReservation != null) {
-      // shouldShowBottomSheet 플래그 확인 - 명시적으로 클릭한 경우에만 애니메이션 실행
       final shouldShowBottomSheet =
           widget.highlightReservation!['shouldShowBottomSheet'] == true;
-
-      // 명시적으로 클릭한 경우에만 애니메이션 실행
-      if (shouldShowBottomSheet) {
-        _processHighlightReservationWithRetry(
-          shouldShowBottomSheet: shouldShowBottomSheet,
-        );
-      }
-      // 탭 전환 등으로 넘어온 경우는 애니메이션 실행하지 않음
+      // 알림 탭으로 들어온 경우에도 해당 예약 주차 탭 선택 + 흔들림 애니메이션 (바텀시트만 선택 시에만)
+      _processHighlightReservationWithRetry(
+        shouldShowBottomSheet: shouldShowBottomSheet,
+      );
     }
   }
 
@@ -353,15 +370,9 @@ class _MyPageScreenState extends State<MyPageScreen> {
     }).toList();
   }
 
-  // 강조할 예약 처리
+  // 강조할 예약 처리 (알림 탭 시: 흔들림만, 명시 클릭 시: 흔들림 + 바텀시트)
   void _processHighlightReservation({bool shouldShowBottomSheet = false}) {
     if (widget.highlightReservation == null) return;
-
-    // 명시적으로 클릭한 경우(shouldShowBottomSheet가 true)에만 애니메이션 실행
-    if (!shouldShowBottomSheet) {
-      // 탭 전환 등으로 넘어온 경우는 애니메이션 실행하지 않음
-      return;
-    }
 
     final reservationProvider = Provider.of<ReservationProvider>(
       context,
@@ -461,13 +472,15 @@ class _MyPageScreenState extends State<MyPageScreen> {
       _highlightedDate = reservation.reservedDate;
     });
 
-    // 애니메이션 후 바텀시트 표시 (명시적으로 요청한 경우에만)
+    // 애니메이션 후: 하이라이트 해제, 명시적 클릭 시에만 바텀시트 표시
     Future.delayed(const Duration(milliseconds: 800), () {
       if (mounted) {
         setState(() {
           _shouldHighlightReservation = false;
         });
-        _showReservationBottomSheet();
+        if (shouldShowBottomSheet) {
+          _showReservationBottomSheet();
+        }
       }
     });
   }
@@ -557,7 +570,12 @@ class _MyPageScreenState extends State<MyPageScreen> {
     final courseProvider = Provider.of<CourseProvider>(context);
 
     final userReservations = reservationProvider.reservations;
-    final availableWeekOffsets = _computeAvailableWeekOffsets(userReservations);
+    final extraDate =
+        widget.highlightReservation?['reservedDate'] as DateTime?;
+    final availableWeekOffsets = _computeAvailableWeekOffsets(
+      userReservations,
+      extraDateToInclude: extraDate,
+    );
     if (_selectedWeekTab >= availableWeekOffsets.length) {
       _selectedWeekTab = availableWeekOffsets.length - 1;
     }

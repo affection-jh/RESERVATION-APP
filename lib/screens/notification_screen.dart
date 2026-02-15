@@ -159,7 +159,10 @@ class _NotificationScreenState extends State<NotificationScreen> {
         break;
 
       case NotificationType.reservation:
-        // 예약 완료/변경/취소 알림 → 마이페이지(예약 목록)로 이동 + 해당 주차 설정
+        // 예약 취소 알림은 탭해도 화면 이동 없음. 예약 완료/변경만 마이페이지로 이동
+        if (notification.title.contains('취소')) break;
+
+        // 예약 완료/변경 알림 → 마이페이지(예약 목록)로 이동 + 해당 주차 설정
         if (courseId != null || placeId != null || reservationId != null) {
           try {
             final dateStr =
