@@ -3,13 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../models/user.dart' as models;
-import '../models/admin_user.dart';
 import '../models/place.dart';
-import '../models/place_membership.dart';
 import 'firestore_service.dart';
 import 'user_service.dart';
-import 'admin_service.dart';
-import '../utils/storage_service.dart';
+import 'member_service.dart';
+import '../utils/phone_utils.dart';
+import '../utils/local_storage_util.dart';
 import '../utils/timezone_utils.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart' hide User;
@@ -44,7 +43,6 @@ class AuthService {
 
   final FirestoreService _firestoreService = FirestoreService();
   final UserService _userService = UserService();
-  final AdminService _adminService = AdminService();
   final StorageService _storageService = StorageService();
 
   // Firebase Auth 인스턴스 (getter로 변경하여 늦은 초기화)
@@ -442,8 +440,7 @@ class AuthService {
       );
     }
 
-    // 전화번호 포맷 정규화 (국가코드 제거)
-    finalPhoneNumber = _normalizePhoneNumber(finalPhoneNumber);
+    finalPhoneNumber = PhoneUtils.normalize(finalPhoneNumber);
     debugPrint(
       '[AuthService.verifyCodeAndSignIn] 정규화된 전화번호: $finalPhoneNumber',
     );
@@ -457,7 +454,7 @@ class AuthService {
         throw Exception('회원가입을 위해 이름이 필요합니다.');
       }
       user = await _createUser(
-        userId: firebaseUser.uid, // Firebase Auth UID 사용
+        authUid: firebaseUser.uid,
         phoneNumber: finalPhoneNumber,
         name: name,
       );
@@ -469,7 +466,7 @@ class AuthService {
         await _ensureAuthUidUserDoc(
           authUid: firebaseUser.uid,
           phoneNumber: finalPhoneNumber,
-          name: user.name,
+          username: user.username,
         );
       }
     }
@@ -524,20 +521,6 @@ class AuthService {
     await _auth.signOut();
   }
 
-  /// 전화번호 정규화 (국가코드 제거)
-  String _normalizePhoneNumber(String phoneNumber) {
-    // +82로 시작하는 경우 0으로 변환
-    if (phoneNumber.startsWith('+82')) {
-      return '0${phoneNumber.substring(3)}';
-    }
-    // +로 시작하는 다른 국가코드 제거
-    if (phoneNumber.startsWith('+')) {
-      // 간단히 + 제거 (실제로는 국가코드 길이에 따라 다르지만, 한국만 고려)
-      return phoneNumber.substring(phoneNumber.length - 10);
-    }
-    return phoneNumber;
-  }
-
   // ==================== 자동 로그인 ====================
 
   // ==================== "명시적 진입 선택" 플래그 ====================
@@ -573,7 +556,7 @@ class AuthService {
       }
 
       // 전화번호 정규화
-      phoneNumber = _normalizePhoneNumber(phoneNumber);
+      phoneNumber = PhoneUtils.normalize(phoneNumber);
 
       // 사용자 조회
       final user = await findUserByPhone(phoneNumber);
@@ -598,138 +581,12 @@ class AuthService {
     }
   }
 
-  /// 앱 시작 시 자동 로그인 확인
-  ///
-  /// 저장된 전화번호로 자동 로그인 시도
-  ///
-  /// PIN은 저장하지 않고, 전화번호와 userId만으로 자동 로그인
-  Future<AdminAutoLoginResult?> checkAdminAutoLogin() async {
-    debugPrint('[AuthService.checkAdminAutoLogin] 시작');
-    try {
-      // 1. Firebase Auth 세션 확인 (우선순위)
-      final firebaseUser = _auth.currentUser;
-      String? phoneNumber;
-      String? userId;
-
-      if (firebaseUser != null && firebaseUser.phoneNumber != null) {
-        // Firebase Auth 세션에서 전화번호 가져오기
-        phoneNumber = _normalizePhoneNumber(firebaseUser.phoneNumber!);
-        debugPrint(
-          '[AuthService.checkAdminAutoLogin] Firebase Auth 세션에서 전화번호 가져옴: $phoneNumber',
-        );
-      } else {
-        // 2. 저장된 전화번호와 userId 확인 (폴백)
-        phoneNumber = await _storageService.getAdminPhone();
-        userId = await _storageService.getAdminUserId();
-        debugPrint('[AuthService.checkAdminAutoLogin] 저장된 전화번호: $phoneNumber');
-        debugPrint('[AuthService.checkAdminAutoLogin] 저장된 userId: $userId');
-      }
-
-      if (phoneNumber == null) {
-        debugPrint('[AuthService.checkAdminAutoLogin] 전화번호를 찾을 수 없음');
-        return null;
-      }
-
-      // 3. 관리자 정보 조회
-      AdminUser? admin;
-      try {
-        debugPrint(
-          '[AuthService.checkAdminAutoLogin] findAdminByPhone 호출: $phoneNumber',
-        );
-        admin = await findAdminByPhone(phoneNumber);
-        debugPrint(
-          '[AuthService.checkAdminAutoLogin] findAdminByPhone 결과: ${admin != null ? "성공" : "null"}',
-        );
-        if (admin != null) {
-          debugPrint(
-            '[AuthService.checkAdminAutoLogin] 관리자 정보: userId=${admin.userId}, placeIds=${admin.placeIds}',
-          );
-        }
-      } catch (e) {
-        debugPrint('[AuthService.checkAdminAutoLogin] findAdminByPhone 에러: $e');
-        // Firestore 미구현 시 저장된 정보로 임시 관리자 생성
-        if (e.toString().contains('UnimplementedError')) {
-          if (userId == null) {
-            userId =
-                firebaseUser?.uid ??
-                'temp_${DateTime.now().millisecondsSinceEpoch}';
-          }
-          admin = AdminUser(
-            userId: userId,
-            phoneNumber: phoneNumber,
-            name: '관리자', // 임시
-            authPin: null, // PIN은 저장하지 않음
-            placeIds: [],
-            createdAt: TimezoneUtils.getSeoulDateTime(),
-          );
-        } else {
-          return null;
-        }
-      }
-
-      if (admin == null) {
-        debugPrint('[AuthService.checkAdminAutoLogin] 관리자 정보를 찾을 수 없음');
-        return null;
-      }
-
-      // 4. userId 일치 확인 (저장된 userId가 있는 경우만)
-      if (userId != null && admin.userId != userId) {
-        debugPrint(
-          '[AuthService.checkAdminAutoLogin] userId 불일치: 저장된=$userId, 조회된=${admin.userId}',
-        );
-        // userId가 다르면 저장된 정보 삭제
-        await _storageService.clearAdminData();
-        return null;
-      }
-
-      // 5. 관리자 정보 저장 (자동 로그인을 위해)
-      if (firebaseUser != null) {
-        await _storageService.saveAdminPhone(phoneNumber);
-        await _storageService.saveAdminUserId(admin.userId);
-        debugPrint('[AuthService.checkAdminAutoLogin] 관리자 정보 저장 완료');
-      }
-
-      // 6. 관리자 로그인 (이미 가져온 관리자 정보 사용)
-      debugPrint('[AuthService.checkAdminAutoLogin] 관리자 로그인 시작');
-      await _adminService.loginWithAdmin(admin);
-      debugPrint('[AuthService.checkAdminAutoLogin] 관리자 로그인 완료');
-
-      // ✅ 플레이스 업데이트 여부와 무관하게 "마지막 접속 모드=admin"을 저장
-      // (관리자 화면에 진입했는데도 lastEntryMode가 member로 남는 문제 방지)
-      await _storageService.saveLastEntryMode('admin');
-
-      // 7. 최근 접속한 플레이스 확인
-      final lastPlaceId = await _storageService.getLastAccessedPlaceId();
-      final effectivePlaceId = admin.lastAccessedPlaceId ?? lastPlaceId;
-      debugPrint(
-        '[AuthService.checkAdminAutoLogin] 마지막 접속 플레이스: $effectivePlaceId',
-      );
-
-      final result = AdminAutoLoginResult(
-        admin: admin,
-        lastAccessedPlaceId: effectivePlaceId,
-      );
-      debugPrint(
-        '[AuthService.checkAdminAutoLogin] 성공: 관리자 ID=${admin.userId}, 플레이스 개수=${admin.placeIds.length}',
-      );
-      return result;
-    } catch (e, stackTrace) {
-      debugPrint('[AuthService.checkAdminAutoLogin] ❌ 에러 발생: $e');
-      debugPrint('[AuthService.checkAdminAutoLogin] 스택 트레이스: $stackTrace');
-      // 에러 발생 시 저장된 정보 삭제
-      await _storageService.clearAdminData();
-      return null;
-    }
-  }
-
-  /// 관리자 로그아웃
+  /// 로그아웃 (관리자/멤버 통합: 저장소 정리 + Firebase signOut)
   Future<void> logoutAdmin() async {
     debugPrint('[AuthService.logoutAdmin] 시작');
     try {
       debugPrint('[AuthService.logoutAdmin] clearAdminData 호출');
       await _storageService.clearAdminData();
-      debugPrint('[AuthService.logoutAdmin] _adminService.logout() 호출');
-      _adminService.logout();
       debugPrint('[AuthService.logoutAdmin] 완료');
     } catch (e, stackTrace) {
       debugPrint('[AuthService.logoutAdmin] ❌ 에러: $e');
@@ -738,39 +595,25 @@ class AuthService {
     }
   }
 
-  /// 최근 접속한 플레이스 업데이트
+  /// 최근 접속한 플레이스 업데이트 (User.currentPlaceId + 로컬 저장소)
+  /// AppStartup에서 getLastAccessedPlaceId()로 복원하므로 로컬 저장 필수
   Future<void> updateLastAccessedPlace(String placeId) async {
-    // 서버에 현재 플레이스 ID 저장
+    await _storageService.saveLastAccessedPlaceId(placeId);
     final savedUserId = await _storageService.getAdminUserId();
     if (savedUserId != null) {
       await _userService.updateCurrentPlaceId(savedUserId, placeId);
     }
-
-    // ✅ 관리자 모드로 접속했음을 저장 (자동 로그인 시 모드 복원)
     await _storageService.saveLastEntryMode('admin');
-
-    // AdminUser에도 업데이트 (Firestore 연동 시)
-    try {
-      if (savedUserId != null) {
-        final userService = UserService();
-        final admin = await userService.getAdmin(savedUserId);
-        if (admin != null) {
-          final updatedAdmin = admin.copyWith(
-            lastAccessedPlaceId: placeId,
-            updatedAt: TimezoneUtils.getSeoulDateTime(),
-          );
-          final userService = UserService();
-          await userService.updateAdmin(updatedAdmin);
-        }
-      }
-    } catch (e) {
-      // Firestore 미구현 시 무시
-    }
   }
 
   /// 마지막 접속 모드 조회 (admin/member)
   Future<String?> getLastEntryMode() async {
     return await _storageService.getLastEntryMode();
+  }
+
+  /// 마지막 접속 플레이스 ID (매니저용)
+  Future<String?> getLastAccessedPlaceId() async {
+    return await _storageService.getLastAccessedPlaceId();
   }
 
   /// 인증 상태 변경 스트림 구독
@@ -803,7 +646,7 @@ class AuthService {
             }
 
             // 전화번호 정규화
-            phoneNumber = _normalizePhoneNumber(phoneNumber);
+            phoneNumber = PhoneUtils.normalize(phoneNumber);
 
             // 사용자 조회
             final user = await findUserByPhone(phoneNumber);
@@ -811,25 +654,20 @@ class AuthService {
               return AuthState.unauthenticated();
             }
 
-            // 관리자 여부 확인
+            // 관리자(매니저) 여부: places/{placeId}/members 기반
             final isAdmin = await _checkIfAdmin(user.userId);
             if (isAdmin) {
-              await _adminService.login(user.userId);
               return AuthState.authenticated(user: user, role: UserRole.admin);
             }
 
-            // 플레이스 멤버십 확인
-            final memberships = await _autoMatchMemberships(
-              user.userId,
-              phoneNumber,
-            );
-
+            await _autoMatchMemberships(user.userId, phoneNumber);
             await _userService.login(user.userId);
 
+            final placeIds = await _fetchPlaceIdsForUser(user.userId);
             return AuthState.authenticated(
               user: user,
               role: UserRole.member,
-              memberships: memberships,
+              placeIds: placeIds,
             );
           })
           .handleError((error, stackTrace) {
@@ -851,81 +689,30 @@ class AuthService {
 
   // ==================== 인증 완료 처리 ====================
 
-  Future<List<PlaceMembership>> _fetchPlaceMembershipsForUser(
-    String userId,
-  ) async {
-    final firestore = _firestoreService.firestore;
-    final snap =
-        await firestore
-            .collection('placeMemberships')
-            .where('userId', isEqualTo: userId)
-            .get();
-
-    DateTime toDateTime(dynamic v) => _firestoreService.timestampToDateTime(v);
-
-    return snap.docs.map((doc) {
-      final data = doc.data();
-      // Timestamp → ISO string 정규화 (fromJson이 string을 기대)
-      if (data['requestedAt'] != null) {
-        data['requestedAt'] = toDateTime(data['requestedAt']).toIso8601String();
-      }
-      if (data['approvedAt'] != null) {
-        data['approvedAt'] = toDateTime(data['approvedAt']).toIso8601String();
-      }
-      if (data['rejectedAt'] != null) {
-        data['rejectedAt'] = toDateTime(data['rejectedAt']).toIso8601String();
-      }
-      return PlaceMembership.fromJson(data);
-    }).toList();
-  }
-
-  PlaceMembership _pickPreferredMembership(
-    PlaceMembership a,
-    PlaceMembership b,
-  ) {
-    // status 제거로 항상 멤버이므로, 시간 정보가 있는 쪽/더 최신을 선호
-    DateTime? timeOf(PlaceMembership m) {
-      if (m.approvedAt != null) return m.approvedAt;
-      return m.requestedAt;
-    }
-
-    final ta = timeOf(a);
-    final tb = timeOf(b);
-    if (ta == null || tb == null) return a;
-    return ta.isAfter(tb) ? a : b;
+  /// 접근 가능 플레이스: places/{placeId}/members 기준 (enrollment 아님)
+  Future<List<String>> _fetchPlaceIdsForUser(String userId) async {
+    final members = await MemberService().getPlaceMembershipsForUser(userId);
+    final placeIds = members
+        .map((m) => m.placeId)
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    return placeIds.toList();
   }
 
   /// 인증 완료 후 공통 처리
   /// 관리자도 일반 사용자로 처리하여 다른 플레이스의 멤버가 될 수 있도록 함
   Future<AuthResult> _completeAuthentication(models.User user) async {
-    // placeMemberships 규칙이 request.auth.uid 기준이므로 현재 인증 UID 사용
+    // places/.../members 기준이므로 현재 인증 UID 사용
     final authUid = _auth.currentUser?.uid;
     final effectiveUserId = authUid ?? user.userId;
 
     // 자동 매칭 시도 (Auth UID로 생성해야 규칙 통과)
-    final newlyCreated = await _autoMatchMemberships(
-      effectiveUserId,
-      user.phoneNumber,
-    );
+    await _autoMatchMemberships(effectiveUserId, user.phoneNumber);
 
-    // ✅ 기존 placeMemberships까지 합쳐서 "전체 멤버십"을 구성해야 한다.
-    final existing = await _fetchPlaceMembershipsForUser(effectiveUserId);
-
-    final byPlaceId = <String, PlaceMembership>{};
-    for (final m in existing) {
-      byPlaceId[m.placeId] = m;
-    }
-    for (final m in newlyCreated) {
-      final prev = byPlaceId[m.placeId];
-      byPlaceId[m.placeId] =
-          prev == null ? m : _pickPreferredMembership(prev, m);
-    }
-
-    final memberships = byPlaceId.values.toList();
-
-    // status 제거로 항상 멤버이므로 모든 멤버십이 승인된 것으로 처리
-    final approvedMemberships = memberships;
-    final pendingMemberships = <PlaceMembership>[];
+    // 기존 + 신규 placeId 목록
+    final existing = await _fetchPlaceIdsForUser(effectiveUserId);
+    final placeIds = existing.toSet().toList();
 
     // 서버에서 마지막 접속 플레이스 확인 (currentPlaceId)
     String? lastPlaceId = user.currentPlaceId;
@@ -945,58 +732,14 @@ class AuthService {
     return AuthResult(
       user: user,
       role: role,
-      memberships: memberships,
-      approvedMemberships: approvedMemberships,
-      pendingMemberships: pendingMemberships,
+      placeIds: placeIds,
       lastAccessedPlaceId: lastPlaceId,
     );
-  }
-
-  // ==================== 기존 메서드들 (하위 호환성) ====================
-
-  /// 전화번호로 사용자 로그인/회원가입
-  ///
-  /// [deprecated] verifyCodeAndSignIn 사용 권장
-  @Deprecated('verifyCodeAndSignIn을 사용하세요')
-  Future<AuthResult> authenticateWithPhone({
-    required String phoneNumber,
-    required String verificationCode,
-    String? name, // 회원가입 시 필요
-  }) async {
-    // 기존 로직 유지 (하위 호환성)
-    // 1. 인증 코드 확인
-    final isValid = await verifyCode(phoneNumber, verificationCode);
-    if (!isValid) {
-      throw Exception('인증 코드가 올바르지 않습니다.');
-    }
-
-    // 2. 사용자 조회 또는 생성
-    models.User? user = await findUserByPhone(phoneNumber);
-
-    if (user == null) {
-      // 신규 사용자 - 회원가입
-      if (name == null || name.trim().isEmpty) {
-        throw Exception('회원가입을 위해 이름이 필요합니다.');
-      }
-      user = await _createUser(phoneNumber: phoneNumber, name: name);
-    }
-
-    return await _completeAuthentication(user);
-  }
-
-  /// 인증 코드 확인 (기존 방식)
-  ///
-  /// [deprecated] Firebase Auth 사용 권장
-  @Deprecated('Firebase Auth를 사용하세요')
-  Future<bool> verifyCode(String phoneNumber, String code) async {
-    // TODO: 실제 인증 코드 확인 로직
-    throw UnimplementedError('인증 코드 확인 기능을 구현해주세요.');
   }
 
   // ==================== 사용자 관리 ====================
 
   /// 전화번호로 사용자 찾기
-  /// 전화번호로 사용자 찾기 (public)
   Future<models.User?> findUserByPhone(String phoneNumber) async {
     // 임시로 직접 접근
     final firestore = _firestoreService.firestore;
@@ -1022,502 +765,164 @@ class AuthService {
               .timestampToDateTime(data['updatedAt'])
               .toIso8601String();
     }
-    return models.User.fromJson(data);
+    final d = Map<String, dynamic>.from(data);
+    // name 필드 제거, username만 사용 (읽기 호환: name → username 폴백)
+    if (d['username'] == null && d['name'] != null) {
+      d['username'] = d['name'];
+    }
+    return models.User.fromJson(d);
   }
 
-  /// Firestore 규칙이 users/request.auth.uid 존재를 요구할 때 사용.
-  /// 기존 사용자가 예전 문서 ID(user_123 등)로만 있으면 pendingMembers 읽기에서
-  /// hasUserDoc()가 false가 되어 권한 오류가 난다. 이 메서드로 users/{authUid} 문서를
-  /// 최소한(phoneNumber, name)만 넣어 두면 규칙 통과 후 나머지 로직은 기존 userId로 동작.
+  /// 전화번호로 관리자(매니저) 사용자 조회. 없으면 null.
+  Future<models.User?> findAdminByPhone(String phoneNumber) async {
+    final user = await findUserByPhone(PhoneUtils.normalize(phoneNumber));
+    if (user == null) return null;
+    final isAdmin = await _checkIfAdmin(user.userId);
+    return isAdmin ? user : null;
+  }
+
+  /// users/{authUid} 문서 생성 (Firestore 규칙 hasUserDoc() 통과용)
   Future<void> _ensureAuthUidUserDoc({
     required String authUid,
     required String phoneNumber,
-    required String name,
+    required String username,
   }) async {
     final firestore = _firestoreService.firestore;
-    final ref = firestore.collection('users').doc(authUid);
-    await ref.set({
+    await firestore.collection('users').doc(authUid).set({
       'userId': authUid,
       'phoneNumber': phoneNumber,
-      'name': name,
+      'username': username,
       'updatedAt': _firestoreService.dateTimeToTimestamp(
         TimezoneUtils.getSeoulDateTime(),
       ),
     }, SetOptions(merge: true));
   }
 
-  /// 신규 사용자 생성
-  /// Firebase Auth UID가 있으면 Callable(createUserDoc)로 생성해 권한 이슈 회피
+  /// 신규 사용자 생성 (createUserDoc Callable 사용, Firebase Auth UID 기반)
   Future<models.User> _createUser({
-    String? userId, // Firebase Auth UID 사용 시
+    required String authUid,
     required String phoneNumber,
     required String name,
   }) async {
-    if (userId != null && userId.isNotEmpty) {
-      final functions = FirebaseFunctions.instance;
-      final result = await functions.httpsCallable('createUserDoc').call({
-        'name': name.trim(),
-        'phoneNumber': phoneNumber,
-      });
-      final data = result.data as Map<String, dynamic>;
-      final createdAt = data['createdAt'] != null
-          ? DateTime.parse(data['createdAt'] as String)
-          : TimezoneUtils.getSeoulDateTime();
-      return models.User(
-        userId: data['userId'] as String,
-        name: data['name'] as String,
-        phoneNumber: data['phoneNumber'] as String,
-        createdAt: createdAt,
-      );
-    }
-
-    final finalUserId = _generateUserId();
-    final user = models.User(
-      userId: finalUserId,
-      name: name,
-      phoneNumber: phoneNumber,
-      createdAt: TimezoneUtils.getSeoulDateTime(),
+    final result = await FirebaseFunctions.instance
+        .httpsCallable('createUserDoc')
+        .call({'username': name.trim(), 'phoneNumber': phoneNumber});
+    final data = result.data as Map<String, dynamic>;
+    final createdAt =
+        data['createdAt'] != null
+            ? DateTime.parse(data['createdAt'] as String)
+            : TimezoneUtils.getSeoulDateTime();
+    final username = data['username'] as String? ?? data['name'] as String? ?? '';
+    return models.User(
+      userId: data['userId'] as String,
+      username: username,
+      phoneNumber: data['phoneNumber'] as String,
+      createdAt: createdAt,
     );
-    final userService = UserService();
-    return await userService.createUserFromModel(user);
   }
 
-  /// 관리자 여부 확인
+  /// 관리자(매니저/부매니저) 여부: places/{placeId}/members에서 판별
   Future<bool> _checkIfAdmin(String userId) async {
     try {
-      final userService = UserService();
-      final admin = await userService.getAdmin(userId);
-      return admin != null;
+      final list = await MemberService().getPlaceMembershipsForUser(userId);
+      return list.any((m) => m.canManagePlace);
     } catch (e) {
       return false;
     }
   }
 
-  /// 전화번호로 관리자 찾기
-  Future<AdminUser?> findAdminByPhone(String phoneNumber) async {
-    // Firestore에 저장된 값과 동일한 방식으로 정규화해서 조회
-    final normalizedPhone = _normalizePhoneNumber(phoneNumber);
-    final userService = UserService();
-    return await userService.getAdminByPhone(normalizedPhone);
-  }
-
-  // ==================== 관리자 인증 ====================
-
-  /// 관리자 전화번호 인증 및 로그인 (PIN 포함)
-  ///
-  /// 1. 전화번호 인증 확인
-  /// 2. adminUsers 컬렉션에서 전화번호 확인
-  /// 3. PIN 확인
-  /// 4. 등록되지 않으면 에러
-  /// 5. 등록되어 있으면 관리자 로그인
-  Future<AuthResult> authenticateAdmin({
-    required String phoneNumber,
-    required String verificationCode,
-    required String pin,
-  }) async {
-    try {
-      // 입력값 검증
-      if (phoneNumber.isEmpty) {
-        throw Exception('전화번호가 필요합니다.');
-      }
-      if (pin.isEmpty) {
-        throw Exception('PIN이 필요합니다.');
-      }
-
-      // 전화번호 정규화 (Cloud Function과 동일한 방식)
-      final normalizedPhone = _normalizePhoneNumber(phoneNumber);
-
-      debugPrint(
-        '[AuthService.authenticateAdmin] phoneNumber: "$phoneNumber" -> normalized: "$normalizedPhone"',
-      );
-      debugPrint(
-        '[AuthService.authenticateAdmin] pin: "$pin" (length: ${pin.length})',
-      );
-      debugPrint(
-        '[AuthService.authenticateAdmin] verificationCode: "$verificationCode" (length: ${verificationCode.length})',
-      );
-
-      // Cloud Function 호출
-      final functions = FirebaseFunctions.instance;
-      final callable = functions.httpsCallable('authenticateAdmin');
-
-      final result = await callable.call({
-        'phoneNumber': normalizedPhone,
-        'verificationCode': verificationCode,
-        'pin': pin,
-      });
-
-      final data = result.data as Map<String, dynamic>;
-
-      if (data['success'] == true) {
-        // Cloud Function에서 성공 응답 받음
-        final adminUserId = data['userId'] as String;
-        final adminName = data['name'] as String;
-        final adminPhoneNumber = data['phoneNumber'] as String;
-        final adminPlaceIds =
-            (data['placeIds'] as List<dynamic>?)
-                ?.map((e) => e.toString())
-                .toList() ??
-            [];
-
-        // 4. 관리자 정보로 AdminUser 생성 및 로그인
-        final admin = AdminUser(
-          userId: adminUserId,
-          name: adminName,
-          phoneNumber: adminPhoneNumber,
-          placeIds: adminPlaceIds,
-          createdAt: TimezoneUtils.getSeoulDateTime(),
-          updatedAt: TimezoneUtils.getSeoulDateTime(),
-        );
-        await _adminService.loginWithAdmin(admin);
-
-        // 5. 자동 로그인을 위한 정보 저장 (PIN은 저장하지 않음)
-        await _storageService.saveAdminPhone(phoneNumber);
-        await _storageService.saveAdminUserId(adminUserId);
-
-        // 6. AdminUser를 User로 변환 (AuthResult 호환성)
-        // User.placeIds는 더 이상 사용하지 않음 (빈 배열로 설정)
-        final user = models.User(
-          userId: adminUserId,
-          name: adminName,
-          phoneNumber: adminPhoneNumber,
-          placeIds: [], // User.placeIds는 더 이상 사용하지 않음
-          createdAt: TimezoneUtils.getSeoulDateTime(),
-          updatedAt: TimezoneUtils.getSeoulDateTime(),
-        );
-
-        return AuthResult(user: user, role: UserRole.admin, memberships: []);
-      } else {
-        throw Exception('관리자 인증에 실패했습니다.');
-      }
-    } on FirebaseFunctionsException catch (e) {
-      // Cloud Function 에러 처리
-      String errorMessage = e.message ?? '관리자 인증 중 오류가 발생했습니다.';
-
-      // 에러 코드에 따른 메시지 처리
-      switch (e.code) {
-        case 'permission-denied':
-          errorMessage = 'PIN이 올바르지 않습니다.';
-          break;
-        case 'not-found':
-          errorMessage = '관리자로 등록되지 않은 전화번호입니다.';
-          break;
-        case 'failed-precondition':
-          errorMessage = 'PIN이 등록되지 않았습니다. PIN 등록이 필요합니다.';
-          break;
-        case 'unauthenticated':
-          errorMessage = '인증 코드가 올바르지 않습니다.';
-          break;
-        case 'invalid-argument':
-          errorMessage = '입력 정보가 올바르지 않습니다.';
-          break;
-        default:
-          errorMessage = e.message ?? '관리자 인증 중 오류가 발생했습니다.';
-      }
-
-      throw Exception(errorMessage);
-    } catch (e) {
-      // 연결 오류 등 기타 에러
-      final errorString = e.toString();
-      if (errorString.contains('connection') ||
-          errorString.contains('channel')) {
-        throw Exception('서버 연결에 실패했습니다. 네트워크 연결을 확인하고 앱을 재시작해주세요.');
-      }
-      throw Exception('관리자 인증 중 오류가 발생했습니다: ${e.toString()}');
-    }
-  }
-
-  /// 관리자 회원가입 (전화번호 인증 후 PIN 등록)
-  ///
-  /// 1. 전화번호 인증 확인
-  /// 2. AdminUser 생성
-  /// 3. PIN 저장
-  Future<AdminUser> registerAdmin({
-    required String phoneNumber,
-    required String verificationCode,
-    required String name,
-    required String pin,
-  }) async {
-    // adminUsers는 rules에서 클라이언트 create/update가 막혀있으므로
-    // Cloud Function으로만 등록한다.
-    final normalizedPhone = _normalizePhoneNumber(phoneNumber);
-
-    try {
-      final callable = FirebaseFunctions.instance.httpsCallable(
-        'registerAdminPin',
-      );
-      final res = await callable.call({
-        'phoneNumber': normalizedPhone,
-        'verificationCode': verificationCode, // 서버에서 참조하지 않지만 로깅용
-        'name': name,
-        'pin': pin,
-      });
-      final data = (res.data as Map).cast<String, dynamic>();
-      if (data['success'] != true) {
-        throw Exception('관리자 코드 등록에 실패했습니다.');
-      }
-
-      final admin = AdminUser(
-        userId: data['userId'] as String,
-        name: data['name'] as String? ?? name,
-        phoneNumber: data['phoneNumber'] as String? ?? normalizedPhone,
-        authPin: pin,
-        placeIds:
-            (data['placeIds'] as List<dynamic>? ?? [])
-                .map((e) => e.toString())
-                .toList(),
-        createdAt: TimezoneUtils.getSeoulDateTime(),
-        updatedAt: TimezoneUtils.getSeoulDateTime(),
-      );
-
-      return admin;
-    } on FirebaseFunctionsException catch (e) {
-      if (e.code == 'already-exists') {
-        throw Exception('이미 등록된 관리자입니다.');
-      }
-      if (e.code == 'permission-denied') {
-        throw Exception('전화번호가 일치하지 않습니다.');
-      }
-      throw Exception(e.message ?? '관리자 코드 등록 중 오류가 발생했습니다.');
-    }
-  }
-
-  /// 관리자 PIN 업데이트
-  Future<AdminUser> updateAdminPin({
-    required String userId,
-    required String newPin,
-  }) async {
-    final admin = await _adminService.getAdmin(userId);
-
-    final updatedAdmin = admin.copyWith(
-      authPin: newPin, // 실제로는 해시화 필요
-      updatedAt: TimezoneUtils.getSeoulDateTime(),
-    );
-
-    final userService = UserService();
-    await userService.updateAdmin(updatedAdmin);
-    return updatedAdmin;
-  }
-
-  /// 관리자 등록 (슈퍼 관리자 또는 초기 설정)
-  ///
-  /// 새로운 관리자를 adminUsers 컬렉션에 등록
-  /// 베타 버전: placeIds는 항상 빈 배열로 시작
-  Future<AdminUser> createAdmin({
-    required String phoneNumber,
-    required String name,
-    required String createdBy, // 슈퍼 관리자 ID 또는 시스템
-    List<String>? placeIds,
-  }) async {
-    // 이미 등록된 전화번호인지 확인
-    final existing = await findAdminByPhone(phoneNumber);
-    if (existing != null) {
-      throw Exception('이미 등록된 관리자입니다.');
-    }
-
-    // 베타 버전: placeIds는 무시하고 항상 빈 배열로 시작
-    // 일반 사용자로도 등록되어 있는지 확인
-    final existingUser = await findUserByPhone(phoneNumber);
-    final userId = existingUser?.userId ?? _generateUserId();
-
-    // AdminUser 생성 (베타 버전: placeIds는 항상 빈 배열)
-    final admin = AdminUser(
-      userId: userId,
-      name: name,
-      phoneNumber: phoneNumber,
-      placeIds: [], // 베타 버전: 항상 빈 배열로 시작
-      createdAt: TimezoneUtils.getSeoulDateTime(),
-    );
-
-    // UserService를 통해 저장
-    final userService = UserService();
-    await userService.createAdmin(admin);
-
-    return admin;
-  }
-
-  /// 사용자 ID 생성 (임시)
-  ///
-  /// 실제로는 Firebase Auth UID 사용 권장
-  String _generateUserId() {
-    return 'user_${DateTime.now().millisecondsSinceEpoch}';
-  }
-
   // ==================== 자동 매칭 ====================
 
-  /// 전화번호로 자동 매칭
-  ///
-  /// pendingMembers 컬렉션에서 전화번호로 검색하여
-  /// PlaceMembership 생성. [userId]는 반드시 request.auth.uid여야 규칙 통과.
-  /// 존재하지 않는 문서에 transaction.get()을 하면 규칙에서 거부되므로,
-  /// set(merge: true)로만 처리하고 get은 하지 않음.
-  Future<List<PlaceMembership>> _autoMatchMemberships(
-    String userId,
-    String phoneNumber,
-  ) async {
-    final firestore = _firestoreService.firestore;
-    final query = firestore
-        .collection('pendingMembers')
-        .where('phoneNumber', isEqualTo: phoneNumber);
-
-    final snapshot = await query.get();
-
-    if (snapshot.docs.isEmpty) {
-      return []; // 매칭 안됨
+  /// 전화번호로 자동 매칭: pendingMembers → enrollments (Callable 호출)
+  /// 서버·pendingMembers와 동일 형식(0 + 10자리)으로 보내야 쿼리 매칭됨
+  Future<void> _autoMatchMemberships(String userId, String phoneNumber) async {
+    try {
+      final normalized = PhoneUtils.normalizeForStorage(phoneNumber);
+      final callable = FirebaseFunctions.instance.httpsCallable(
+        'createEnrollmentsFromPendingMembers',
+      );
+      await callable.call({'phoneNumber': normalized});
+    } catch (e) {
+      debugPrint('[AuthService._autoMatchMemberships] callable error: $e');
     }
-
-    final memberships = <PlaceMembership>[];
-
-    await firestore.runTransaction((transaction) async {
-      for (final doc in snapshot.docs) {
-        final data = doc.data();
-        final placeId = data['placeId'] as String;
-        final autoApprove = data['autoApprove'] as bool? ?? true;
-
-        final membershipId = '${placeId}_$userId';
-        final membershipRef = firestore
-            .collection('placeMemberships')
-            .doc(membershipId);
-
-        final now = TimezoneUtils.getSeoulDateTime();
-        final membership = PlaceMembership(
-          id: membershipId,
-          userId: userId,
-          placeId: placeId,
-          requestedAt: now,
-          approvedAt: autoApprove ? now : now,
-          invitedBy: data['createdBy'] as String?,
-        );
-
-        final membershipData = membership.toJson();
-        final timestamp = _firestoreService.dateTimeToTimestamp(now);
-        membershipData['requestedAt'] = timestamp.toDate().toIso8601String();
-        if (membership.approvedAt != null) {
-          membershipData['approvedAt'] = timestamp.toDate().toIso8601String();
-        }
-
-        // merge: true로 기존 문서가 있으면 병합, 없으면 생성. transaction.get() 제거로
-        // "없는 문서 읽기 → permission-denied" 방지.
-        transaction.set(
-          membershipRef,
-          membershipData,
-          SetOptions(merge: true),
-        );
-        memberships.add(membership);
-      }
-    });
-
-    return memberships;
   }
 
   // ==================== 플레이스 멤버십 관리 ====================
 
-  /// 승인된 플레이스 목록 가져오기 (status 제거로 모든 멤버십이 승인된 것으로 처리)
+  /// 승인된 플레이스 목록 (places/{placeId}/members 기준, enrollment 아님)
   Future<List<Place>> getApprovedPlaces(String userId) async {
-    final firestore = _firestoreService.firestore;
-    final memberships =
-        await firestore
-            .collection('placeMemberships')
-            .where('userId', isEqualTo: userId)
-            .get();
-
-    final placeIds =
-        memberships.docs.map((doc) => doc.data()['placeId'] as String).toList();
-
+    final members = await MemberService().getPlaceMembershipsForUser(userId);
+    final placeIds = members
+        .map((m) => m.placeId)
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList();
     if (placeIds.isEmpty) return [];
 
-    // Place 정보 가져오기
     final places = <Place>[];
     for (final placeId in placeIds) {
       final place = await _firestoreService.getPlace(placeId);
-      if (place != null) {
-        places.add(place);
-      }
+      if (place != null) places.add(place);
     }
-
     return places;
   }
 
-  /// Pending 상태 멤버십 목록 가져오기 (status 제거로 빈 리스트 반환)
-  Future<List<PlaceMembership>> getPendingMemberships(String userId) async {
-    // status 제거로 항상 멤버이므로 빈 리스트 반환
-    return [];
-  }
-
-  /// 플레이스 가입 요청
-  Future<PlaceMembership> requestPlaceMembership({
+  /// 플레이스 가입 요청 (pendingMember만 생성, 승인 시 enrollments로 멤버됨)
+  Future<void> requestPlaceMembership({
     required String userId,
     required String placeId,
     String? message,
   }) async {
-    // 이미 멤버십이 있는지 확인
-    final existing = await _checkExistingMembership(userId, placeId);
-    if (existing != null) {
+    final existing = await _hasPlaceAccess(userId, placeId);
+    if (existing) {
       throw Exception('이미 가입 요청하거나 승인된 플레이스입니다.');
     }
 
-    // PlaceMembership 생성
     final firestore = _firestoreService.firestore;
-    final membershipRef = firestore.collection('placeMemberships').doc();
+    final userDoc = await firestore.collection('users').doc(userId).get();
+    final phoneNumber = userDoc.data()?['phoneNumber'] as String?;
+    if (phoneNumber == null || phoneNumber.isEmpty) {
+      throw Exception('전화번호가 없어 가입 요청을 할 수 없습니다.');
+    }
 
     final now = TimezoneUtils.getSeoulDateTime();
-    final membership = PlaceMembership(
-      id: membershipRef.id,
-      userId: userId,
-      placeId: placeId,
-      requestedAt: now,
-      approvedAt: now, // status 제거로 항상 approvedAt 설정
-    );
-
-    final membershipData = membership.toJson();
-    final timestamp = _firestoreService.dateTimeToTimestamp(now);
-    // Firestore에 저장할 때는 Timestamp로 변환
-    membershipData['requestedAt'] = timestamp;
-    membershipData['approvedAt'] = timestamp;
-
-    await membershipRef.set(membershipData);
-
-    // TODO: 관리자에게 알림 (Cloud Functions)
-
-    return membership;
+    final normalizedPhone = phoneNumber.replaceAll(RegExp(r'[^\d]'), '');
+    final normalized =
+        normalizedPhone.startsWith('82')
+            ? '0${normalizedPhone.substring(2)}'
+            : normalizedPhone.startsWith('0')
+            ? normalizedPhone
+            : '0$normalizedPhone';
+    final pendingId = '${placeId}_$normalized';
+    final pendingRef = firestore
+        .collection('places')
+        .doc(placeId)
+        .collection('pendingMembers')
+        .doc(pendingId);
+    await pendingRef.set({
+      'placeId': placeId,
+      'phoneNumber': normalized,
+      'invitedBy': userId,
+      'role': 'member',
+      'allowedCourseIds': [],
+      'userId': userId,
+      'createdAt': _firestoreService.dateTimeToTimestamp(now),
+      'updatedAt': _firestoreService.dateTimeToTimestamp(now),
+    }, SetOptions(merge: true));
   }
 
-  /// 기존 멤버십 확인
-  Future<PlaceMembership?> _checkExistingMembership(
-    String userId,
-    String placeId,
-  ) async {
+  /// 기존 멤버십 확인 (enrollment 존재 여부)
+  Future<bool> _hasPlaceAccess(String userId, String placeId) async {
     final firestore = _firestoreService.firestore;
-    final query = firestore
-        .collection('placeMemberships')
-        .where('userId', isEqualTo: userId)
-        .where('placeId', isEqualTo: placeId)
-        .limit(1);
-
-    final snapshot = await query.get();
-    if (snapshot.docs.isEmpty) return null;
-
-    final data = snapshot.docs.first.data();
-    // Timestamp 변환
-    if (data['requestedAt'] != null) {
-      data['requestedAt'] =
-          _firestoreService
-              .timestampToDateTime(data['requestedAt'])
-              .toIso8601String();
-    }
-    if (data['approvedAt'] != null) {
-      data['approvedAt'] =
-          _firestoreService
-              .timestampToDateTime(data['approvedAt'])
-              .toIso8601String();
-    }
-    if (data['rejectedAt'] != null) {
-      data['rejectedAt'] =
-          _firestoreService
-              .timestampToDateTime(data['rejectedAt'])
-              .toIso8601String();
-    }
-    return PlaceMembership.fromJson(data);
+    final snap =
+        await firestore
+            .collection('enrollments')
+            .where('userId', isEqualTo: userId)
+            .where('placeId', isEqualTo: placeId)
+            .limit(1)
+            .get();
+    return snap.docs.isNotEmpty;
   }
 
   /// 현재 플레이스 설정
@@ -1532,6 +937,8 @@ class AuthService {
 
     // ✅ 일반(멤버) 모드로 접속했음을 저장 (자동 로그인 시 모드 복원)
     await _storageService.saveLastEntryMode('member');
+    // ✅ 멤버 마지막 접속 플레이스 로컬 저장 (관리자→멤버 전환 직후 AppStartup에서 복원)
+    await _storageService.saveUserLastAccessedPlaceId(place.id);
   }
 
   /// 로그아웃 (일반 로그아웃 및 회원탈퇴 완료 후 호출)
@@ -1546,9 +953,6 @@ class AuthService {
       _currentPlace = null;
       debugPrint('[AuthService.logout] _userService.logout() 호출');
       _userService.logout();
-      debugPrint('[AuthService.logout] _adminService.logout() 호출');
-      _adminService.logout();
-
       // 사용자 데이터 삭제
       debugPrint('[AuthService.logout] clearUserData 호출');
       await _storageService.clearUserData();
@@ -1560,6 +964,9 @@ class AuthService {
       // 마지막 접속 모드 삭제 (완전 로그아웃)
       debugPrint('[AuthService.logout] clearLastEntryMode 호출');
       await _storageService.clearLastEntryMode();
+
+      // 수동 진입 선택 플래그 삭제 (다음 기동 시 PlaceWaiting으로 정상 분기)
+      await _storageService.clearRequireManualEntrySelection();
 
       // 인증 상태 스트림 초기화
       _authStateStream = null;
@@ -1576,29 +983,18 @@ class AuthService {
 class AuthResult {
   final models.User user;
   final UserRole role;
-  final List<PlaceMembership> memberships;
-  final List<PlaceMembership> approvedMemberships;
-  final List<PlaceMembership> pendingMemberships;
-  final String? lastAccessedPlaceId; // 마지막 접속한 플레이스 ID
+  final List<String> placeIds;
+  final String? lastAccessedPlaceId;
 
   AuthResult({
     required this.user,
     required this.role,
-    required this.memberships,
-    this.approvedMemberships = const [],
-    this.pendingMemberships = const [],
+    required this.placeIds,
     this.lastAccessedPlaceId,
   });
 
-  /// 승인된 플레이스가 있는지
-  bool get hasApprovedPlaces => approvedMemberships.isNotEmpty;
-
-  /// Pending 상태만 있는지
-  bool get hasOnlyPending =>
-      memberships.isNotEmpty && approvedMemberships.isEmpty;
-
-  /// 플레이스가 없는지
-  bool get hasNoPlaces => memberships.isEmpty;
+  bool get hasApprovedPlaces => placeIds.isNotEmpty;
+  bool get hasNoPlaces => placeIds.isEmpty;
 }
 
 /// 인증 상태
@@ -1606,25 +1002,25 @@ class AuthState {
   final bool isAuthenticated;
   final models.User? user;
   final UserRole? role;
-  final List<PlaceMembership>? memberships;
+  final List<String>? placeIds;
 
   AuthState._({
     required this.isAuthenticated,
     this.user,
     this.role,
-    this.memberships,
+    this.placeIds,
   });
 
   factory AuthState.authenticated({
     required models.User user,
     required UserRole role,
-    List<PlaceMembership>? memberships,
+    List<String>? placeIds,
   }) {
     return AuthState._(
       isAuthenticated: true,
       user: user,
       role: role,
-      memberships: memberships,
+      placeIds: placeIds ?? [],
     );
   }
 
@@ -1635,11 +1031,3 @@ class AuthState {
 
 /// 사용자 역할
 enum UserRole { admin, member }
-
-/// 관리자 자동 로그인 결과
-class AdminAutoLoginResult {
-  final AdminUser admin;
-  final String? lastAccessedPlaceId;
-
-  AdminAutoLoginResult({required this.admin, this.lastAccessedPlaceId});
-}

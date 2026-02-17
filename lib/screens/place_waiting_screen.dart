@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:provider/provider.dart';
@@ -6,24 +7,26 @@ import 'package:reservation/services/user_service.dart';
 import 'package:reservation/utils/snackbar_util.dart';
 import '../theme/app_colors.dart';
 import '../models/place.dart';
-import '../models/place_membership.dart';
 import '../models/user.dart';
 import '../providers/auth_provider.dart';
 import '../providers/course_provider.dart';
 import '../providers/enrollment_provider.dart';
+import '../providers/member_provider.dart';
 import '../providers/place_provider.dart';
 import '../providers/reservation_provider.dart';
+import '../providers/reservation_summary_provider.dart';
 import '../providers/story_provider.dart';
 import '../services/firestore_service.dart';
 import '../services/member_service.dart';
 import '../services/auth_service.dart';
-import '../utils/storage_service.dart';
+import '../utils/local_storage_util.dart';
 import '../widgets/common_dialog.dart';
 import '../widgets/cached_image_widget.dart';
+import '../widgets/splash_screen.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:shimmer/shimmer.dart';
-import 'admin/admin_pin_input_screen.dart';
-import 'admin/admin_pin_register_screen.dart';
+import 'admin/widgets/place_registration_screen.dart';
+import 'admin_screen.dart';
 
 /// 플레이스 대기 화면
 ///
@@ -32,7 +35,14 @@ import 'admin/admin_pin_register_screen.dart';
 class PlaceWaitingScreen extends StatefulWidget {
   final String phoneNumber;
 
-  const PlaceWaitingScreen({super.key, required this.phoneNumber});
+  /// true면 플레이스 1개여도 자동 진입하지 않고 목록만 표시 (예: 설정에서 "모든 플레이스 보기")
+  final bool skipAutoEnter;
+
+  const PlaceWaitingScreen({
+    super.key,
+    required this.phoneNumber,
+    this.skipAutoEnter = false,
+  });
 
   @override
   State<PlaceWaitingScreen> createState() => _PlaceWaitingScreenState();
@@ -46,8 +56,8 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
   final TextEditingController _searchController = TextEditingController();
   bool _searchListenerAttached = false;
   String? _userId;
-  StreamSubscription<List<PlaceMembership>>? _membershipSubscription;
-  List<PlaceMembership> _memberships = [];
+  StreamSubscription<List<String>>? _membershipSubscription;
+  List<String> _memberPlaceIds = [];
   Map<String, Place> _placesMap = {};
   bool _isLoading = true;
   bool _hasAutoNavigated = false;
@@ -61,6 +71,11 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
   List<Place> _visitHistoryPlaces = []; // 로컬 방문 기록 (검색어 없을 때 노출)
   String? _lastSearchQuery; // 마지막으로 서버에 보낸 쿼리 (동일 쿼리 재요청 방지)
   int _lastSearchCount = -1; // 마지막 검색 결과 개수 (접두사 확장 시 스킵 판단용)
+  bool _isAdminLoading = false; // 관리자 진입 시 스플래시 + 데이터 로드 중
+  Widget? _adminTargetScreen; // 관리자 화면 (미리 렌더 후 스플래시만 페이드아웃)
+  static const Duration _adminSplashMinDuration = Duration(seconds: 2);
+  static const int _descriptionMaxCollapsed = 80; // 이 글자 수 초과 시 "펼치기" 표시
+  final Set<String> _expandedDescriptionPlaceIds = {}; // 설명 펼친 플레이스 ID
 
   /// AuthProvider.currentUser를 보장한다.
   ///
@@ -397,7 +412,7 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
     }
   }
 
-  /// 멤버십 실시간 구독 시작
+  /// 멤버십 실시간 구독 시작 (enrollment + pending 통합)
   void _startMembershipSubscription() {
     if (_userId == null) return;
 
@@ -406,120 +421,147 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
       return;
     }
 
-    _membershipSubscription = _memberService.watchUserMemberships(_userId!).listen((
-      memberships,
-    ) async {
-      // status 제거로 모든 멤버십이 승인된 것으로 처리
-      final approvedMemberships = memberships;
+    final phoneNumber =
+        Provider.of<AuthProvider>(
+          context,
+          listen: false,
+        ).currentUser?.phoneNumber ??
+        widget.phoneNumber;
 
-      // 플레이스 정보 가져오기 (배치 처리로 최적화)
-      final placesMap = <String, Place>{};
+    _membershipSubscription = _memberService
+        .watchUserPlaceIdsIncludingPending(_userId!, phoneNumber: phoneNumber)
+        .listen(
+          (placeIds) async {
+            // 플레이스 정보 가져오기 (배치 처리로 최적화)
+            final placesMap = <String, Place>{};
 
-      // 이미 로드된 플레이스는 재사용
-      final placeIdsToLoad =
-          approvedMemberships
-              .map((m) => m.placeId)
-              .where((placeId) => !_placesMap.containsKey(placeId))
-              .toList();
+            // 이미 로드된 플레이스는 재사용
+            final placeIdsToLoad =
+                placeIds
+                    .where((placeId) => !_placesMap.containsKey(placeId))
+                    .toList();
 
-      // 배치로 플레이스 로드 (병렬 처리)
-      if (placeIdsToLoad.isNotEmpty) {
-        final places = await Future.wait(
-          placeIdsToLoad.map((placeId) async {
-            try {
-              return await _firestoreService.getPlace(placeId);
-            } catch (e) {
-              return null;
-            }
-          }),
-        );
+            // 배치로 플레이스 로드 (병렬 처리)
+            if (placeIdsToLoad.isNotEmpty) {
+              final places = await Future.wait(
+                placeIdsToLoad.map((placeId) async {
+                  try {
+                    return await _firestoreService.getPlace(placeId);
+                  } catch (e) {
+                    return null;
+                  }
+                }),
+              );
 
-        // 로드된 플레이스를 맵에 추가
-        for (int i = 0; i < placeIdsToLoad.length; i++) {
-          final place = places[i];
-          if (place != null) {
-            placesMap[placeIdsToLoad[i]] = place;
-          }
-        }
-      }
-
-      // 기존 플레이스 맵과 새로 로드한 플레이스 맵 병합
-      final updatedPlacesMap = <String, Place>{..._placesMap, ...placesMap};
-
-      // 승인된 멤버십에 해당하는 플레이스만 필터링
-      final finalPlacesMap = <String, Place>{};
-      for (final membership in approvedMemberships) {
-        final place = updatedPlacesMap[membership.placeId];
-        if (place != null) {
-          finalPlacesMap[membership.placeId] = place;
-        }
-      }
-
-      if (mounted) {
-        setState(() {
-          _memberships = approvedMemberships;
-          _placesMap = finalPlacesMap;
-          _isLoading = false;
-        });
-
-        // ✅ PlaceSwitchWidget용: 서버에서 조회한 멤버십 목록을 AuthProvider에 반영 (emit마다)
-        final authProvider = Provider.of<AuthProvider>(context, listen: false);
-        final memberPlaceIds =
-            approvedMemberships.map((m) => m.placeId).toList();
-        authProvider.setApprovedPlaceIds(memberPlaceIds);
-        debugPrint(
-          '[PlaceWaitingScreen] AuthProvider.setApprovedPlaceIds: $memberPlaceIds (${memberPlaceIds.length}개)',
-        );
-
-        // ✅ linkedAdmin + adminManagedPlaceIds는 최초 1회만 조회 (스트림 재emit 시 중복 방지)
-        if (!_linkedAdminLoaded) {
-          _linkedAdminLoaded = true;
-          final user = authProvider.currentUser;
-          final phoneNumber = user?.phoneNumber;
-          if (phoneNumber != null && phoneNumber.trim().isNotEmpty) {
-            try {
-              final admin = await _authService.findAdminByPhone(phoneNumber);
-              if (admin != null && mounted) {
-                authProvider.setLinkedAdmin(admin);
-                final managedIds = await _firestoreService
-                    .getManagedPlaceIdsByAdminId(admin.userId);
-                authProvider.setAdminManagedPlaceIds(managedIds);
-                debugPrint(
-                  '[PlaceWaitingScreen] AuthProvider linkedAdmin + adminManagedPlaceIds: ${managedIds.length}개',
-                );
-              } else if (mounted) {
-                authProvider.setLinkedAdmin(null);
-                authProvider.setAdminManagedPlaceIds([]);
-              }
-            } catch (e) {
-              debugPrint('[PlaceWaitingScreen] 관리자 정보 로드 실패 (무시): $e');
-              if (mounted) {
-                authProvider.setLinkedAdmin(null);
-                authProvider.setAdminManagedPlaceIds([]);
+              // 로드된 플레이스를 맵에 추가
+              for (int i = 0; i < placeIdsToLoad.length; i++) {
+                final place = places[i];
+                if (place != null) {
+                  placesMap[placeIdsToLoad[i]] = place;
+                }
               }
             }
-          }
-        }
 
-        // 자동 로그인 처리 (한 번만 실행)
-        // ✅ 명시적 재로그인 직후에는 자동 진입을 하지 않는다.
-        if (!_requireManualEntrySelection &&
-            !_hasAutoNavigated &&
-            approvedMemberships.length == 1) {
-          _hasAutoNavigated = true;
-          final place = finalPlacesMap[approvedMemberships.first.placeId];
-          if (place != null) {
-            _navigateToMain(place);
-          }
-        }
-      }
-    });
+            // 기존 플레이스 맵과 새로 로드한 플레이스 맵 병합
+            final updatedPlacesMap = <String, Place>{
+              ..._placesMap,
+              ...placesMap,
+            };
+
+            // 접근 가능한 플레이스만 필터링
+            final finalPlacesMap = <String, Place>{};
+            for (final placeId in placeIds) {
+              final place = updatedPlacesMap[placeId];
+              if (place != null) {
+                finalPlacesMap[placeId] = place;
+              }
+            }
+
+            if (mounted) {
+              setState(() {
+                _memberPlaceIds = placeIds;
+                _placesMap = finalPlacesMap;
+                _isLoading = false;
+              });
+
+              // PlaceSwitchWidget용: 서버에서 조회한 placeId 목록을 AuthProvider에 반영
+              final authProvider = Provider.of<AuthProvider>(
+                context,
+                listen: false,
+              );
+              authProvider.setApprovedPlaceIds(placeIds);
+              debugPrint(
+                '[PlaceWaitingScreen] AuthProvider.setApprovedPlaceIds: $placeIds (${placeIds.length}개)',
+              );
+
+              // ✅ linkedAdmin + adminManagedPlaceIds는 최초 1회만 조회 (스트림 재emit 시 중복 방지)
+              if (!_linkedAdminLoaded) {
+                _linkedAdminLoaded = true;
+                final user = authProvider.currentUser;
+                final phoneNumber = user?.phoneNumber;
+                if (phoneNumber != null && phoneNumber.trim().isNotEmpty) {
+                  try {
+                    final admin = await _authService.findAdminByPhone(
+                      phoneNumber,
+                    );
+                    if (admin != null && mounted) {
+                      authProvider.setLinkedAdmin(admin);
+                      final managedIds = await _firestoreService
+                          .getManagedPlaceIdsByAdminId(admin.userId);
+                      authProvider.setAdminManagedPlaceIds(managedIds);
+                      debugPrint(
+                        '[PlaceWaitingScreen] AuthProvider linkedAdmin + adminManagedPlaceIds: ${managedIds.length}개',
+                      );
+                    } else if (mounted) {
+                      authProvider.setLinkedAdmin(null);
+                      authProvider.setAdminManagedPlaceIds([]);
+                    }
+                  } catch (e) {
+                    debugPrint('[PlaceWaitingScreen] 관리자 정보 로드 실패 (무시): $e');
+                    if (mounted) {
+                      authProvider.setLinkedAdmin(null);
+                      authProvider.setAdminManagedPlaceIds([]);
+                    }
+                  }
+                }
+              }
+
+              // 자동 로그인 처리 (한 번만 실행)
+              // ✅ 명시적 재로그인 직후 / 설정에서 "모든 플레이스 보기" 진입 시에는 자동 진입 안 함
+              if (!_requireManualEntrySelection &&
+                  !_hasAutoNavigated &&
+                  !widget.skipAutoEnter &&
+                  placeIds.length == 1) {
+                _hasAutoNavigated = true;
+                final place = finalPlacesMap[placeIds.first];
+                if (place != null) {
+                  _navigateToMain(place);
+                }
+              }
+            }
+          },
+          onDone: () {
+            if (mounted) {
+              _membershipSubscription = null;
+            }
+          },
+          onError: (Object e, StackTrace st) {
+            debugPrint('[PlaceWaitingScreen] membership stream error (무시): $e');
+            if (mounted) {
+              setState(() {
+                _memberPlaceIds = [];
+                _isLoading = false;
+              });
+            }
+          },
+          cancelOnError: false,
+        );
   }
 
-  /// 승인된 플레이스 리스트 가져오기
+  /// 접근 가능한 플레이스 리스트
   List<Place> _getApprovedPlaces() {
-    return _memberships
-        .map((m) => _placesMap[m.placeId])
+    return _memberPlaceIds
+        .map((id) => _placesMap[id])
         .where((place) => place != null)
         .cast<Place>()
         .toList();
@@ -563,15 +605,33 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
 
       if (!mounted) return;
 
+      // ✅ 플레이스 존재 여부 먼저 점검 (없으면 진입 차단 + 스낵바)
+      Place? existingPlace;
+      try {
+        existingPlace = await _firestoreService.getPlace(place.id);
+      } catch (e) {
+        debugPrint('[PlaceWaitingScreen] getPlace error: $e');
+      }
+      if (existingPlace == null) {
+        await StorageService().removePlaceFromVisitHistory(place.id);
+        if (mounted) {
+          setState(() {
+            _visitHistoryPlaces =
+                _visitHistoryPlaces.where((p) => p.id != place.id).toList();
+          });
+          SnackbarUtil.showInfo(context, '플레이스가 존재하지 않아요');
+        }
+        return;
+      }
+
       // ✅ MainScreen이 의존하는 PlaceProvider를 먼저 세팅
       final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
       placeProvider.setCurrentPlace(place);
 
-      // ✅ Main 진입 전 PlaceSwitchWidget용 목록 한 번 더 동기화 (멤버십 구독 전 탭한 경우 대비)
+      // Main 진입 전 PlaceSwitchWidget용 목록 한 번 더 동기화
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
-      final memberIds = _memberships.map((m) => m.placeId).toList();
-      if (memberIds.isNotEmpty) {
-        authProvider.setApprovedPlaceIds(memberIds);
+      if (_memberPlaceIds.isNotEmpty) {
+        authProvider.setApprovedPlaceIds(_memberPlaceIds);
       }
 
       // ✅ 이전 place 데이터가 남아있지 않도록 클리어 후, 새 place 데이터 로드
@@ -588,30 +648,29 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
         context,
         listen: false,
       );
+      final summaryProvider = Provider.of<ReservationSummaryProvider>(
+        context,
+        listen: false,
+      );
 
       courseProvider.clear();
       storyProvider.clear();
+      summaryProvider.clear();
       await reservationProvider.clear();
       await enrollmentProvider.clear();
 
-      // ✅ 스플래시 동안 "첫 화면 체감"에 중요한 데이터만 먼저 로드하고,
-      // 나머지는 백그라운드로 돌린다 (Future.wait에 묶여 스플래시가 끝없이 걸리는 문제 방지)
-      final primaryLoads = <Future<void>>[storyProvider.loadStories(place.id)];
-      try {
-        await Future.wait(primaryLoads).timeout(const Duration(seconds: 6));
-      } catch (e) {
-        debugPrint('[PlaceWaitingScreen] primary load timeout/error: $e');
-      }
+      // ✅ 스플래시 동안 스토리 먼저 로드 시도 (실패해도 진입은 허용)
+      storyProvider.loadStories(place.id);
 
-      // 나머지 데이터는 기다리지 않고 백그라운드 로드 (필요 시 화면에서 자연스럽게 갱신됨)
+      // 코스는 백그라운드, 예약/등록권은 첫 스냅샷까지 대기 (유저 진입 시 0회 남음 오표시 방지)
       courseProvider.loadCourses(place.id);
       final user = authProvider.currentUser;
       if (user != null) {
-        reservationProvider.loadUserReservations(
+        await reservationProvider.loadUserReservations(
           userId: user.userId,
           placeId: place.id,
         );
-        enrollmentProvider.loadUserEnrollments(
+        await enrollmentProvider.loadUserEnrollments(
           userId: user.userId,
           placeId: place.id,
         );
@@ -672,32 +731,201 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
     }
   }
 
-  /// 뒤로가기 처리
-  Future<bool> _onWillPop() async {
-    // 로그인 안 된 경우 뒤로가기 허용
-    final firebaseUser = _authService.currentFirebaseUser;
-    if (firebaseUser == null) {
-      return true; // 뒤로가기 허용
-    }
+  /// 로그아웃/계정삭제 옵션 바텀시트 표시
+  void _showAccountOptionsBottomSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder:
+          (sheetContext) => Container(
+            decoration: BoxDecoration(
+              color: AppColors.backgroundWhite,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(24),
+              ),
+            ),
+            padding: EdgeInsets.only(
+              top: 20,
+              bottom: 20 + MediaQuery.of(context).padding.bottom,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: AppColors.borderLight,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                InkWell(
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    _performLogout();
+                  },
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Center(
+                        child: Text(
+                          '로그아웃',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                InkWell(
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    _performDeleteAccount();
+                  },
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Center(
+                        child: Text(
+                          '계정삭제',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.red,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+    );
+  }
 
-    // 로그인된 경우 로그아웃 확인
+  Future<void> _performLogout() async {
+    if (!mounted) return;
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final memberProvider = Provider.of<MemberProvider>(context, listen: false);
+    final reservationProvider = Provider.of<ReservationProvider>(
+      context,
+      listen: false,
+    );
+    final enrollmentProvider = Provider.of<EnrollmentProvider>(
+      context,
+      listen: false,
+    );
+    final summaryProvider = Provider.of<ReservationSummaryProvider>(
+      context,
+      listen: false,
+    );
+    await authProvider.logout();
+    memberProvider.clear();
+    summaryProvider.clear();
+    await reservationProvider.clear();
+    await enrollmentProvider.clear();
+    await _authService.clearRequireManualEntrySelection();
+    if (!mounted) return;
+    _membershipSubscription?.cancel();
+    _membershipSubscription = null;
+    _linkedAdminLoaded = false;
+    setState(() {
+      _userId = null;
+      _memberPlaceIds = [];
+      _placesMap = {};
+      _isLoading = false;
+      _hasAutoNavigated = false;
+      _adminTargetScreen = null;
+    });
+    _loadVisitHistory();
+    SnackbarUtil.showInfo(context, '로그아웃되었습니다');
+  }
+
+  Future<void> _performDeleteAccount() async {
     final confirmed = await CommonDialog.show(
       context: context,
-      title: '로그아웃',
-      message: '로그아웃 하시겠습니까?',
-      confirmText: '로그아웃',
+      title: '회원탈퇴',
+      message: '정말 탈퇴 하시겠습니까?\n모든 데이터가 삭제됩니다.',
+      confirmText: '탈퇴하기',
       cancelText: '취소',
+      confirmButtonColor: Colors.red,
     );
+    if (confirmed != true || !mounted) return;
 
-    if (confirmed == true) {
-      if (mounted) {
-        await _authService.logout();
-        await _authService.clearRequireManualEntrySelection();
-        Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
-      }
-      return false; // 뒤로가기 방지 (이미 네비게이션 처리됨)
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final user = authProvider.currentUser;
+    if (user == null) {
+      SnackbarUtil.showInfo(context, '사용자 정보를 찾을 수 없습니다.');
+      return;
     }
-    return false; // 다이얼로그에서 취소하면 뒤로가기 방지
+
+    SnackbarUtil.showLoading(context, '탈퇴중');
+
+    try {
+      final callable = FirebaseFunctions.instance.httpsCallable(
+        'deleteUserAccount',
+        options: HttpsCallableOptions(timeout: const Duration(seconds: 60)),
+      );
+      await callable.call({'userId': user.userId});
+      await authProvider.logout();
+      final memberProvider = Provider.of<MemberProvider>(
+        context,
+        listen: false,
+      );
+      final reservationProvider = Provider.of<ReservationProvider>(
+        context,
+        listen: false,
+      );
+      final enrollmentProvider = Provider.of<EnrollmentProvider>(
+        context,
+        listen: false,
+      );
+      final summaryProvider = Provider.of<ReservationSummaryProvider>(
+        context,
+        listen: false,
+      );
+      memberProvider.clear();
+      summaryProvider.clear();
+      await reservationProvider.clear();
+      await enrollmentProvider.clear();
+      await _authService.clearRequireManualEntrySelection();
+
+      if (!mounted) return;
+      _membershipSubscription?.cancel();
+      _membershipSubscription = null;
+      _linkedAdminLoaded = false;
+      setState(() {
+        _userId = null;
+        _memberPlaceIds = [];
+        _placesMap = {};
+        _isLoading = false;
+        _hasAutoNavigated = false;
+        _adminTargetScreen = null;
+      });
+      _loadVisitHistory();
+      SnackbarUtil.showSuccess(context, '회원탈퇴가 완료되었습니다.');
+    } catch (e) {
+      if (mounted) {
+        SnackbarUtil.showInfoFromError(context, e, fallback: '회원탈퇴 중 오류가 발생했습니다.');
+      }
+    }
+  }
+
+  /// 뒤로가기 처리
+  Future<bool> _onWillPop() async {
+    final firebaseUser = _authService.currentFirebaseUser;
+    if (firebaseUser == null) {
+      return true;
+    }
+    _showAccountOptionsBottomSheet();
+    return false;
   }
 
   @override
@@ -713,113 +941,138 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
       },
       child: Stack(
         children: [
-          Scaffold(
-            backgroundColor: AppColors.backgroundWhite,
-            appBar: AppBar(
+          // 하단: 관리자 화면 또는 플레이스 대기 (이미 렌더된 상태에서 스플래시만 페이드아웃)
+          if (_adminTargetScreen != null)
+            Positioned.fill(child: _adminTargetScreen!)
+          else
+            Scaffold(
               backgroundColor: AppColors.backgroundWhite,
-              elevation: 0,
-              scrolledUnderElevation: 0,
-              leading:
-                  _authService.currentFirebaseUser != null
-                      ? IconButton(
-                        onPressed: () async {
-                          await _onWillPop();
-                        },
-                        icon: Padding(
-                          padding: const EdgeInsets.only(left: 12),
-                          child: SvgPicture.asset(
-                            'assets/icons/logout-icon.svg',
-                            width: 26,
-                            height: 26,
-                            colorFilter: ColorFilter.mode(
-                              AppColors.primaryGreen,
-                              BlendMode.srcIn,
+              appBar: AppBar(
+                backgroundColor: AppColors.backgroundWhite,
+                elevation: 0,
+                scrolledUnderElevation: 0,
+                leading:
+                    _authService.currentFirebaseUser != null
+                        ? IconButton(
+                          onPressed: _showAccountOptionsBottomSheet,
+                          icon: Padding(
+                            padding: const EdgeInsets.only(left: 12),
+                            child: SvgPicture.asset(
+                              'assets/icons/logout-icon.svg',
+                              width: 26,
+                              height: 26,
+                              colorFilter: ColorFilter.mode(
+                                AppColors.primaryGreen,
+                                BlendMode.srcIn,
+                              ),
                             ),
                           ),
+                        )
+                        : null,
+                actions: [
+                  if (_authService.currentFirebaseUser != null)
+                    Consumer<AuthProvider>(
+                      builder: (context, authProvider, _) {
+                        final hasManagedPlaces =
+                            authProvider.adminManagedPlaceIds.isNotEmpty;
+                        final label =
+                            hasManagedPlaces ? '관리자로 접속하기' : '관리자로 시작하기';
+                        return TextButton(
+                          onPressed: () async {
+                            await _handleAdminLogin();
+                          },
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          child: Row(
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text(
+                                  label,
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    color: AppColors.primaryGreen,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Icon(
+                                  Icons.arrow_forward_ios,
+                                  size: 16,
+                                  color: AppColors.primaryGreen,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  if (_authService.currentFirebaseUser == null)
+                    TextButton(
+                      onPressed: () {
+                        Navigator.of(context).pushNamed('/phone-number');
+                      },
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
                         ),
-                      )
-                      : null,
-              actions: [
-                if (_authService.currentFirebaseUser != null)
-                  TextButton(
-                    onPressed: () async {
-                      await _handleAdminLogin();
-                    },
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    child: Row(
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text(
-                            '관리자로 진행하기',
-                            style: TextStyle(
-                              fontSize: 18,
-                              color: AppColors.primaryGreen,
-                              fontWeight: FontWeight.w600,
+                      child: Row(
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              '로그인',
+                              style: TextStyle(
+                                fontSize: 18,
+                                color: AppColors.primaryGreen,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 4),
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Icon(
-                            Icons.arrow_forward_ios,
-                            size: 16,
-                            color: AppColors.primaryGreen,
+                          const SizedBox(width: 4),
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Icon(
+                              Icons.arrow_forward_ios,
+                              size: 16,
+                              color: AppColors.primaryGreen,
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                  ),
-                if (_authService.currentFirebaseUser == null)
-                  TextButton(
-                    onPressed: () {
-                      Navigator.of(context).pushNamed('/phone-number');
-                    },
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
+                        ],
                       ),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
-                    child: Row(
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text(
-                            '로그인',
-                            style: TextStyle(
-                              fontSize: 18,
-                              color: AppColors.primaryGreen,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Icon(
-                            Icons.arrow_forward_ios,
-                            size: 16,
-                            color: AppColors.primaryGreen,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                const SizedBox(width: 12),
-              ],
+                  const SizedBox(width: 12),
+                ],
+              ),
+              body: SafeArea(child: _buildContent()),
             ),
-            body: SafeArea(child: _buildContent()),
+          // 관리자 로딩 오버레이 (페이드 아웃)
+          Positioned.fill(
+            child: AnimatedOpacity(
+              opacity: _isAdminLoading ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOut,
+              child: IgnorePointer(
+                ignoring: !_isAdminLoading,
+                child: Container(
+                  color: AppColors.backgroundWhite,
+                  child: const Center(child: SplashScreen()),
+                ),
+              ),
+            ),
           ),
         ],
       ),
@@ -1040,7 +1293,8 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
           ),
         ),
         // 로그인 안 된 경우 관리자 로그인 버튼 (화면 맨 아래) — 키보드 내려갔을 때만
-        if (firebaseUser == null && MediaQuery.of(context).viewInsets.bottom == 0)
+        if (firebaseUser == null &&
+            MediaQuery.of(context).viewInsets.bottom == 0)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
             child: Container(
@@ -1098,9 +1352,7 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
     }
     return places.where((place) {
       final nameMatch = place.name.toLowerCase().contains(q);
-      final locationMatch =
-          place.location != null && place.location!.toLowerCase().contains(q);
-      return nameMatch || locationMatch;
+      return nameMatch;
     }).toList();
   }
 
@@ -1286,17 +1538,43 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
   /// 플레이스 카드
   Widget _buildPlaceCard(Place place) {
     final isEnteringThis = _enteringPlaceId == place.id;
+    final desc = place.description?.trim();
+    final hasDescription = desc != null && desc.isNotEmpty;
+    final isExpanded =
+        hasDescription && _expandedDescriptionPlaceIds.contains(place.id);
+    final shouldShowExpand =
+        hasDescription && desc.length > _descriptionMaxCollapsed;
+    final displayDesc =
+        hasDescription
+            ? (isExpanded
+                ? desc
+                : (desc.length > _descriptionMaxCollapsed
+                    ? '${desc.substring(0, _descriptionMaxCollapsed)}...'
+                    : desc))
+            : null;
+
+    void toggleExpand() {
+      setState(() {
+        if (isExpanded) {
+          _expandedDescriptionPlaceIds.remove(place.id);
+        } else {
+          _expandedDescriptionPlaceIds.add(place.id);
+        }
+      });
+    }
+
     return GestureDetector(
       onTap: _isEnteringPlace ? null : () => _onPlaceTap(place),
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),
         decoration: BoxDecoration(
-          color: AppColors.backgroundWhite,
+          color: const Color.fromARGB(241, 255, 255, 255),
           borderRadius: BorderRadius.circular(16),
         ),
         child: Padding(
           padding: const EdgeInsets.all(8),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               PlaceImageWidget(
                 imageUrl: place.imageUrl,
@@ -1308,45 +1586,75 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      place.name,
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
-                        overflow: TextOverflow.ellipsis,
-                        letterSpacing: -0.3,
-                      ),
+                    // 제목과 펼치기/접기 화살표를 한 줄에 정렬
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            place.name,
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textPrimary,
+                              overflow: TextOverflow.ellipsis,
+                              letterSpacing: -0.3,
+                            ),
+                          ),
+                        ),
+                        if (isEnteringThis)
+                          SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: AppColors.primaryGreen,
+                            ),
+                          )
+                        else if (shouldShowExpand)
+                          GestureDetector(
+                            onTap: toggleExpand,
+                            child: Icon(
+                              isExpanded
+                                  ? Icons.keyboard_arrow_up
+                                  : Icons.keyboard_arrow_down,
+                              size: 24,
+                              color: AppColors.textSecondary.withOpacity(0.8),
+                            ),
+                          )
+                        else
+                          Icon(
+                            Icons.arrow_forward_ios,
+                            size: 16,
+                            color: AppColors.textSecondary.withOpacity(0.6),
+                          ),
+                      ],
                     ),
-                    if (place.location != null) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        place.location!,
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: AppColors.textSecondary,
+
+                    if (displayDesc != null) ...[
+                      const SizedBox(height: 6),
+                      ConstrainedBox(
+                        constraints: BoxConstraints(minHeight: 13 * 1.35 * 2),
+                        child: Text(
+                          displayDesc,
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: AppColors.textSecondary,
+                            height: 1.35,
+                          ),
+                          maxLines:
+                              (isExpanded || !shouldShowExpand) ? null : 2,
+                          overflow:
+                              (isExpanded || !shouldShowExpand)
+                                  ? null
+                                  : TextOverflow.ellipsis,
                         ),
                       ),
                     ],
                   ],
                 ),
-              ),
-              // 진입 중이면 로딩, 아니면 화살표
-              SizedBox(
-                width: 16,
-                height: 16,
-                child:
-                    isEnteringThis
-                        ? CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: AppColors.primaryGreen,
-                        )
-                        : Icon(
-                          Icons.arrow_forward_ios,
-                          size: 16,
-                          color: AppColors.textSecondary.withOpacity(0.6),
-                        ),
               ),
             ],
           ),
@@ -1355,21 +1663,17 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
     );
   }
 
-  /// 관리자 로그인 처리
-  /// waiting_screen에 있다는 것은 이미 로그인이 완료된 상태이므로
-  /// 인증은 스킵하고 관리자 정보만 조회하여 PIN 입력 화면으로 이동
+  /// 관리자 진입 처리 (PIN 없음)
+  /// - 관리 플레이스가 있으면 → 어드민 화면(/admin)으로
+  /// - 없으면 → 플레이스 등록 화면으로
   Future<void> _handleAdminLogin() async {
     try {
-      // waiting_screen에 있다는 것은 이미 로그인된 상태
-      // Firebase Auth에서 전화번호 가져오기 (인증 정보 확인)
       String? phoneNumber;
-
       final firebaseUser = _authService.currentFirebaseUser;
       if (firebaseUser != null) {
         phoneNumber = firebaseUser.phoneNumber;
       }
 
-      // Firebase Auth에서 전화번호를 찾을 수 없으면 인증 정보가 없는 것
       if (phoneNumber == null || phoneNumber.isEmpty) {
         if (mounted) {
           final confirmed = await CommonDialog.show(
@@ -1379,9 +1683,7 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
             cancelText: '취소',
             confirmText: '로그인하기',
           );
-
           if (confirmed == true) {
-            // 초기 로그인 화면으로 이동 (모든 화면 제거)
             Navigator.of(
               context,
             ).pushNamedAndRemoveUntil('/phone-number', (route) => false);
@@ -1390,7 +1692,6 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
         return;
       }
 
-      // 전화번호 정규화
       phoneNumber = phoneNumber.replaceAll(RegExp(r'[^\d]'), '');
       if (phoneNumber.startsWith('82')) {
         phoneNumber = '0${phoneNumber.substring(2)}';
@@ -1398,36 +1699,86 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
         phoneNumber = '0$phoneNumber';
       }
 
-      // 관리자 정보만 조회 (인증은 이미 완료된 상태)
       final admin = await _authService.findAdminByPhone(phoneNumber);
+      final managedIds =
+          admin != null
+              ? await _firestoreService.getManagedPlaceIdsByAdminId(
+                admin.userId,
+              )
+              : <String>[];
 
-      if (mounted) {
-        if (admin != null) {
-          // 기존 관리자인 경우 PIN 입력 화면으로 이동
-          Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder:
-                  (context) => AdminPinInputScreen(
-                    phoneNumber: phoneNumber!,
-                    verificationCode: '',
-                  ),
-            ),
-          );
-        } else {
-          // 관리자가 아니지만 관리자가 되고자 하는 경우 PIN 등록 화면으로 이동
-          Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder:
-                  (context) => AdminPinRegisterScreen(
-                    phoneNumber: phoneNumber!,
-                    verificationCode: '',
-                  ),
-            ),
-          );
+      if (!mounted) return;
+      if (admin != null && managedIds.isNotEmpty) {
+        final splashStartedAt = DateTime.now();
+        setState(() => _isAdminLoading = true);
+
+        final authProvider = Provider.of<AuthProvider>(context, listen: false);
+        final placeProvider = Provider.of<PlaceProvider>(
+          context,
+          listen: false,
+        );
+        final courseProvider = Provider.of<CourseProvider>(
+          context,
+          listen: false,
+        );
+        final storyProvider = Provider.of<StoryProvider>(
+          context,
+          listen: false,
+        );
+        final memberProvider = Provider.of<MemberProvider>(
+          context,
+          listen: false,
+        );
+
+        authProvider.setLinkedAdmin(admin);
+        authProvider.setAdminManagedPlaceIds(managedIds);
+
+        final lastPlaceId = await _authService.getLastAccessedPlaceId();
+        final placeId =
+            lastPlaceId != null && managedIds.contains(lastPlaceId)
+                ? lastPlaceId
+                : managedIds.first;
+
+        try {
+          await placeProvider.loadPlace(placeId);
+          final place = placeProvider.currentPlace;
+          if (place != null && mounted) {
+            placeProvider.setCurrentPlace(place);
+            await _authService.updateLastAccessedPlace(place.id);
+            memberProvider.setPlaceId(place.id);
+            await Future.wait([
+              courseProvider.loadCourses(place.id),
+              storyProvider.loadStories(place.id),
+            ]);
+          }
+        } catch (e) {
+          debugPrint('[PlaceWaitingScreen] 관리자 진입 데이터 로드 실패: $e');
         }
+
+        if (!mounted) return;
+        // 스플래시 최소 2초 보장
+        final elapsed = DateTime.now().difference(splashStartedAt);
+        if (elapsed < _adminSplashMinDuration) {
+          await Future.delayed(_adminSplashMinDuration - elapsed);
+        }
+        if (!mounted) return;
+        // 이미 렌더된 AdminScreen 위에 스플래시만 페이드아웃 (옆에서 슬라이드 없음)
+        setState(() {
+          _adminTargetScreen = const AdminScreen();
+          _isAdminLoading = false;
+        });
+      } else {
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder:
+                (context) => AdminPlaceRegistrationScreen(
+                  phoneNumber: phoneNumber,
+                  isFromLogin: true,
+                ),
+          ),
+        );
       }
     } catch (e) {
-      // 에러 발생 시 에러 메시지 표시
       if (mounted) {
         SnackbarUtil.showInfo(context, '관리자 정보를 불러올 수 없습니다: $e');
       }

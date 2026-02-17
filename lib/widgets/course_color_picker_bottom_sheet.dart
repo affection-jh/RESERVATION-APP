@@ -492,6 +492,8 @@ class _CourseColorPickerBottomSheetState
                     HapticFeedback.lightImpact();
                     // 색상 선택 시 즉시 콜백 호출하여 상위 화면 업데이트
                     widget.onColorChanged?.call(colorInt);
+                    // 선택 즉시 바텀시트 닫기
+                    Navigator.of(context).pop(colorInt);
                   },
                   child: AnimatedScale(
                     scale: isSelected ? 1.15 : 1.0,

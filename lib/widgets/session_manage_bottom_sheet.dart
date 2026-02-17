@@ -83,90 +83,7 @@ class _SessionManageBottomSheetState extends State<SessionManageBottomSheet> {
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
-              // 세션 정보 헤더
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 20,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      widget.course.name,
-                      style: const TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textPrimary,
-                        letterSpacing: -0.5,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      alignment: WrapAlignment.start,
-                      crossAxisAlignment: WrapCrossAlignment.start,
-                      children: [
-                        // 날짜/시간 칩
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppColors.backgroundLight,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.access_time,
-                                size: 14,
-                                color: AppColors.textSecondary,
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                '${widget.dateString} ${widget.startTime} - ${widget.endTime}',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: AppColors.textSecondary,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        // 예약/수용 칩
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppColors.backgroundLight,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                '예약: ${widget.reservedCount}명 / ${widget.currentCapacity}명',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: AppColors.textSecondary,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
+
               // 수용인원 변경 섹션
               Padding(
                 padding: const EdgeInsets.all(20),
@@ -198,13 +115,11 @@ class _SessionManageBottomSheetState extends State<SessionManageBottomSheet> {
                                     horizontal: 16,
                                     vertical: 12,
                                   ),
-                                ).copyWith(
-                                  errorText: _errorText,
-                                  errorStyle: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.red,
-                                  ),
                                 ),
+                            style: TextStyle(
+                              fontSize: 16,
+                              color: AppColors.textPrimary,
+                            ),
                             onChanged: (value) {
                               // 입력값 실시간 검증
                               setState(() {
@@ -252,17 +167,27 @@ class _SessionManageBottomSheetState extends State<SessionManageBottomSheet> {
                               borderRadius: BorderRadius.circular(12),
                             ),
                           ),
-                          child: const Text(
+                          child: Text(
                             '적용',
                             style: TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.w600,
-                              color: Colors.white,
+                              color:
+                                  _isApplyButtonEnabled
+                                      ? Colors.white
+                                      : AppColors.textSecondary,
                             ),
                           ),
                         ),
                       ],
                     ),
+                    if (_errorText != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        _errorText!,
+                        style: TextStyle(fontSize: 14, color: Colors.red),
+                      ),
+                    ],
                   ],
                 ),
               ),

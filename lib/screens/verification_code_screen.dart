@@ -7,7 +7,9 @@ import '../theme/app_colors.dart';
 import '../utils/snackbar_util.dart';
 import '../utils/text_field_decoration_util.dart';
 import '../services/auth_service.dart';
+import '../services/firestore_service.dart';
 import '../providers/auth_provider.dart';
+import 'admin/widgets/place_registration_screen.dart';
 
 /// 인증번호 입력 화면
 class VerificationCodeScreen extends StatefulWidget {
@@ -150,32 +152,35 @@ class _VerificationCodeScreenState extends State<VerificationCodeScreen> {
         authProvider.clearCurrentAdmin();
 
         if (mounted) {
-          // 플레이스 추가 플로우인 경우 관리자 등록 여부 확인
+          // 플레이스 추가 플로우: PIN 없이 관리 플레이스 유무에 따라 어드민 또는 플레이스 등록으로
           if (widget.isPlaceRegistrationFlow) {
             final authService = AuthService();
+            final firestoreService = FirestoreService();
             final existingAdmin = await authService.findAdminByPhone(
               widget.phoneNumber,
             );
+            final managedIds =
+                existingAdmin != null
+                    ? await firestoreService.getManagedPlaceIdsByAdminId(
+                      existingAdmin.userId,
+                    )
+                    : <String>[];
 
-            if (existingAdmin != null) {
-              // 이미 관리자로 등록되어 있으면 핀 입력 화면으로
-              Navigator.of(context).pushNamedAndRemoveUntil(
-                '/admin-pin-input',
-                (route) => false,
-                arguments: {
-                  'phoneNumber': widget.phoneNumber,
-                  'verificationCode': code,
-                },
-              );
+            if (existingAdmin != null && managedIds.isNotEmpty) {
+              Navigator.of(
+                context,
+              ).pushNamedAndRemoveUntil('/admin', (route) => false);
             } else {
-              // 관리자로 등록되지 않았으면 핀 등록 화면으로
-              Navigator.of(context).pushNamedAndRemoveUntil(
-                '/admin-pin-register',
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute<void>(
+                  builder:
+                      (context) => AdminPlaceRegistrationScreen(
+                        phoneNumber: widget.phoneNumber,
+                        verificationCode: code,
+                        isFromLogin: true,
+                      ),
+                ),
                 (route) => false,
-                arguments: {
-                  'phoneNumber': widget.phoneNumber,
-                  'verificationCode': code,
-                },
               );
             }
             return;
@@ -304,8 +309,7 @@ class _VerificationCodeScreenState extends State<VerificationCodeScreen> {
           message = raw;
         } else if (raw.contains('too-many-requests') ||
             raw.contains('너무 많은 요청')) {
-          message =
-              '인증번호 발송 횟수 제한을 초과했습니다. 잠시 후 다시 시도해주세요.';
+          message = '인증번호 발송 횟수 제한을 초과했습니다. 잠시 후 다시 시도해주세요.';
         } else if (raw.contains('internal-error') ||
             raw.contains('internal error') ||
             raw.contains('An internal error has occurred')) {
@@ -508,7 +512,7 @@ class _VerificationCodeScreenState extends State<VerificationCodeScreen> {
                                     : AppColors.primaryGreen,
                             disabledBackgroundColor: AppColors.borderLight,
                             foregroundColor: Colors.white,
-                            disabledForegroundColor: AppColors.textLight,
+                            disabledForegroundColor: AppColors.textSecondary,
                             padding: const EdgeInsets.symmetric(
                               horizontal: 12,
                               vertical: 6,
@@ -543,7 +547,7 @@ class _VerificationCodeScreenState extends State<VerificationCodeScreen> {
                     backgroundColor: AppColors.primaryGreen,
                     foregroundColor: Colors.white,
                     disabledBackgroundColor: AppColors.borderLight,
-                    disabledForegroundColor: AppColors.textLight,
+                    disabledForegroundColor: AppColors.textSecondary,
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(20),

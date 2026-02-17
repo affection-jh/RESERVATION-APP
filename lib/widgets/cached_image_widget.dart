@@ -36,34 +36,37 @@ class CachedImageWidget extends StatelessWidget {
       width: width,
       height: height,
       fit: fit,
-      placeholder: (context, url) =>
-          placeholder ??
-          Shimmer.fromColors(
-            baseColor: (placeholderColor ?? AppColors.backgroundLight)
-                .withOpacity(0.6),
-            highlightColor: (placeholderColor ?? AppColors.backgroundLight)
-                .withOpacity(0.8),
-            period: const Duration(milliseconds: 1200),
-            child: Container(
-              width: width,
-              height: height,
-              color: placeholderColor ?? AppColors.backgroundLight,
-            ),
-          ),
-      errorWidget: (context, url, error) =>
-          errorWidget ??
-          Container(
-            width: width,
-            height: height,
-            color: errorColor ?? AppColors.backgroundLight,
-            child: Icon(
-              Icons.image_not_supported,
-              color: AppColors.textSecondary.withOpacity(0.5),
-              size: (width != null && height != null)
-                  ? (width! < height! ? width! * 0.3 : height! * 0.3)
-                  : 40,
-            ),
-          ),
+      placeholder:
+          (context, url) =>
+              placeholder ??
+              Shimmer.fromColors(
+                baseColor: (placeholderColor ?? AppColors.backgroundLight)
+                    .withOpacity(0.6),
+                highlightColor: (placeholderColor ?? AppColors.backgroundLight)
+                    .withOpacity(0.8),
+                period: const Duration(milliseconds: 1200),
+                child: Container(
+                  width: width,
+                  height: height,
+                  color: placeholderColor ?? AppColors.backgroundLight,
+                ),
+              ),
+      errorWidget:
+          (context, url, error) =>
+              errorWidget ??
+              Container(
+                width: width,
+                height: height,
+                color: errorColor ?? AppColors.backgroundLight,
+                child: Icon(
+                  Icons.image,
+                  color: AppColors.textSecondary.withOpacity(0.5),
+                  size:
+                      (width != null && height != null)
+                          ? (width! < height! ? width! * 0.3 : height! * 0.3)
+                          : 40,
+                ),
+              ),
       fadeInDuration: const Duration(milliseconds: 300),
       fadeOutDuration: const Duration(milliseconds: 100),
     );

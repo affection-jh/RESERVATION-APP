@@ -11,7 +11,6 @@ import '../providers/course_provider.dart';
 import '../providers/enrollment_provider.dart';
 import '../providers/place_provider.dart';
 import '../screens/admin/widgets/enrollment_detail_screen.dart';
-import '../models/admin_models.dart';
 import 'dart:async';
 
 /// Firebase Cloud Messaging 서비스
@@ -437,8 +436,8 @@ class FcmService {
       }
 
       // 멤버 조회
-      await memberProvider.loadMembers(placeId);
-      final member = memberProvider.getMember(userId);
+      memberProvider.setPlaceId(placeId);
+      final member = memberProvider.getMemberView(userId);
       if (member == null) {
         debugPrint('[FcmService] 멤버를 찾을 수 없습니다: $userId');
         return;
@@ -461,24 +460,13 @@ class FcmService {
         orElse: () => throw Exception('Enrollment not found'),
       );
 
-      // MemberData 생성
-      final memberData = MemberData(
-        userId: member.userId,
-        name: member.name,
-        phoneNumber: member.phoneNumber,
-        role: 'user', // 관리자 여부는 adminUsers 등 별도 소스에서 조회
-        isActive: true,
-        pendingExtensionRequests: member.pendingExtensionRequests.length,
-        enrolledCourseIds: member.enrollments.map((e) => e.courseId).toList(),
-      );
-
       // EnrollmentDetailScreen으로 이동 (지정된 탭으로)
       if (context.mounted) {
         await Navigator.of(context).push(
           MaterialPageRoute(
             builder:
                 (context) => EnrollmentDetailScreen(
-                  member: memberData,
+                  member: member,
                   enrollment: enrollment,
                   course: course,
                 ),

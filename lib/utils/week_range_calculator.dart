@@ -1,4 +1,4 @@
-import '../policies/course_policy.dart';
+import '../models/course_policy.dart';
 
 /// 정책 기반으로 표시할 주차 범위를 계산하는 헬퍼 클래스
 class WeekRangeCalculator {

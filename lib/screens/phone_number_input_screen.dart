@@ -315,7 +315,7 @@ class _PhoneNumberInputScreenState extends State<PhoneNumberInputScreen> {
                     backgroundColor: AppColors.primaryGreen,
                     foregroundColor: Colors.white,
                     disabledBackgroundColor: AppColors.backgroundLight,
-                    disabledForegroundColor: AppColors.textLight,
+                    disabledForegroundColor: AppColors.textSecondary,
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(20),

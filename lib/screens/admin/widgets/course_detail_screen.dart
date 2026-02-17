@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../models/course.dart';
+import '../../../models/course_policy.dart';
 import '../../../providers/course_provider.dart';
 import '../../../providers/place_provider.dart';
 import '../../../providers/auth_provider.dart';
@@ -53,9 +54,18 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                   // 코스 정보 섹션 (이미지, 제목, 설명)
                   _buildCourseInfoSection(currentCourse),
                   Container(height: 12, color: AppColors.backgroundLight),
-                  // 상단: 캘린더 위젯
-                  _buildCalendarSection(currentCourse),
-
+                  // 캘린더: 정책 변경 시에도 갱신되도록 (course, policy) 구독
+                  Selector<CourseProvider, (Course, CoursePolicy)>(
+                    selector: (_, p) {
+                      final c = p.getCourse(widget.course.id) ?? widget.course;
+                      return (c, c.policy);
+                    },
+                    builder:
+                        (_, data, __) => _buildCalendarSection(
+                          data.$1,
+                          policyUpdatedAt: data.$2.updatedAt,
+                        ),
+                  ),
                   Container(height: 12, color: AppColors.backgroundLight),
                   const SizedBox(height: 8),
 
@@ -213,8 +223,8 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     );
   }
 
-  // 캘린더 섹션
-  Widget _buildCalendarSection(Course course) {
+  // 캘린더 섹션 (policyUpdatedAt: 정책 변경 시 key에 포함해 캘린더 재생성)
+  Widget _buildCalendarSection(Course course, {DateTime? policyUpdatedAt}) {
     return Container(
       margin: const EdgeInsets.all(4),
       decoration: BoxDecoration(color: AppColors.backgroundLight),
@@ -222,11 +232,10 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // CompactCalendarWidget 표시
-          // key를 사용하여 코스가 변경될 때 위젯이 완전히 재생성되도록 함
+          // key에 정책 updatedAt 포함 → 예약 정책 수정 후 돌아오면 캘린더 재생성되어 최신 정책 반영
           CompactCalendarWidget(
             key: ValueKey(
-              '${course.id}_${course.sessions.length}_${course.sessions.map((s) => '${s.dayOfWeek}_${s.startTime}').join('_')}',
+              '${course.id}_${course.sessions.length}_${course.sessions.map((s) => '${s.dayOfWeek}_${s.startTime}').join('_')}_${policyUpdatedAt?.millisecondsSinceEpoch ?? course.policy.updatedAt.millisecondsSinceEpoch}',
             ),
             backgroundColor: AppColors.backgroundWhite,
             courses: [course],
@@ -260,7 +269,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: CourseMemberListContent(
-            logLabel: 'CourseDetail',
+        logLabel: 'CourseDetail',
         courseId: course.id,
         placeId: placeId,
         emptyMessage: '등록된 멤버가 없어요.',
@@ -285,7 +294,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
       return;
     }
 
-    if (!authProvider.isAuthenticated || authProvider.currentAdmin == null) {
+    if (!authProvider.isAuthenticated || authProvider.currentUser == null) {
       SnackbarUtil.showInfo(context, '로그인이 필요합니다.');
       return;
     }
@@ -334,7 +343,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     AuthProvider authProvider,
   ) async {
     try {
-      final adminId = authProvider.currentAdmin!.userId;
+      final adminId = authProvider.currentUser!.userId;
       final courseProvider = Provider.of<CourseProvider>(
         context,
         listen: false,
@@ -378,31 +387,32 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
         }
       }
 
+      if (!mounted) return;
       if (failCount == 0) {
         SnackbarUtil.showSuccess(context, '${successCount}명의 멤버가 등록되었습니다.');
       } else {
-        // 실패 메시지를 친화적으로 표시
         final failMessage =
             failCount == memberList.length
                 ? '이미 등록되어 있습니다.'
-                : '${successCount}명 성공, ${failCount}명 실패';
+                : '$successCount명 성공, $failCount명 실패';
         SnackbarUtil.showInfo(context, failMessage);
       }
 
-      // 멤버 등록 후 리스트 동기화
+      if (!mounted) return;
       final memberProvider = Provider.of<MemberProvider>(
         context,
         listen: false,
       );
-      await memberProvider.loadMembers(placeId);
+      memberProvider.setPlaceId(placeId);
     } catch (e) {
-      // 에러 메시지를 클라이언트 친화적으로 변환
-      String errorMessage = '멤버 등록 중 오류가 발생했습니다.';
-      final errorStr = e.toString();
-      if (errorStr.contains('이미 등록되어 있습니다') || errorStr.contains('이미 등록된')) {
-        errorMessage = '이미 등록되어 있습니다.';
+      if (mounted) {
+        String errorMessage = '멤버 등록 중 오류가 발생했습니다.';
+        final errorStr = e.toString();
+        if (errorStr.contains('이미 등록되어 있습니다') || errorStr.contains('이미 등록된')) {
+          errorMessage = '이미 등록되어 있습니다.';
+        }
+        SnackbarUtil.showInfo(context, errorMessage);
       }
-      SnackbarUtil.showInfo(context, errorMessage);
     }
   }
 }

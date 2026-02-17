@@ -234,7 +234,7 @@ class _NameInputScreenState extends State<NameInputScreen> {
                       backgroundColor: AppColors.primaryGreen,
                       foregroundColor: Colors.white,
                       disabledBackgroundColor: AppColors.borderLight,
-                      disabledForegroundColor: AppColors.textLight,
+                      disabledForegroundColor: AppColors.textSecondary,
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(20),

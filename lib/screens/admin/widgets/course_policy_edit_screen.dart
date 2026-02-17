@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'dart:convert';
 import '../../../models/course.dart' as reservation_models;
-import '../../../policies/course_policy.dart';
+import '../../../models/course_policy.dart';
 import '../../../providers/course_provider.dart';
 import '../../../providers/place_provider.dart';
 import '../../../services/firestore_service.dart';
 import '../../../theme/app_colors.dart';
+import '../../../utils/navigator_key.dart';
 import '../../../utils/snackbar_util.dart';
 import '../../../utils/timezone_utils.dart';
 
@@ -123,7 +123,7 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
 
     try {
       final hasReservations = await _firestoreService
-          .hasAnyReservationsForCourse(widget.courseId);
+          .hasAnySessionReservationsForCourse(widget.courseId);
       _hasReservations = hasReservations;
     } catch (_) {
       _hasReservations = false;
@@ -138,32 +138,6 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
     if (_type != original.openStrategy.type) return true;
     if (_closeBeforeMinutes != original.closeBeforeMinutes) return true;
 
-    // effectiveFrom 변경 체크 (나중에 적용하기가 켜져있고 실제로 날짜가 변경되었을 때만)
-    // 시간은 항상 00:00이므로 날짜만 비교
-    final seoulToday = TimezoneUtils.getSeoulToday();
-    if (_scheduleForFuture) {
-      // 오늘 날짜와 같으면 변경사항 없음 (즉시 적용과 동일)
-      if (_effectiveFrom.year == seoulToday.year &&
-          _effectiveFrom.month == seoulToday.month &&
-          _effectiveFrom.day == seoulToday.day) {
-        // 오늘 날짜면 변경사항 없음
-      } else {
-        // 원본 정책의 effectiveFrom과 비교 (날짜만)
-        final originalEffectiveFrom = original.effectiveFrom;
-        if (_effectiveFrom.year != originalEffectiveFrom.year ||
-            _effectiveFrom.month != originalEffectiveFrom.month ||
-            _effectiveFrom.day != originalEffectiveFrom.day) {
-          return true;
-        }
-      }
-    } else {
-      // 나중에 적용하기가 꺼져있는데 원본은 미래 적용이었던 경우
-      final seoulNow = TimezoneUtils.getSeoulDateTime();
-      if (original.effectiveFrom.isAfter(seoulNow)) {
-        return true;
-      }
-    }
-
     if (_type == BookingOpenStrategyType.rollingWindow) {
       return _windowDays !=
           (original.openStrategy.rollingWindow?.windowDays ?? 21);
@@ -171,13 +145,10 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
 
     final w = original.openStrategy.weeklyRelease;
     final oldTime = w?.releaseTime ?? '10:00';
-    final newTime = _releaseTime.format(context);
     final normalizedNewTime = _toHHmm(_releaseTime);
-
     return _releaseDayOfWeek != (w?.releaseDayOfWeek ?? 1) ||
         normalizedNewTime != oldTime ||
-        _weeksAhead != (w?.weeksAhead ?? 1) ||
-        newTime.isEmpty; // for analyzer
+        _weeksAhead != (w?.weeksAhead ?? 1);
   }
 
   String _toHHmm(TimeOfDay t) {
@@ -218,8 +189,11 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
     });
   }
 
-  Future<bool> _savePolicy({required bool popAfterSave}) async {
-    if (_isSaving) return false;
+  Future<bool> _savePolicy({
+    required bool popAfterSave,
+    bool isInternalCall = false,
+  }) async {
+    if (!isInternalCall && _isSaving) return false;
     final placeId =
         Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
     if (placeId == null) return false;
@@ -245,9 +219,6 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
 
     setState(() => _isSaving = true);
     try {
-      final original = _original;
-      final nextVersion = (original?.version ?? 0) + 1;
-
       final openStrategy =
           _type == BookingOpenStrategyType.rollingWindow
               ? BookingOpenStrategy.rollingWindow(
@@ -262,39 +233,23 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
               );
 
       final policy = CoursePolicy(
-        courseId: widget.courseId,
-        placeId: placeId,
         closeBeforeMinutes: _closeBeforeMinutes,
         openStrategy: openStrategy,
-        allowAdminForceMoveWithinCourse: true, // 관리자는 항상 활성화
-        version: nextVersion,
-        effectiveFrom:
-            _scheduleForFuture
-                ? _effectiveFrom
-                : TimezoneUtils.getSeoulDateTime(),
+        updatedAt: DateTime.now(),
       );
 
-      // 디버그: 실제 저장 payload 확인 (릴리즈 빌드에서는 실행되지 않음)
-      assert(() {
-        debugPrint('[CoursePolicyEditScreen] upsertCoursePolicy request');
-        debugPrint('  courseId=${policy.courseId}');
-        debugPrint('  placeId=${policy.placeId}');
-        debugPrint('  type=${policy.openStrategy.type}');
-        debugPrint('  effectiveFrom=${policy.effectiveFrom.toIso8601String()}');
-        debugPrint('  version=${policy.version}');
-        debugPrint('  payload=${jsonEncode(policy.toJson())}');
-        return true;
-      }());
-
-      await _firestoreService.upsertCoursePolicy(policy);
+      await _firestoreService.upsertCoursePolicy(
+        placeId: placeId,
+        courseId: widget.courseId,
+        policy: policy,
+      );
       if (!mounted) return false;
 
-      // 정책 저장 후 CourseProvider에서 정책 재로드
       final courseProvider = Provider.of<CourseProvider>(
         context,
         listen: false,
       );
-      await courseProvider.reloadCoursePolicy(policy.courseId, policy.placeId);
+      await courseProvider.reloadCoursePolicy(widget.courseId, placeId);
 
       // 코스 등록 플로우(requireSave=true)에서는 스낵바를 띄우지 않음 (조용히 진행)
       if (!widget.requireSave) {
@@ -320,19 +275,12 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
   }
 
   Future<void> _saveAndRegisterCourse() async {
-    // 1) 정책 저장 (pop 하지 않음)
-    final ok = await _savePolicy(popAfterSave: false);
-    if (!ok || !mounted) return;
-
+    if (_isSaving) return;
     final course = widget.courseToRegister;
     if (course == null) {
-      // 코스 데이터가 없으면 정책만 저장하고 돌아가기
       Navigator.of(context).pop();
       return;
     }
-
-    // 2) 정책 저장 후 코스 등록까지 바로 진행
-    if (!mounted) return;
 
     final courseProvider = Provider.of<CourseProvider>(context, listen: false);
     final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
@@ -342,17 +290,48 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
       return;
     }
 
+    setState(() => _isSaving = true);
     try {
+      // 동일 장소에 같은 이름 코스가 있으면 중복 등록 방지 (1회 조회로 검사)
+      final existingCourses =
+          await _firestoreService.getCoursesByPlace(currentPlace.id);
+      if (!mounted) return;
+      final hasDuplicate = existingCourses.any((c) =>
+          c.name.trim().toLowerCase() == course.name.trim().toLowerCase());
+      if (hasDuplicate) {
+        if (mounted) setState(() => _isSaving = false);
+        SnackbarUtil.showInfo(
+          context,
+          '같은 이름의 코스가 이미 있습니다. 코스 이름을 변경해 주세요.',
+        );
+        return;
+      }
+
+      // 1) 코스 등록: 먼저 코스를 생성해야 정책(upsertCoursePolicy) 저장이 가능함
       await courseProvider.saveCourse(placeId: currentPlace.id, course: course);
       if (!mounted) return;
-      // 코스 등록 플로우(requireSave=true)에서는 성공 스낵바를 띄우지 않음
+
+      // 2) 정책 저장 (isInternalCall: true로 _isSaving 체크 스킵)
+      final ok = await _savePolicy(popAfterSave: false, isInternalCall: true);
+      if (!ok || !mounted) return;
+
       if (!widget.requireSave) {
         SnackbarUtil.showSuccess(context, '코스가 등록되었습니다.');
       }
-      Navigator.of(context).popUntil((route) => route.isFirst);
+      // 코스 추가 플로우 전체 제거 후 관리자 홈으로 (전역 navigatorKey로 루트 네비게이터 보장)
+      final navContext = navigatorKey.currentContext;
+      if (navContext != null) {
+        Navigator.of(
+          navContext,
+        ).pushNamedAndRemoveUntil('/admin', (route) => false);
+      }
     } catch (e) {
       if (mounted) {
         SnackbarUtil.showInfo(context, '코스 저장에 실패했습니다: ${e.toString()}');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSaving = false);
       }
     }
   }
@@ -815,27 +794,30 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primaryGreen,
                       foregroundColor: Colors.white,
-                      disabledBackgroundColor: AppColors.borderLight,
-                      disabledForegroundColor: AppColors.textSecondary,
+                      disabledBackgroundColor: _isSaving
+                          ? AppColors.primaryGreen
+                          : AppColors.borderLight,
+                      disabledForegroundColor: _isSaving
+                          ? Colors.white
+                          : AppColors.textSecondary,
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(20),
                       ),
                       elevation: 0,
                     ),
-                    child:
-                        _isSaving
-                            ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation<Color>(
-                                  AppColors.primaryGreen,
-                                ),
+                    child: _isSaving
+                        ? const SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
                               ),
-                            )
-                            : Text(
+                            ),
+                          )
+                        : Text(
                               widget.requireSave ? '저장 및 코스 등록' : '정책 수정',
                               style: const TextStyle(
                                 fontSize: 16,

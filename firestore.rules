@@ -9,33 +9,23 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
-    function adminUserDoc() {
-      return get(/databases/$(database)/documents/adminUsers/$(request.auth.uid));
-    }
-
     function hasUserDoc() {
       return signedIn() &&
         exists(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
-    function hasAdminUserDoc() {
+    // places/{placeId}/members/{uid} 기준: manager / submanager / member 중 매니저·부매니저만
+    // (어드민 유저 개념 없음, 전부 manager-submanager-일반 member로만 동작)
+    function isPlaceManager(placeId) {
       return signedIn() &&
-        exists(/databases/$(database)/documents/adminUsers/$(request.auth.uid));
+        exists(/databases/$(database)/documents/places/$(placeId)/members/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/places/$(placeId)/members/$(request.auth.uid)).data.role in ['manager', 'submanager'];
     }
 
-    function placeDoc(placeId) {
-      return get(/databases/$(database)/documents/places/$(placeId));
-    }
-
-    // ✅ 관리자 판별: adminUsers 컬렉션 기준
-    function isAdmin() {
-      return hasAdminUserDoc();
-    }
-
-    function isAdminForPlace(placeId) {
-      return hasAdminUserDoc() &&
-        adminUserDoc().data.placeIds != null &&
-        placeId in adminUserDoc().data.placeIds;
+    // 플레이스 소유자: place.adminId == request.auth.uid (place 생성 시 설정)
+    function isPlaceOwner(placeId) {
+      return signedIn() &&
+        get(/databases/$(database)/documents/places/$(placeId)).data.adminId == request.auth.uid;
     }
 
     // 기본: 전부 거부
@@ -55,84 +45,101 @@ service cloud.firestore {
       match /fcmTokens/{tokenId} {
         allow read, write: if signedIn() && request.auth.uid == userId;
       }
+      // 알림 서브컬렉션 (users/{userId}/notifications)
+      match /notifications/{notificationId} {
+        allow read, update, delete: if signedIn() && request.auth.uid == userId;
+        allow create: if false;
+      }
     }
 
-    // ==================== Admin Users ====================
-    // 클라이언트에서 adminUsers를 직접 만들거나 수정하는 건 권장하지 않음(권한 상승 위험).
-    // 운영에서는 콘솔/서버에서만 관리 권장.
-    // phoneNumber로 쿼리할 수 있도록 허용 (자동 로그인 등에서 필요)
-    // - 직접 문서 읽기: 자신의 문서만 (adminId == request.auth.uid)
-    // - 쿼리: phoneNumber로 조회 시 결과 문서의 userId가 request.auth.uid와 일치하거나,
-    //         현재 사용자의 전화번호와 일치하는 경우 허용
+    // ==================== Admin Users (미사용 — manager/submanager만 사용) ====================
     match /adminUsers/{adminId} {
-      // 직접 문서 읽기: 자신의 문서만
-      // 쿼리: phoneNumber로 조회 시 다음 중 하나를 만족해야 함:
-      // 1. 결과 문서의 userId가 request.auth.uid와 일치
-      // 2. 결과 문서의 phoneNumber가 현재 사용자의 전화번호와 일치 (users 컬렉션에서 확인)
-      allow read: if signedIn() && (
-        request.auth.uid == adminId ||
-        resource.data.userId == request.auth.uid ||
-        (
-          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-          resource.data.phoneNumber == userDoc().data.phoneNumber
-        )
-      );
-      // create는 서버(Callable Function)만
-      allow create: if false;
-      // delete(회원탈퇴): 본인 문서만 삭제 가능
-      allow delete: if signedIn() && request.auth.uid == adminId;
-
-      // update는 본인 문서에 대해서만, 안전한 필드만 허용
-      allow update: if signedIn()
-        && request.auth.uid == adminId
-        && resource.data.userId == request.auth.uid
-        && request.resource.data.userId == request.auth.uid
-        // 전화번호는 변경 불가
-        && request.resource.data.phoneNumber == resource.data.phoneNumber
-        // PIN(authPin) 변경은 클라이언트에서 금지 (서버에서만)
-        && request.resource.data.authPin == resource.data.authPin
-        // 변경 가능한 필드만
-        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
-          'name',
-          'email',
-          'placeIds',
-          'lastAccessedPlaceId',
-          'notificationsEnabled',
-          'updatedAt'
-        ]);
+      allow read, write: if false;
     }
 
     // ==================== Places ====================
     // 컬렉션 레벨 쿼리 허용 (로그인 없이도 가능)
     match /places/{placeId} {
       // 읽기: 로그인 없이도 모든 사용자가 읽기 가능 (Apple App Store 가이드라인 준수)
-      // 계정 기반이 아닌 기능(플레이스 브라우징)은 자유롭게 접근 가능해야 함
       allow read: if true;
-      // place 생성: adminUsers 문서가 있는 관리자는 자신의 adminId로 place 생성 가능
-      allow create: if signedIn() &&
-        request.resource.data.adminId == request.auth.uid &&
-        hasAdminUserDoc();
-      // place 수정/삭제: 해당 place를 관리하는 관리자만 가능
-      allow update, delete: if isAdminForPlace(placeId);
-      
-      // ==================== Places 서브컬렉션: Reservations ====================
-      // places/{placeId}/reservations 서브컬렉션
-      match /reservations/{reservationId} {
-        // 읽기: 자신의 예약이거나 해당 플레이스 관리자
+      // place 생성: 로그인 사용자가 자신을 adminId로 설정해 생성 (생성 후 members에 manager로 추가는 앱/서버에서)
+      allow create: if signedIn() && request.resource.data.adminId == request.auth.uid;
+      // place 수정/삭제: 해당 플레이스 소유자(adminId) 또는 매니저/부매니저만
+      allow update, delete: if isPlaceOwner(placeId) || isPlaceManager(placeId);
+
+      // ==================== Places 서브컬렉션: Members ====================
+      // places/{placeId}/members/{uid} — 매니저·부매니저·일반멤버 통일
+      // create: 소유자(플레이스 생성 직후 첫 멤버 추가) 또는 기존 매니저만
+      match /members/{memberId} {
         allow read: if signedIn() && (
-          resource.data.userId == request.auth.uid ||
-          isAdminForPlace(placeId)
+          memberId == request.auth.uid ||
+          isPlaceManager(placeId) ||
+          isPlaceOwner(placeId)
         );
-        // 생성/수정/삭제: Functions만 가능
-        allow create, update, delete: if false;
+        allow create, update, delete: if signedIn() && (isPlaceManager(placeId) || isPlaceOwner(placeId));
       }
+
+      // ==================== Places 서브컬렉션: Pending Members (초대 토큰) ====================
+      // places/{placeId}/pendingMembers/{inviteId} — 초대된 상태, 가입 전 임시
+      match /pendingMembers/{inviteId} {
+        allow read: if signedIn() && (
+          isPlaceManager(placeId) ||
+          (hasUserDoc() && resource.data.phoneNumber == userDoc().data.phoneNumber)
+        );
+        allow create, update, delete: if signedIn() && isPlaceManager(placeId);
+      }
+
+      // ==================== Places 서브컬렉션: Courses ====================
+      match /courses/{courseId} {
+        allow read: if true;
+        allow create, update, delete: if isPlaceManager(placeId);
+      }
+
+      // ==================== Places 서브컬렉션: Stories ====================
+      match /stories/{storyId} {
+        allow read: if true;
+        allow create, update, delete: if isPlaceManager(placeId);
+      }
+
     }
 
-    // ==================== Session Reservations (Functions Only) ====================
-    match /sessionReservations/{docId} {
-      // ✅ Apple App Store 가이드라인 5.1.1 준수: 세션 브라우징을 위해 예약 현황도 로그인 없이 읽기 가능
-      // 읽기: 로그인 없이도 모든 사용자가 읽기 가능 (세션 브라우징용 - 예약 가능 여부 표시)
-      allow read: if true;
+    // ==================== Members Collection Group ====================
+    // collectionGroup('members').where('userId','==',uid) 쿼리용
+    // 쿼리 필터(userId)와 규칙 조건 일치 필요
+    match /{path=**}/members/{memberId} {
+      allow read: if signedIn() && (
+        memberId == request.auth.uid ||
+        resource.data.userId == request.auth.uid
+      );
+      allow create, update, delete: if false;
+    }
+
+    // ==================== Pending Members Collection Group ====================
+    // collectionGroup('pendingMembers').where('phoneNumber','==', normalized) 쿼리용.
+    // 규칙은 쿼리 파라미터(normalized)를 볼 수 없으므로, "반환 가능한 문서"만 허용하도록
+    // 문서 단위 조건(본인 전화번호 일치)으로 허용. create/update/delete는
+    // places/{placeId}/pendingMembers 규칙이 담당.
+    match /{path=**}/pendingMembers/{pendingId} {
+      allow read: if signedIn() && (
+        hasUserDoc() && resource.data.phoneNumber == userDoc().data.phoneNumber
+      );
+      allow create, update, delete: if false;
+    }
+
+    // ==================== Reservation Summary (세션별 예약 수 집계, N/M 표시용) ====================
+    // 로그인 사용자 읽기 가능 (PII 없음, reservedCount/capacity만)
+    match /reservationSummary/{docId} {
+      allow read: if signedIn();
+      allow create, update, delete: if false;
+    }
+
+    // ==================== Reservations (top-level, placeId 필드 포함) ====================
+    // 실제 구현: reservations/{id} (Flutter/Functions 모두 top-level 사용)
+    match /reservations/{reservationId} {
+      allow read: if signedIn() && (
+        resource.data.userId == request.auth.uid ||
+        (resource.data.placeId != null && isPlaceManager(resource.data.placeId))
+      );
       allow create, update, delete: if false;
     }
 
@@ -140,143 +147,71 @@ service cloud.firestore {
     match /enrollments/{enrollmentId} {
       allow read: if signedIn() && (
         resource.data.userId == request.auth.uid ||
-        isAdmin()
+        (resource.data.placeId != null && (isPlaceManager(resource.data.placeId) || isPlaceOwner(resource.data.placeId)))
       );
-      // 관리자는 크레딧/기간 연장 등 직접 수정 가능
-      // (예약 트랜잭션에서 remainingReservations 변경은 Functions의 Admin SDK가 수행)
-      allow create, update, delete: if isAdmin();
+      // create 시에는 resource 없음 → request.resource만 사용
+      allow create: if request.resource.data.placeId != null &&
+        (isPlaceManager(request.resource.data.placeId) || isPlaceOwner(request.resource.data.placeId));
+      // update, delete 시에는 기존 문서 resource 사용
+      allow update, delete: if resource.data.placeId != null &&
+        (isPlaceManager(resource.data.placeId) || isPlaceOwner(resource.data.placeId));
     }
 
-    // ==================== Enrollments Subcollections (Admin Only) ====================
-    // 히스토리/관리자액션은 서브컬렉션으로 분리되어 있으며,
-    // 기본 규칙(match /{document=**})에 의해 별도 match가 없으면 전부 거부됨.
-    // 관리자 화면에서 쓰기/읽기가 필요하므로 명시적으로 허용.
-    match /enrollments/{enrollmentId}/reenrollmentHistory/{recordId} {
-      allow read: if isAdmin();
-      allow create, update, delete: if isAdmin();
-    }
-    match /enrollments/{enrollmentId}/adminActions/{actionId} {
-      allow read: if isAdmin();
-      allow create, update, delete: if isAdmin();
+    // ==================== Enrollments Subcollections: actionHistory ====================
+    // read: 본인 수강(enrollment.userId == uid) 또는 플레이스 매니저
+    // create/update/delete: 플레이스 매니저만
+    match /enrollments/{enrollmentId}/actionHistory/{actionId} {
+      allow read: if signedIn() &&
+        exists(/databases/$(database)/documents/enrollments/$(enrollmentId)) &&
+        (
+          get(/databases/$(database)/documents/enrollments/$(enrollmentId)).data.userId == request.auth.uid ||
+          (get(/databases/$(database)/documents/enrollments/$(enrollmentId)).data.placeId != null &&
+            isPlaceManager(get(/databases/$(database)/documents/enrollments/$(enrollmentId)).data.placeId))
+        );
+      allow create, update, delete: if
+        get(/databases/$(database)/documents/enrollments/$(enrollmentId)).data.placeId != null &&
+        isPlaceManager(get(/databases/$(database)/documents/enrollments/$(enrollmentId)).data.placeId);
     }
 
     // ==================== Course Policies ====================
     match /coursePolicies/{courseId} {
-      // ✅ Apple App Store 가이드라인 5.1.1 준수: 세션 브라우징을 위해 정책도 로그인 없이 읽기 가능
-      // 유저도 정책을 읽어야 잠금(openAt) 표시 가능
       allow read: if true;
-      // 정책은 place 단위로 관리되므로, 해당 place를 관리하는 관리자만 수정 가능
-      allow create: if isAdmin() &&
-        request.resource.data.placeId != null &&
-        isAdminForPlace(request.resource.data.placeId);
-      allow update, delete: if isAdmin() && (
-        (resource.data.placeId != null && isAdminForPlace(resource.data.placeId)) ||
-        (request.resource.data.placeId != null &&
-          isAdminForPlace(request.resource.data.placeId))
-      );
+      allow create: if request.resource.data.placeId != null && isPlaceManager(request.resource.data.placeId);
+      allow update, delete: if (resource.data.placeId != null && isPlaceManager(resource.data.placeId)) ||
+        (request.resource.data.placeId != null && isPlaceManager(request.resource.data.placeId));
     }
 
-    // ==================== Capacity Overrides ====================
-    match /dateCapacityOverrides/{overrideId} {
-      // ✅ Apple App Store 가이드라인 5.1.1 준수: 세션 브라우징을 위해 용량 오버라이드도 로그인 없이 읽기 가능
-      // 읽기: 로그인 없이도 모든 사용자가 읽기 가능 (세션 브라우징용)
-      allow read: if true;
-      allow create, update, delete: if isAdmin();
-    }
-
-    // ==================== Booking Week Opens (관리자 "미리 예약 열기") ====================
-    // 주차별로 "정책과 무관하게" 예약을 열어둔 상태 저장
-    // - 읽기: ✅ Apple App Store 가이드라인 5.1.1 준수 - 로그인 없이도 읽기 가능 (세션 브라우징용)
-    // - 쓰기: 해당 place 관리자만
+    // ==================== Booking Week Opens (매니저 "미리 예약 열기") ====================
     match /bookingWeekOpens/{docId} {
-      // ✅ Apple App Store 가이드라인 5.1.1 준수: 세션 브라우징을 위해 예약 오픈 상태도 로그인 없이 읽기 가능
       allow read: if true;
-      allow create, update, delete: if isAdmin() && (
-        (resource.data.placeId != null && isAdminForPlace(resource.data.placeId)) ||
-        (request.resource.data.placeId != null &&
-          isAdminForPlace(request.resource.data.placeId))
-      );
+      allow create, update, delete: if (resource.data.placeId != null && isPlaceManager(resource.data.placeId)) ||
+        (request.resource.data.placeId != null && isPlaceManager(request.resource.data.placeId));
     }
 
-    // ==================== Course Members ====================
+    // ==================== Course Members (매니저만: placeId 있으면 해당 플레이스 매니저) ====================
     match /courseMembers/{docId} {
-      allow read: if isAdmin();
-      allow create, update, delete: if isAdmin();
+      allow read, create, update, delete: if (resource.data.placeId != null && isPlaceManager(resource.data.placeId)) ||
+        (request.resource.data.placeId != null && isPlaceManager(request.resource.data.placeId));
     }
 
-    // ==================== Pending Members (관리자가 미리 등록한 멤버) ====================
-    // 관리자가 전화번호로 멤버를 미리 등록하고, 사용자 로그인 시 자동 매칭
+    // ==================== Pending Members (top-level, 미사용 권장 — 서브컬렉션으로만 사용) ====================
     match /pendingMembers/{pendingId} {
-      // 읽기: 관리자 또는 자신의 전화번호와 일치하는 문서만
-      // (phoneNumber로 쿼리 시 결과 문서의 phoneNumber가 users 컬렉션의 전화번호와 일치해야 함)
-      allow read: if signedIn() && (
-        isAdmin() ||
-        (hasUserDoc() &&
-          resource.data.phoneNumber == userDoc().data.phoneNumber)
-      );
-      // 생성/수정/삭제: 관리자만
-      allow create, update, delete: if isAdmin();
-    }
-
-    // ==================== Place Memberships (가입 요청) ====================
-    match /placeMemberships/{membershipId} {
-      // 읽기: 본인 멤버십 또는 관리자
-      allow read: if signedIn() && (
-        resource.data.userId == request.auth.uid ||
-        isAdmin()
-      );
-      // 생성:
-      // - 유저 본인이 가입 요청 생성
-      // - 또는 관리자가 "자신이 관리하는 플레이스"에 대해 멤버십을 생성(초대/승인 플로우)
-      //   (MemberService가 고정 docId: `${userId}_${placeId}` 로 생성하므로, 이를 강제해서 권한 상승을 막는다)
-      allow create: if signedIn() && (
-        request.resource.data.userId == request.auth.uid ||
-        (
-          request.resource.data.placeId != null &&
-          isAdminForPlace(request.resource.data.placeId) &&
-          membershipId == request.resource.data.userId + '_' + request.resource.data.placeId &&
-          // invitedBy가 있다면 "현재 관리자"여야 함 (없으면 통과)
-          (!('invitedBy' in request.resource.data) || request.resource.data.invitedBy == request.auth.uid)
-        )
-      );
-      // 업데이트/삭제: 본인 또는 관리자 (정책적으로 더 엄격히 하고 싶으면 추후 분리)
-      allow update, delete: if signedIn() && (
-        resource.data.userId == request.auth.uid ||
-        isAdmin()
-      );
+      allow read: if signedIn() && hasUserDoc() && resource.data.phoneNumber == userDoc().data.phoneNumber;
+      allow create, update, delete: if false;
     }
 
     // ==================== Content ====================
-    match /stories/{storyId} {
-      // ✅ Apple App Store 가이드라인 5.1.1 준수: 세션 브라우징은 로그인 없이도 가능해야 함
-      // 스토리는 홈 화면에서 표시되므로 로그인 없이도 읽기 가능
-      allow read: if true;
-      allow create, update, delete: if isAdmin();
-    }
-
     match /promotions/{promotionId} {
-      // ✅ Apple App Store 가이드라인 5.1.1 준수: 프로모션도 홈 화면에서 표시될 수 있으므로 로그인 없이도 읽기 가능
       allow read: if true;
-      allow create, update, delete: if isAdmin();
-    }
-
-    match /notifications/{notificationId} {
-      allow read: if signedIn() && resource.data.userId == request.auth.uid;
-      // 알림 생성은 서버/관리자에서만
-      allow create: if isAdmin();
-      // 본인 알림 삭제 허용, 관리자는 모든 알림 삭제 가능
-      allow delete: if signedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      // 읽음 처리만 유저가 가능
-      allow update: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create, update, delete: if (resource.data.placeId != null && isPlaceManager(resource.data.placeId)) ||
+        (request.resource.data.placeId != null && isPlaceManager(request.resource.data.placeId));
     }
 
     // ==================== Course Overrides (비정기 일정) ====================
     match /courseOverrides/{overrideId} {
-      // ✅ Apple App Store 가이드라인 5.1.1 준수: 세션 브라우징을 위해 비정기 일정도 로그인 없이 읽기 가능
-      // 읽기: 로그인 없이도 모든 사용자가 읽기 가능 (세션 브라우징용)
       allow read: if true;
-      // 생성/수정/삭제: 관리자만
-      allow create, update, delete: if isAdmin();
+      allow create, update, delete: if (resource.data.placeId != null && isPlaceManager(resource.data.placeId)) ||
+        (request.resource.data.placeId != null && isPlaceManager(request.resource.data.placeId));
     }
   }
 }

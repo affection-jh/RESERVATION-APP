@@ -2,22 +2,27 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:reservation/utils/snackbar_util.dart';
 import '../models/course.dart';
-import '../models/reservation.dart';
 import '../models/session_reservation.dart';
+import '../models/session_reservation_summary.dart';
 import '../models/course_enrollment.dart';
 import '../models/course_override.dart';
-import '../policies/course_policy.dart';
-import '../policies/reservation_policy_engine.dart';
+import '../models/course_policy.dart';
+import '../utils/reservation_policy_engine.dart';
 import '../services/firestore_service.dart';
 import '../utils/timezone_utils.dart';
+import '../utils/calendar_utils.dart';
 import '../theme/app_colors.dart';
-import '../utils/storage_service.dart';
+import '../utils/local_storage_util.dart';
+import 'session_block_style.dart';
 import '../providers/place_provider.dart';
 import '../providers/reservation_provider.dart';
+import '../providers/reservation_summary_provider.dart';
 import '../providers/course_provider.dart';
+import '../utils/session_slot_builder.dart';
 import 'package:provider/provider.dart';
 import 'session_manage_bottom_sheet.dart';
 import '../widgets/common_dialog.dart';
@@ -27,7 +32,7 @@ import '../widgets/common_dialog.dart';
 /// - adminNavigate: 관리자 홈 등에서 "조회/이동" 목적. 잠김/만석/과거여도 **탭은 가능**해야 함.
 /// - adminSelectNewSlot: 관리자 예약 변경에서 "새 슬롯 선택" 목적. **과거/만석은 선택 불가**.
 /// - userWeeklyReservationsView: 마이페이지 "내 예약(이번주) 보기" 목적(기본적으로 보기+탭 가능).
-/// - courseDetailView: 코스 상세 화면용. 내부 스크롤 불가, 남은자리 표시 숨김.
+/// - courseDetailView: 코스 상세 화면용. 눈금/세션박스 압축으로 스크롤 없이 맞춤, 남은자리 표시 숨김.
 enum CompactCalendarUsage {
   adminNavigate,
   adminSelectNewSlot,
@@ -54,12 +59,18 @@ class CompactCalendarWidget extends StatefulWidget {
 
   // 일정보기 모드 (마이페이지용)
   final bool weeklyViewMode; // 일정보기 모드 활성화
-  final List<Reservation>? userReservations; // 사용자의 예약 리스트 (일정보기 모드용)
+  final List<SessionReservation>? userReservations; // 사용자의 예약 리스트 (일정보기 모드용)
   final Map<String, dynamic>? highlightReservation; // 강조할 예약 정보
   final Color? backgroundColor; // 배경색 (기본값: AppColors.backgroundWhite)
   final bool adminSelectionMode; // 관리자 선택 모드(잠긴 세션도 선택 가능)
   final Map<String, CourseEnrollment>? enrollmentsByCourseId; // 유저 등록 정보(코스별)
   final CompactCalendarUsage? usage; // 신규: 사용 목적(모드) - 명시적으로 상태/탭 규칙 분리
+  /// 확대되지 않았을 때 좌우 스와이프로 주차 변경 시 호출 (주차가 여러 개인 화면에서 사용)
+  final VoidCallback? onSwipeToPrevWeek;
+  final VoidCallback? onSwipeToNextWeek;
+
+  /// 열린 주차 전체 범위. 전달 시 Provider가 전체 구독해 두고 주차 전환 시 재구독 안 함.
+  final List<int>? availableWeekOffsets;
 
   const CompactCalendarWidget({
     super.key,
@@ -83,6 +94,9 @@ class CompactCalendarWidget extends StatefulWidget {
     this.adminSelectionMode = false,
     this.enrollmentsByCourseId,
     this.usage,
+    this.onSwipeToPrevWeek,
+    this.onSwipeToNextWeek,
+    this.availableWeekOffsets,
   });
 
   @override
@@ -99,15 +113,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
 
   final FirestoreService _firestoreService = FirestoreService();
   CoursePolicy? _coursePolicy;
-  StreamSubscription<List<SessionReservation>>? _sessionReservationSub;
-  final Map<String, SessionReservation> _sessionReservationsByKey = {};
-  StreamSubscription<Set<String>>? _bookingWeekOpensSub;
-  Set<String> _openedWeekStartDates = {}; // 미리 열린 주차의 weekStartDate 집합
-  StreamSubscription<Map<String, int>>? _capacityOverridesSub;
-  Map<String, int> _capacityOverridesByKey = {}; // "sessionId_date" -> capacity
 
-  // 비정기 일정 캐시 (날짜별)
-  final Map<String, List<CourseOverride>> _overridesByDate = {};
   // 현재 주차 추적 (주차 변경 감지용)
   String? _currentWeekStartDate;
   // 동일한 (placeId|courseId|weekStartDate)로 중복 재구독/재로딩을 막기 위한 키
@@ -116,10 +122,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
   String? _subscribedCourseId;
   // 취소 중인 세션 추적 (로딩 스피너 표시용)
   final Set<String> _cancellingSessions = {}; // "date|dayOfWeek|startTime" 형식
-  // postFrameCallback 중복 등록 방지
-  bool _pendingOverrideUpdate = false;
-  // 마지막으로 확인한 override 데이터 해시 (실제 변경 감지용)
-  int? _lastOverridesHash;
   // 코스 변경 중 로딩 상태
   bool _isLoadingCourse = false;
   // 주차 변경 중 로딩 상태 (admin_home_screen 모드용)
@@ -130,22 +132,58 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
   bool _didRestoreLastSelectedCourse = false;
   bool _isRestoringLastSelectedCourse = false;
 
-  // UI 상수 정의 (compact calendar용으로 조정)
-  static const double _minHourSlotHeight = 60.0; // 세션이 있는 구간의 최소 한 시간당 높이 (px)
-  static const double _minGapHourSlotHeight = 18.0; // 공백 구간 축소 하한 (px/h)
+  // 그리드 가로 축 스케일 (핀치 줌): 세로는 고정, 가로만 확대/축소
+  double _gridScale = 1.0;
+  double _scaleStart = 1.0;
+  double _pendingGridScale = 1.0;
+  // 핀치 제스처 중에는 드래그(스크롤) 막기
+  bool _isPinching = false;
+  // 멀티터치 시 스크롤보다 핀치 우선: 화면에 닿은 포인터 수
+  final Set<int> _activePointers = {};
+  // 확대 안 됐을 때 좌우 스와이프로 주차 변경 감지용 (단일 손가락만)
+  int _pointerCountAtScaleStart = 0;
+  // UI 상수 정의 (compact calendar용) - 스크롤 최소화를 위해 압축 허용
+  static const double _minHourSlotHeight = 38.0; // 세션이 있는 구간 최소 한 시간당 높이 (px)
+  static const double _minGapHourSlotHeight = 12.0; // 공백 구간 축소 하한 (px/h)
   static const int _mergeGapMinHours = 3; // 이 시간(시간) 이상 연속 공백은 하나로 합쳐(건너뛰기) 표시
-  static const double _mergedGapSlotHeight = 22.0; // 합쳐진 긴 공백 슬롯의 기본 높이(px)
+  static const double _mergedGapSlotHeight = 20.0; // 병합 공백 최소 높이(px)
+  static const double _mergedGapPxPerHour = 14.0; // 병합 공백: 시간당 px
   static const double _minActiveSlotHeight =
-      36.0; // 화면이 너무 작을 때도 active 슬롯이 너무 얇아지지 않도록
+      28.0; // 압축 시 active 슬롯 하한 (스크롤 최소화용)
+  // courseDetailView(코스 상세): 스크롤 없이 맞추기 위해 압축 한도 더 낮춤
+  double get _effectiveMinGapHourSlotHeight =>
+      _usage == CompactCalendarUsage.courseDetailView
+          ? 6.0
+          : _minGapHourSlotHeight;
+  double get _effectiveMergedGapSlotHeight =>
+      _usage == CompactCalendarUsage.courseDetailView
+          ? 12.0
+          : _mergedGapSlotHeight;
+  double get _effectiveMinActiveSlotHeight =>
+      _usage == CompactCalendarUsage.courseDetailView
+          ? 20.0
+          : _minActiveSlotHeight;
+  double get _effectiveMergedGapPxPerHour =>
+      _usage == CompactCalendarUsage.courseDetailView
+          ? 10.0
+          : _mergedGapPxPerHour;
+  double get _effectiveMinHourSlotHeight =>
+      _usage == CompactCalendarUsage.courseDetailView
+          ? 28.0
+          : _minHourSlotHeight;
   static const int _mergedGapInnerTickCount =
       2; // 합쳐진 긴 공백 슬롯 내부에 그릴 미세 눈금선 개수(최대)
   static const int _edgePaddingMinutes = 30; // 00시, 23시 경계에 추가할 여백(분)
   static const double _timeColumnWidth = 35.0; // 시간대 컬럼 너비 (px)
+  // 패딩(8*2)+테두리(1)+텍스트2줄(~38) → 52로는 부족해 11px overflow 발생. 64로 여유 확보.
+  static const double _kDayHeaderHeight = 64.0; // 요일 헤더 높이 (scale 내부 레이아웃용)
   static const double _lineOffset = 1.0; // 가로선을 아래로 이동하는 오프셋 (px)
   static const double _sessionPadding = 2.0; // 세션 블록 좌우 패딩 (px)
   static const double _dateColumnSpacing = 0.0; // 날짜 컬럼 간 간격 (px)
   static const double _timeTextPaddingRight = 8.0; // 시간 텍스트 오른쪽 패딩 (px)
   static const int _basePaddingMinutes = 120; // 세션 위/아래 기본 여백(2시간)
+  // 레이아웃 높이에서 줄일 하단 여백 (0이면 눈금 여백 없이 전체 높이 사용)
+  static const double _minBottomPadding = 0.0;
 
   final ScrollController _scrollController = ScrollController();
   bool _didInitialJump = false;
@@ -182,13 +220,24 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     }
 
     final dateString = TimezoneUtils.formatDateToSeoul(date);
-    final dateKey = _formatDate(date);
+    final dateKey = CalendarUtils.formatDateYMD(date);
+    final weekStartForDate = DateTime(
+      date.year,
+      date.month,
+      date.day,
+    ).subtract(Duration(days: date.weekday - DateTime.monday));
+    final weekStartDateForDate = TimezoneUtils.formatDateToSeoul(
+      weekStartForDate,
+    );
 
-    // ✅ 추가된 비정기(override) 세션인지 확인: 이런 세션은 '취소 override 생성'이 아니라
-    // override 문서 자체를 delete 해야 리스타트 후에도 안 남음.
-    CourseOverride? addedOverride;
+    // 추가된 비정기(override) 세션인지 확인 → CourseProvider 결과만 사용
+    final courseProvider = Provider.of<CourseProvider>(context, listen: false);
     final overridesForDate =
-        _overridesByDate[dateKey] ?? const <CourseOverride>[];
+        courseProvider
+            .getOverridesForWeek(weekStartDateForDate)
+            .where((o) => o.date == dateKey)
+            .toList();
+    CourseOverride? addedOverride;
     try {
       addedOverride = overridesForDate.firstWhere(
         (o) =>
@@ -203,16 +252,23 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       addedOverride = null;
     }
 
-    // 현재 수용인원 가져오기
+    // 현재 수용인원·예약 수는 중앙 ReservationSummaryProvider에서만 사용
     final courseId = course.id;
-    final sessionId = SessionReservation.generateSessionId(
+    final sessionId = SessionReservationSummary.generateSessionId(
       courseId,
       session.dayOfWeek,
       session.startTime,
     );
-    final sr = _sessionReservationsByKey['${sessionId}_$dateKey'];
-    final overrideCap = _capacityOverridesByKey['${sessionId}_$dateKey'];
-    final currentCapacity = overrideCap ?? session.getCapacityForDate(date);
+    final srProvider = Provider.of<ReservationSummaryProvider>(
+      context,
+      listen: false,
+    );
+    final sr = srProvider.getSessionReservationSummary(sessionId, dateKey);
+    final currentCapacity = srProvider.getTotalCapacity(
+      sessionId,
+      dateKey,
+      fallback: session.capacity,
+    );
     final reservedCount = sr?.reservedCount ?? 0;
 
     final result = await showSessionManageBottomSheet(
@@ -236,24 +292,13 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
           date: dateKey,
           capacity: newCapacity,
         );
-        // UI 즉시 업데이트
+        // 중앙 프로바이더만 갱신 (UI는 watch로 자동 리빌드)
         if (mounted) {
-          final key = '${sessionId}_$dateKey';
-          setState(() {
-            // _capacityOverridesByKey 업데이트
-            _capacityOverridesByKey = {
-              ..._capacityOverridesByKey,
-              key: newCapacity,
-            };
-            // _sessionReservationsByKey도 함께 업데이트
-            final existingSr = _sessionReservationsByKey[key];
-            if (existingSr != null) {
-              _sessionReservationsByKey[key] = existingSr.copyWith(
-                capacity: newCapacity,
-                lastUpdated: TimezoneUtils.getSeoulDateTime(),
-              );
-            }
-          });
+          Provider.of<ReservationSummaryProvider>(
+            context,
+            listen: false,
+          ).updateCapacityLocally(sessionId, dateKey, newCapacity);
+          setState(() {});
           SnackbarUtil.showSuccess(context, '수용인원이 변경되었습니다.');
         }
       },
@@ -333,53 +378,37 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
               );
 
       if (mounted) {
-        setState(() {
-          _cancellingSessions.remove(cancellingKey);
-
-          // ✅ UI 즉시 반영 (스트림/Provider 반영 지연 방지)
-          final list = List<CourseOverride>.from(
-            _overridesByDate[dateKey] ?? const <CourseOverride>[],
+        setState(() => _cancellingSessions.remove(cancellingKey));
+        // override 상태는 CourseProvider에서만 관리 (UI 즉시 반영)
+        if (addedOverride != null) {
+          courseProvider.removeOverrideOptimistically(
+            weekStartDate,
+            addedOverride.id,
           );
-
-          if (addedOverride != null) {
-            // 추가 override 세션 삭제 → override 문서 제거
-            list.removeWhere((o) => o.id == addedOverride!.id);
-            _overridesByDate[dateKey] = list;
-          } else {
-            // 정기 세션 취소 → cancel override 추가
-            final overrideId =
-                (upsertResult['overrideId'] as String?)?.trim() ?? '';
-            final effectiveOverrideId =
-                overrideId.isNotEmpty
-                    ? overrideId
-                    : '${course.id}_${dateKey}_${session.startTime}_cancel';
-
-            list.removeWhere(
-              (o) =>
-                  o.courseId == course.id &&
-                  o.date == dateKey &&
-                  o.dayOfWeek == session.dayOfWeek &&
-                  o.startTime == session.startTime &&
-                  o.isCancelled == true,
-            );
-
-            list.add(
-              CourseOverride(
-                id: effectiveOverrideId,
-                courseId: course.id,
-                placeId: placeId,
-                date: dateKey,
-                dayOfWeek: session.dayOfWeek,
-                startTime: session.startTime,
-                isCancelled: true,
-                weekStartDate: weekStartDate,
-                createdAt: DateTime.now(),
-                updatedAt: DateTime.now(),
-              ),
-            );
-            _overridesByDate[dateKey] = list;
-          }
-        });
+        } else {
+          final overrideId =
+              (upsertResult['overrideId'] as String?)?.trim() ?? '';
+          final effectiveOverrideId =
+              overrideId.isNotEmpty
+                  ? overrideId
+                  : CourseOverride.overrideDocIdForCancel(
+                    course.id,
+                    dateKey,
+                    session.startTime,
+                  );
+          courseProvider.addOverrideOptimistically(
+            weekStartDate,
+            CourseOverride.cancelSession(
+              id: effectiveOverrideId,
+              courseId: course.id,
+              placeId: placeId,
+              date: dateKey,
+              dayOfWeek: session.dayOfWeek,
+              startTime: session.startTime,
+              weekStartDate: weekStartDate,
+            ),
+          );
+        }
         SnackbarUtil.showSuccess(
           context,
           addedOverride != null ? '세션이 삭제되었습니다.' : '세션이 취소되었습니다.',
@@ -503,27 +532,38 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
 
     final placeId =
         Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
-    if (placeId == null) return;
+    if (placeId == null || placeId.isEmpty) return;
 
     final now = TimezoneUtils.getSeoulDateTime();
-    final weekStart = _startOfWeekMonday(
-      now,
-    ).add(Duration(days: 7 * widget.weekOffset));
-    final weekStartDate = TimezoneUtils.formatDateToSeoul(weekStart);
+    final offsets = widget.availableWeekOffsets ?? [widget.weekOffset];
+    final maxOffset =
+        offsets.isNotEmpty ? offsets.reduce((a, b) => a > b ? a : b) : 0;
+    // 전체 범위 구독: placeId|courseId만 키로 → 주차 전환 시 재구독 안 함
+    final firstWeekStart = CalendarUtils.weekStartFrom(now, 0);
+    final lastWeekStart = CalendarUtils.weekStartFrom(now, maxOffset);
+    final startDate = DateTime(
+      firstWeekStart.year,
+      firstWeekStart.month,
+      firstWeekStart.day,
+    );
+    final endDate = lastWeekStart.add(const Duration(days: 6));
+    final firstWeekStartDateStr = CalendarUtils.formatDateYMD(firstWeekStart);
 
-    final nextKey = '$placeId|${course.id}|$weekStartDate';
-    if (_weekSubscriptionKey == nextKey) return;
+    final nextKey = '$placeId|${course.id}';
+    if (_weekSubscriptionKey == nextKey) {
+      if (resetViewport) {
+        _didInitialJump = false;
+        _currentWeekStartDate = CalendarUtils.formatDateYMD(
+          CalendarUtils.weekStartFrom(now, widget.weekOffset),
+        );
+      }
+      return;
+    }
 
-    // 코스가 변경되었는지 확인
     final courseChanged =
         _subscribedCourseId != null && _subscribedCourseId != course.id;
     if (courseChanged) {
-      // 코스 변경 시 이전 코스의 모든 캐시 초기화
-      _overridesByDate.clear();
-      _sessionReservationsByKey.clear();
-      _lastOverridesHash = null;
       _currentWeekStartDate = null;
-      _pendingOverrideUpdate = false;
     }
 
     _weekSubscriptionKey = nextKey;
@@ -531,10 +571,21 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
 
     if (resetViewport) {
       _didInitialJump = false;
-      _currentWeekStartDate = weekStartDate;
+      _currentWeekStartDate = CalendarUtils.formatDateYMD(
+        CalendarUtils.weekStartFrom(now, widget.weekOffset),
+      );
     }
 
-    _subscribeWeekSessionReservations();
+    _loadCoursePolicy();
+
+    Provider.of<ReservationSummaryProvider>(context, listen: false).setContext(
+      placeId: placeId,
+      courseId: course.id,
+      startDate: startDate,
+      endDate: endDate,
+      weekStartDate: firstWeekStartDateStr,
+    );
+
     _subscribeWeekOverrides();
     _subscribeBookingWeekOpens();
   }
@@ -580,25 +631,39 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     }
 
     final now = TimezoneUtils.getSeoulDateTime();
-    final weekStart = _startOfWeekMonday(
-      now,
-    ).add(Duration(days: 7 * widget.weekOffset));
-    final weekStartDate = TimezoneUtils.formatDateToSeoul(weekStart);
+    final offsets = widget.availableWeekOffsets ?? [widget.weekOffset];
+    final weekStartDates =
+        offsets
+            .map(
+              (o) => CalendarUtils.formatDateYMD(
+                CalendarUtils.weekStartFrom(now, o),
+              ),
+            )
+            .toList();
+    if (weekStartDates.isEmpty) {
+      weekStartDates.add(
+        CalendarUtils.formatDateYMD(
+          CalendarUtils.weekStartFrom(now, widget.weekOffset),
+        ),
+      );
+    }
 
-    // CourseProvider에서 비정기 일정 구독
+    // CourseProvider에서 비정기 일정 구독 (전체 주차 한 번에)
     final courseProvider = Provider.of<CourseProvider>(context, listen: false);
-    courseProvider.subscribeToOverrides(placeId, [weekStartDate]);
+    courseProvider.subscribeToOverrides(placeId, weekStartDates);
 
-    // 주차가 변경되었는지 확인
-    final weekChanged = _currentWeekStartDate != weekStartDate;
+    final currentWeekStartDate = CalendarUtils.formatDateYMD(
+      CalendarUtils.weekStartFrom(now, widget.weekOffset),
+    );
+    final weekChanged = _currentWeekStartDate != currentWeekStartDate;
     if (weekChanged) {
-      _currentWeekStartDate = weekStartDate;
+      _currentWeekStartDate = currentWeekStartDate;
       _didInitialJump = false; // 주차 변경 시 뷰포트 리셋
     }
 
     try {
       // 초기 로드 (이후에는 CourseProvider 스트림으로 자동 업데이트)
-      await _loadOverridesForWeek(placeId, weekStartDate, course.id);
+      await _loadOverridesForWeek(placeId, currentWeekStartDate, course.id);
     } finally {
       // admin_home_screen 모드에서 로딩 종료 (성공/실패 관계없이)
       if (!widget.hideCourseSelector && _isLoadingWeek) {
@@ -608,20 +673,12 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
           });
         }
       }
-      // 주차 전환 후 레이아웃 안정화(350ms) 뒤 그리드 페이드인
-      Future.delayed(const Duration(milliseconds: 350), () {
-        if (!mounted) return;
-        setState(() {
-          _showGridAfterLoad = true;
-        });
-      });
+      // Provider 기반이므로 지연 페이드인 없이 즉시 표시
     }
   }
 
-  /// bookingWeekOpens 구독 (미리 열린 주차 확인)
+  /// bookingWeekOpens 구독 (CourseProvider에서 단일 구독 공유)
   void _subscribeBookingWeekOpens() {
-    _bookingWeekOpensSub?.cancel();
-
     final course = _selectedCourse;
     if (course == null) return;
     if (widget.weeklyViewMode) return;
@@ -630,230 +687,59 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
         Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
     if (placeId == null) return;
 
-    try {
-      _bookingWeekOpensSub = _firestoreService
-          .streamBookingWeekOpens(placeId: placeId, courseId: course.id)
-          .listen(
-            (openedWeekStartDates) {
-              if (!mounted) return;
-              setState(() {
-                _openedWeekStartDates = openedWeekStartDates;
-              });
-            },
-            onError: (e) {
-              debugPrint(
-                '[CompactCalendarWidget] bookingWeekOpens stream error: $e',
-              );
-              if (!mounted) return;
-              setState(() {
-                _openedWeekStartDates.clear();
-              });
-            },
-          );
-    } catch (e) {
-      debugPrint(
-        '[CompactCalendarWidget] bookingWeekOpens subscribe error: $e',
-      );
-    }
+    Provider.of<CourseProvider>(
+      context,
+      listen: false,
+    ).subscribeToBookingWeekOpens(placeId, course.id);
   }
 
-  /// 특정 주의 비정기 일정 로드 (초기 로드용)
+  /// 특정 주 비정기 일정은 CourseProvider 스트림으로만 사용 (초기 로드 시 주차만 표시)
   Future<void> _loadOverridesForWeek(
     String placeId,
     String weekStartDate,
     String courseId,
   ) async {
-    try {
-      final overrides = await _firestoreService.getCourseOverrides(
-        placeId: placeId,
-        courseId: courseId,
-        weekStartDate: weekStartDate,
-      );
-
-      if (!mounted) return;
-
-      // 새 데이터를 임시 변수에 저장 (UI 업데이트는 한 번에)
-      final newOverridesByDate = <String, List<CourseOverride>>{};
-      for (final override in overrides) {
-        if (!newOverridesByDate.containsKey(override.date)) {
-          newOverridesByDate[override.date] = [];
-        }
-        newOverridesByDate[override.date]!.add(override);
-      }
-
-      // 데이터가 실제로 변경되었는지 확인
-      final hasChanges =
-          newOverridesByDate.length != _overridesByDate.length ||
-          newOverridesByDate.entries.any((entry) {
-            final existing = _overridesByDate[entry.key] ?? [];
-            if (existing.length != entry.value.length) return true;
-            for (final override in entry.value) {
-              if (!existing.any((e) => e.id == override.id)) return true;
-            }
-            return false;
-          });
-
-      if (hasChanges && mounted) {
-        setState(() {
-          // 날짜별로 그룹화 (한 번에 업데이트하여 UI 흔들림 방지)
-          _overridesByDate.clear();
-          _overridesByDate.addAll(newOverridesByDate);
-          _currentWeekStartDate = weekStartDate;
-        });
-      }
-    } catch (e) {
-      debugPrint('[CompactCalendarWidget] Error loading overrides: $e');
-    }
+    if (!mounted) return;
+    setState(() => _currentWeekStartDate = weekStartDate);
   }
 
-  String _formatDate(DateTime date) {
-    return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-  }
-
-  DateTime _startOfWeekMonday(DateTime date) {
-    final dateOnly = DateTime(date.year, date.month, date.day);
-    return dateOnly.subtract(
-      Duration(days: dateOnly.weekday - DateTime.monday),
+  /// CourseProvider에서 해당 날짜의 override만 반환 (override는 Provider에서만 관리)
+  List<CourseOverride> _getOverridesForDate(
+    BuildContext context,
+    DateTime date,
+  ) {
+    final dateKey = CalendarUtils.formatDateYMD(date);
+    final weekStartDate = TimezoneUtils.formatDateToSeoul(
+      CalendarUtils.startOfWeekMonday(date),
     );
+    return Provider.of<CourseProvider>(context, listen: false)
+        .getOverridesForWeek(weekStartDate)
+        .where((o) => o.date == dateKey)
+        .toList();
   }
 
   Future<void> _loadCoursePolicy() async {
     final course = _selectedCourse;
-    final placeId =
-        Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
-    if (course == null || placeId == null) return;
-
-    try {
-      final policy = await _firestoreService.getCoursePolicy(
-        courseId: course.id,
-        placeId: placeId,
-      );
-      if (!mounted) return;
-      setState(() {
-        _coursePolicy = policy;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _coursePolicy = CoursePolicy.defaultFor(
-          courseId: course.id,
-          placeId: placeId,
-        );
-      });
-    }
-  }
-
-  void _subscribeWeekSessionReservations() {
-    _sessionReservationSub?.cancel();
-
-    final course = _selectedCourse;
     if (course == null) return;
-    if (widget.weeklyViewMode) return;
-
-    final placeId =
-        Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
-
-    final now = TimezoneUtils.getSeoulDateTime();
-    final weekStart = _startOfWeekMonday(
-      now,
-    ).add(Duration(days: 7 * widget.weekOffset));
-    final startDate = DateTime(weekStart.year, weekStart.month, weekStart.day);
-    final endDate = startDate.add(const Duration(days: 6));
-
-    _loadCoursePolicy();
-
-    // dateCapacityOverrides 구독
-    _capacityOverridesSub?.cancel();
-    if (placeId == null || placeId.isEmpty) return;
-    _capacityOverridesSub = _firestoreService
-        .watchDateCapacityOverrides(
-          placeId: placeId,
-          courseId: course.id,
-          startDate: startDate,
-          endDate: endDate,
-        )
-        .listen(
-          (overrides) {
-            if (!mounted) return;
-            setState(() {
-              // ✅ 스트림이 source of truth.
-              // 다른 화면(SessionDetailScreen 등)에서 변경된 capacity가
-              // 여기로 돌아왔을 때 즉시 반영되도록 스트림 값을 우선한다.
-              // (이 위젯 내에서의 즉시 반영은 onCapacityChanged에서 setState로 이미 처리)
-              _capacityOverridesByKey = {
-                ..._capacityOverridesByKey,
-                ...overrides,
-              };
-              // 기존 SessionReservation들의 capacity 업데이트
-              for (final key in _sessionReservationsByKey.keys) {
-                final overrideCapacity = _capacityOverridesByKey[key];
-                if (overrideCapacity != null) {
-                  final sr = _sessionReservationsByKey[key];
-                  if (sr != null) {
-                    _sessionReservationsByKey[key] = sr.copyWith(
-                      capacity: overrideCapacity,
-                    );
-                  }
-                }
-              }
-            });
-          },
-          onError: (e) {
-            // 인덱스 미배포 등으로 스트림이 죽으면
-            // 다른 화면(SessionDetailScreen)에서의 변경이 여기로 동기화되지 않는다.
-            debugPrint(
-              '[CompactCalendarWidget] dateCapacityOverrides stream error: $e',
-            );
-            // 에러는 조용히 로그만 남김 (인덱스는 이미 정의되어 있으므로)
-          },
-        );
-
-    _sessionReservationSub = _firestoreService
-        .watchCourseSessionReservations(
-          courseId: course.id,
-          placeId: placeId,
-          startDate: startDate,
-          endDate: endDate,
-        )
-        .listen(
-          (list) {
-            final next = <String, SessionReservation>{};
-            for (final sr in list) {
-              final key = '${sr.sessionId}_${sr.date}';
-              // dateCapacityOverrides가 있으면 capacity를 오버라이드
-              final overrideCapacity = _capacityOverridesByKey[key];
-              final updatedSr =
-                  overrideCapacity != null
-                      ? sr.copyWith(capacity: overrideCapacity)
-                      : sr;
-              next[key] = updatedSr;
-            }
-            if (!mounted) return;
-            setState(() {
-              _sessionReservationsByKey
-                ..clear()
-                ..addAll(next);
-            });
-          },
-          onError: (_) {
-            // 권한 문제 등으로 스트림이 실패해도 앱이 크래시 나지 않도록 방어
-            // (여기서 즉시 clear하면 UI가 "없다→있다"로 튀는 경우가 있어, 일단 유지)
-          },
-        );
+    setState(() {
+      _coursePolicy = course.policy;
+    });
   }
 
   @override
   void didUpdateWidget(CompactCalendarWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
     // 주 변경 시(이번주/다음주/다다음주) 예약 현황/정책 재구독
+    // Provider 기반이므로 로딩/페이드 없이 바로 전환
     if (widget.weekOffset != oldWidget.weekOffset) {
       setState(() {
-        _showGridAfterLoad = false;
-        if (!widget.hideCourseSelector) {
-          _isLoadingWeek = true;
-        }
+        _didInitialJump = false;
       });
-      _ensureWeekSubscriptions(resetViewport: true);
+      // setContext → notifyListeners()가 빌드 중에 호출되지 않도록 다음 프레임으로 연기
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _ensureWeekSubscriptions(resetViewport: true);
+      });
     }
     // highlightReservation이 새로 추가/변경되었을 때 흔들기 애니메이션 시작
     if (widget.highlightReservation != null) {
@@ -887,6 +773,19 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     }
     // 코스 목록이 변경되었을 때 처리
     if (widget.courses != oldWidget.courses) {
+      // 같은 id의 코스가 새 인스턴스로 바뀐 경우(예: 예약 정책 수정 후) 선택 코스·정책 갱신
+      if (_selectedCourse != null && widget.courses.isNotEmpty) {
+        final match =
+            widget.courses
+                .where((c) => c.id == _selectedCourse!.id)
+                .firstOrNull;
+        if (match != null && match != _selectedCourse) {
+          setState(() {
+            _selectedCourse = match;
+            _coursePolicy = match.policy;
+          });
+        }
+      }
       // 코스가 비어있다가 채워졌거나(place 로드 타이밍), 아직 복원 못 했으면 1회 복원 시도
       if (!_didRestoreLastSelectedCourse && widget.courses.isNotEmpty) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1008,65 +907,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
   }
 
   /// CourseProvider의 비정기 일정 변경사항을 감지하여 업데이트
-  void _updateOverridesFromProvider() {
-    if (widget.weeklyViewMode || _selectedCourse == null) return;
-
-    final now = TimezoneUtils.getSeoulDateTime();
-    final currentWeekStart = _startOfWeekMonday(
-      now,
-    ).add(Duration(days: 7 * widget.weekOffset));
-    final weekStartDate = TimezoneUtils.formatDateToSeoul(currentWeekStart);
-
-    // 현재 주차가 아니면 업데이트하지 않음 (주 변경 시에는 didUpdateWidget에서 처리)
-    if (_currentWeekStartDate != null &&
-        _currentWeekStartDate != weekStartDate) {
-      return;
-    }
-
-    final courseProvider = Provider.of<CourseProvider>(context, listen: false);
-    final weekOverrides =
-        courseProvider
-            .getOverridesForWeek(weekStartDate)
-            .where((o) => o.courseId == _selectedCourse!.id)
-            .toList();
-
-    // _overridesByDate 업데이트 (날짜별로 그룹화)
-    final newOverridesByDate = <String, List<CourseOverride>>{};
-    for (final override in weekOverrides) {
-      if (!newOverridesByDate.containsKey(override.date)) {
-        newOverridesByDate[override.date] = [];
-      }
-      newOverridesByDate[override.date]!.add(override);
-    }
-
-    // 데이터가 변경되었는지 확인 (더 엄격한 체크: 해시 기반)
-    final currentHash = Object.hashAll(
-      newOverridesByDate.entries.map(
-        (e) => Object.hashAll(
-          e.value.map((o) => Object.hash(o.id, o.date, o.isCancelled)),
-        ),
-      ),
-    );
-
-    // 해시가 같으면 실제 변경 없음 → setState 호출 안 함
-    if (_lastOverridesHash == currentHash) {
-      return;
-    }
-    _lastOverridesHash = currentHash;
-
-    // 실제 변경사항이 있으면 업데이트 (즉시 setState, postFrameCallback 제거)
-    if (mounted) {
-      setState(() {
-        _overridesByDate.clear();
-        _overridesByDate.addAll(newOverridesByDate);
-      });
-    }
-  }
-
   @override
   void dispose() {
-    _sessionReservationSub?.cancel();
-    _capacityOverridesSub?.cancel();
     _scrollController.dispose();
     _shakeController?.dispose();
     super.dispose();
@@ -1085,33 +927,116 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     return CompactCalendarUsage.adminNavigate;
   }
 
+  /// 관리자 홈 / 마이페이지 / 예약 이동 선택에서 그리드 핀치 줌·축소 활성화
+  bool get _enableGridZoom =>
+      _usage == CompactCalendarUsage.adminNavigate ||
+      _usage == CompactCalendarUsage.userWeeklyReservationsView ||
+      _usage == CompactCalendarUsage.adminSelectNewSlot;
+
+  /// 내부 스크롤 막기: 확대 안 했을 때(_gridScale<=1), 핀치 중, 또는 손가락 2개 이상(핀치 우선)
+  bool get _blockInternalScroll =>
+      _enableGridZoom &&
+      (_gridScale <= 1.0 || _isPinching || _activePointers.length >= 2);
+
+  /// 확대 시(_gridScale>1): 세로 스크롤 허용.
+  /// courseDetailView: 눈금/세션박스 압축으로 자연스럽게 맞춤. 그래도 넘치면 스크롤 허용.
+  ScrollPhysics get _verticalScrollPhysics => const ClampingScrollPhysics();
+
+  /// 확대되지 않았을 때 스케일 제스처 종료 시 좌우 스와이프면 주차 변경 콜백 호출
+  void _handleScaleEnd(ScaleEndDetails details) {
+    setState(() => _isPinching = false);
+    if (_gridScale <= 1.0 && _pointerCountAtScaleStart <= 1) {
+      final vx = details.velocity.pixelsPerSecond.dx;
+      if (vx > 200 && widget.onSwipeToPrevWeek != null) {
+        widget.onSwipeToPrevWeek!();
+      } else if (vx < -200 && widget.onSwipeToNextWeek != null) {
+        widget.onSwipeToNextWeek!();
+      }
+    }
+  }
+
+  /// 확대 비활성 모드(핀치 없음)에서 좌우 스와이프로 주차 변경
+  void _handleHorizontalDragEnd(DragEndDetails details) {
+    if (details.primaryVelocity == null) return;
+    if (details.primaryVelocity! > 300 && widget.onSwipeToPrevWeek != null) {
+      widget.onSwipeToPrevWeek!();
+    } else if (details.primaryVelocity! < -300 &&
+        widget.onSwipeToNextWeek != null) {
+      widget.onSwipeToNextWeek!();
+    }
+  }
+
+  /// 핀치 스케일 즉시 반영 (한 프레임 지연 시 레이아웃 흔들림 방지). 호출은 제스처 콜백에서만 하므로 build 중 호출 아님.
+  void _applyGridScaleUpdate(double newScale) {
+    final clamped = newScale.clamp(1.0, 1.8);
+    if ((_gridScale - clamped).abs() < 0.001) return; // 변화 없으면 리빌드 생략
+    _pendingGridScale = clamped;
+    if (!mounted) return;
+    setState(() {
+      _gridScale = _pendingGridScale;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context); // AutomaticKeepAliveClientMixin을 위해 필요
-    // ReservationProvider를 listen하여 예약 변경사항 자동 반영
     Provider.of<ReservationProvider>(context);
-    // CourseProvider를 listen하여 비정기 일정 변경사항 자동 반영
-    // 주의: build 메서드에서는 직접 setState를 호출하지 않고, postFrameCallback으로 지연
-    Provider.of<CourseProvider>(context);
-    // 비정기 일정 업데이트 (중복 등록 방지 + 실제 변경 감지)
-    if (!widget.weeklyViewMode &&
-        _selectedCourse != null &&
-        !_pendingOverrideUpdate) {
-      _pendingOverrideUpdate = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _pendingOverrideUpdate = false;
-        if (mounted) {
-          _updateOverridesFromProvider();
+    // N/M 표시는 ReservationSummaryProvider 구독(setContext)에만 의존. watch로 변경 시 리빌드.
+    context.watch<ReservationSummaryProvider>();
+    // CourseProvider watch: 비정기 일정(override) 스트림 변경·저장 중 상태 변경 시 리빌드
+    final courseProvider = context.watch<CourseProvider>();
+
+    // ReservationSummaryProvider에 슬롯/오버라이드 전달 (N/M용). build 중 notifyListeners 금지 → 프레임 후 실행
+    if (!widget.weeklyViewMode && _selectedCourse != null) {
+      final placeId =
+          Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
+      if (placeId != null && placeId.isNotEmpty) {
+        final now = TimezoneUtils.getSeoulDateTime();
+        final offsets = widget.availableWeekOffsets ?? [widget.weekOffset];
+        final weekStarts =
+            offsets.map((o) => CalendarUtils.weekStartFrom(now, o)).toList();
+        if (weekStarts.isEmpty) {
+          weekStarts.add(CalendarUtils.weekStartFrom(now, widget.weekOffset));
         }
-      });
+        final weekStartDates =
+            weekStarts.map((d) => CalendarUtils.formatDateYMD(d)).toList();
+        courseProvider.subscribeToOverrides(placeId, weekStartDates);
+        final selectedCourseId = _selectedCourse!.id;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!context.mounted) return;
+          final cp = context.read<CourseProvider>();
+          final rsp = context.read<ReservationSummaryProvider>();
+          final placeIdRead = context.read<PlaceProvider>().currentPlace?.id;
+          if (placeIdRead != null && _selectedCourse != null) {
+            for (var i = 0; i < weekStarts.length; i++) {
+              final ws = weekStarts[i];
+              final weekStartDate = weekStartDates[i];
+              final startDate = DateTime(ws.year, ws.month, ws.day);
+              final overridesForCourse =
+                  cp
+                      .getOverridesForWeek(weekStartDate)
+                      .where((o) => o.courseId == selectedCourseId)
+                      .toList();
+              rsp.updateOverridesForWeek(weekStartDate, overridesForCourse);
+              final byDate = <String, List<CourseOverride>>{};
+              for (final o in overridesForCourse) {
+                byDate.putIfAbsent(o.date, () => <CourseOverride>[]).add(o);
+              }
+              final slots = SessionSlotBuilder.buildSlotsForWeek(
+                placeId: placeIdRead,
+                course: _selectedCourse!,
+                startDate: startDate,
+                overridesByDate: byDate,
+                getCapacityOverride: rsp.getCapacityOverride,
+              );
+              rsp.updateSessionSlots(weekStartDate, slots);
+            }
+          }
+        });
+      }
     }
     // 일정보기 모드인 경우
     if (widget.weeklyViewMode) {
-      if (widget.userReservations == null || widget.userReservations!.isEmpty) {
-        // 예약이 없을 때는 높이를 100px로 제한
-        return SizedBox(height: widget.height, child: _buildEmptyState());
-      }
-
       // 현재 주의 날짜들 계산 (이번주만)
       final today = TimezoneUtils.getSeoulDateTime();
       final daysFromMonday = today.weekday - 1;
@@ -1124,6 +1049,20 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       final allWeekDates = List.generate(7, (index) {
         return weekStart.add(Duration(days: index));
       });
+
+      // 예약이 없을 때: 이번주 월~금 5일 + 눈금만 표시 (빈 캘린더)
+      // admin_home과 동일: 스크롤 정책·확대 구조(header+grid 하나의 Transform.scale)
+      if (widget.userReservations == null || widget.userReservations!.isEmpty) {
+        final weekdaysOnly = allWeekDates.take(5).toList(); // 월~금
+        return SizedBox(
+          height: widget.height,
+          child: Column(
+            children: [
+              Expanded(child: _buildWeeklyViewModeContent(weekdaysOnly)),
+            ],
+          ),
+        );
+      }
 
       // 예약이 있는 날짜만 필터링 (취소된 비정기 세션의 예약은 제외)
       final courseProvider = Provider.of<CourseProvider>(context);
@@ -1142,7 +1081,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
               if (resDate != targetDate) return false;
 
               // 비정기 세션이 취소되었는지 확인
-              final dateString = _formatDate(date);
+              final dateString = CalendarUtils.formatDateYMD(date);
               final cancelledOverride = overrides.firstWhere(
                 (o) =>
                     o.courseId == reservation.courseId &&
@@ -1156,6 +1095,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                       courseId: '',
                       placeId: '',
                       date: '',
+                      sessionId: '',
+                      type: CourseOverrideType.cancel,
                       dayOfWeek: 0,
                       weekStartDate: '',
                       createdAt: DateTime.now(),
@@ -1177,22 +1118,10 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
         height: widget.height,
         child: Column(
           children: [
-            // 요일 헤더: 예약이 없는 주차면 헤더를 숨기고 빈 상태만 보여줌
-            if (datesToRender.isNotEmpty) _buildDayHeaders(datesToRender),
-            // 캘린더 그리드 / 빈 상태
-            Expanded(
-              child:
-                  datesToRender.isEmpty
-                      ? _buildEmptyState()
-                      : LayoutBuilder(
-                        builder: (context, constraints) {
-                          return _buildCalendarGrid(
-                            datesToRender,
-                            viewportHeight: constraints.maxHeight,
-                          );
-                        },
-                      ),
-            ),
+            if (datesToRender.isEmpty)
+              Expanded(child: _buildEmptyState())
+            else
+              Expanded(child: _buildWeeklyViewModeContent(datesToRender)),
           ],
         ),
       );
@@ -1235,8 +1164,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     bool hasSaturdayOverride = false;
     bool hasSundayOverride = false;
     for (final date in allWeekDates) {
-      final dateKey = _formatDate(date);
-      final dayOverrides = _overridesByDate[dateKey] ?? [];
+      final dayOverrides = _getOverridesForDate(context, date);
       for (final o in dayOverrides) {
         if (o.courseId != _selectedCourse!.id || o.isCancelled == true)
           continue;
@@ -1260,23 +1188,28 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       height: widget.height,
       child: Column(
         children: [
-          // 코스 선택 드롭다운
           if (!widget.hideCourseSelector) _buildCourseSelector(),
-          // 요일·날짜 헤더는 항상 표시
-          _buildDayHeaders(weekDates),
-          // 시간축 + 그리드(또는 스피너) 항상 표시
+          // 요일 헤더 + 그리드를 같은 가로 스크롤(contentWidth) 안에 넣어 헤더도 스케일/스크롤 동기화
           Expanded(
             child: LayoutBuilder(
               builder: (context, constraints) {
+                final viewportWidth = constraints.maxWidth;
                 final viewportHeight = constraints.maxHeight;
+                final layoutViewportHeight = (viewportHeight -
+                        _minBottomPadding)
+                    .clamp(1.0, double.infinity);
+                // 그리드 영역 = 전체 - 헤더 (header + contentHeight == viewportHeight 정확히 맞추기)
+                final gridAreaHeight = (layoutViewportHeight -
+                        _kDayHeaderHeight)
+                    .clamp(1.0, double.infinity);
                 final smart = _computeSmartRange(
                   dates: weekDates,
-                  viewportHeight: viewportHeight,
+                  viewportHeight: gridAreaHeight,
                 );
                 final layout = _buildSlotLayout(
                   dates: weekDates,
                   smart: smart,
-                  viewportHeight: viewportHeight,
+                  viewportHeight: gridAreaHeight,
                 );
                 final isLoading =
                     _isLoadingCourse || _isLoadingWeek || !_showGridAfterLoad;
@@ -1284,7 +1217,10 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                 if (!isLoading && !_didInitialJump) {
                   _didInitialJump = true;
                   WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (_scrollController.hasClients) {
+                    if (!mounted) return;
+                    // 단일 스크롤뷰에만 연결된 경우에만 jumpTo (다중 연결 시 assertion 방지)
+                    if (_scrollController.hasClients &&
+                        _scrollController.positions.length == 1) {
                       final targetMinute = layout.initialJumpMinute;
                       final targetY = layout.yForMinute(targetMinute);
                       _scrollController.jumpTo(
@@ -1297,80 +1233,302 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                   });
                 }
 
-                final contentHeight =
-                    layout.slotTops.isNotEmpty
-                        ? layout.slotTops.last
-                        : viewportHeight;
+                // double 오차 방지: 강제로 header + contentHeight == viewportHeight 맞춤
+                final contentHeight = gridAreaHeight;
+                // 실제 그리드 전체 폭 (timeColumn + dayColumns). Transform.scale은 레이아웃 크기를 안 바꿈.
+                final contentWidth = viewportWidth;
+                final scrollContentWidth =
+                    _enableGridZoom ? contentWidth * _gridScale : contentWidth;
+                final scrollContentHeight =
+                    _enableGridZoom
+                        ? contentHeight * _gridScale
+                        : contentHeight;
 
-                return Container(
-                  color: widget.backgroundColor ?? AppColors.backgroundWhite,
-                  child: SingleChildScrollView(
-                    controller: _scrollController,
-                    physics:
-                        _usage == CompactCalendarUsage.courseDetailView
-                            ? const NeverScrollableScrollPhysics()
-                            : null,
-                    child: SizedBox(
-                      height: contentHeight,
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _buildTimeColumn(layout),
-                          if (isLoading)
-                            Expanded(
-                              child: Center(
-                                child: Padding(
-                                  padding: const EdgeInsets.all(24),
-                                  child: CircularProgressIndicator(
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                      AppColors.primaryGreen,
+                // Transform.scale: child 레이아웃 크기는 그대로, 실제 그려지는 폭만 scale배. 따라서
+                // 스크롤 영역/외부 SizedBox는 반드시 contentWidth*scale, contentHeight*scale 사용.
+                final List<Widget> columnChildren;
+                if (_enableGridZoom) {
+                  // 헤더 고정 + 그리드만 세로 스크롤 (둘 다 scale 적용)
+                  columnChildren = [
+                    Expanded(
+                      child: Container(
+                        color:
+                            widget.backgroundColor ?? AppColors.backgroundWhite,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // 요일 헤더: 고정 (scrollContentWidth로 감싸 확대 시 잘림 방지)
+                            SizedBox(
+                              width: scrollContentWidth,
+                              height: _kDayHeaderHeight * _gridScale,
+                              child: Align(
+                                alignment: Alignment.topLeft,
+                                child: Transform.scale(
+                                  scale: _gridScale,
+                                  alignment: Alignment.topLeft,
+                                  child: SizedBox(
+                                    width: contentWidth,
+                                    height: _kDayHeaderHeight,
+                                    child: _buildDayHeaders(
+                                      weekDates,
+                                      contentWidth: contentWidth,
+                                      timeColumnWidth: _timeColumnWidth,
                                     ),
                                   ),
                                 ),
                               ),
-                            )
-                          else
-                            ...weekDates.asMap().entries.map((entry) {
-                              final index = entry.key;
-                              final date = entry.value;
-                              return Expanded(
-                                child: TweenAnimationBuilder<double>(
-                                  key: ValueKey(
-                                    'daycol_${widget.weekOffset}_$index',
-                                  ),
-                                  tween: Tween(begin: 0, end: 1),
-                                  duration: const Duration(milliseconds: 320),
-                                  curve: Curves.easeOut,
-                                  builder: (context, value, child) {
-                                    return Opacity(
-                                      opacity: value,
-                                      child: child,
-                                    );
-                                  },
-                                  child: Padding(
-                                    padding: EdgeInsets.only(
-                                      left: index > 0 ? _dateColumnSpacing : 0,
-                                    ),
-                                    child: _buildDayColumn(
-                                      date,
-                                      slots: layout.slots,
-                                      rangeStartMinutes:
-                                          smart.rangeStartMinutes,
-                                      slotTops: layout.slotTops,
-                                      slotHeights: layout.slotHeights,
-                                      yForMinute: layout.yForMinute,
-                                      slotIndexForMinute:
-                                          layout.slotIndexForMinute,
+                            ),
+                            // 그리드만 세로 스크롤
+                            Expanded(
+                              child: SingleChildScrollView(
+                                controller: _scrollController,
+                                physics: _verticalScrollPhysics,
+                                child: SizedBox(
+                                  width: scrollContentWidth,
+                                  height: contentHeight * _gridScale,
+                                  child: Align(
+                                    alignment: Alignment.topLeft,
+                                    child: Transform.scale(
+                                      scale: _gridScale,
+                                      alignment: Alignment.topLeft,
+                                      child: SizedBox(
+                                        width: contentWidth,
+                                        height: contentHeight,
+                                        child: Row(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            _buildTimeColumn(layout),
+                                            if (isLoading)
+                                              Expanded(
+                                                child: Center(
+                                                  child: Padding(
+                                                    padding:
+                                                        const EdgeInsets.all(
+                                                          24,
+                                                        ),
+                                                    child: CircularProgressIndicator(
+                                                      valueColor:
+                                                          AlwaysStoppedAnimation<
+                                                            Color
+                                                          >(
+                                                            AppColors
+                                                                .primaryGreen,
+                                                          ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              )
+                                            else
+                                              ...weekDates.asMap().entries.map((
+                                                entry,
+                                              ) {
+                                                final index = entry.key;
+                                                final date = entry.value;
+                                                return Expanded(
+                                                  child: TweenAnimationBuilder<
+                                                    double
+                                                  >(
+                                                    key: ValueKey(
+                                                      'daycol_${widget.weekOffset}_$index',
+                                                    ),
+                                                    tween: Tween(
+                                                      begin: 1,
+                                                      end: 1,
+                                                    ),
+                                                    duration: Duration.zero,
+                                                    builder: (
+                                                      context,
+                                                      value,
+                                                      child,
+                                                    ) {
+                                                      return Opacity(
+                                                        opacity: value,
+                                                        child: child,
+                                                      );
+                                                    },
+                                                    child: Padding(
+                                                      padding: EdgeInsets.only(
+                                                        left:
+                                                            index > 0
+                                                                ? _dateColumnSpacing
+                                                                : 0,
+                                                      ),
+                                                      child: _buildDayColumn(
+                                                        date,
+                                                        slots: layout.slots,
+                                                        rangeStartMinutes:
+                                                            smart
+                                                                .rangeStartMinutes,
+                                                        slotTops:
+                                                            layout.slotTops,
+                                                        slotHeights:
+                                                            layout.slotHeights,
+                                                        yForMinute:
+                                                            layout.yForMinute,
+                                                        slotIndexForMinute:
+                                                            layout
+                                                                .slotIndexForMinute,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                );
+                                              }),
+                                          ],
+                                        ),
+                                      ),
                                     ),
                                   ),
                                 ),
-                              );
-                            }),
-                        ],
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
+                    ),
+                  ];
+                } else {
+                  columnChildren = [
+                    _buildDayHeaders(
+                      weekDates,
+                      contentWidth: scrollContentWidth,
+                      timeColumnWidth: null,
+                    ),
+                    Expanded(
+                      child: Container(
+                        color:
+                            widget.backgroundColor ?? AppColors.backgroundWhite,
+                        child: SingleChildScrollView(
+                          controller: _scrollController,
+                          physics: _verticalScrollPhysics,
+                          child: SizedBox(
+                            width: scrollContentWidth,
+                            height: scrollContentHeight,
+                            child: SizedBox(
+                              height: contentHeight,
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  _buildTimeColumn(layout),
+                                  if (isLoading)
+                                    Expanded(
+                                      child: Center(
+                                        child: Padding(
+                                          padding: const EdgeInsets.all(24),
+                                          child: CircularProgressIndicator(
+                                            valueColor:
+                                                AlwaysStoppedAnimation<Color>(
+                                                  AppColors.primaryGreen,
+                                                ),
+                                          ),
+                                        ),
+                                      ),
+                                    )
+                                  else
+                                    ...weekDates.asMap().entries.map((entry) {
+                                      final index = entry.key;
+                                      final date = entry.value;
+                                      return Expanded(
+                                        child: TweenAnimationBuilder<double>(
+                                          key: ValueKey(
+                                            'daycol_${widget.weekOffset}_$index',
+                                          ),
+                                          tween: Tween(begin: 1, end: 1),
+                                          duration: Duration.zero,
+                                          builder: (context, value, child) {
+                                            return Opacity(
+                                              opacity: value,
+                                              child: child,
+                                            );
+                                          },
+                                          child: Padding(
+                                            padding: EdgeInsets.only(
+                                              left:
+                                                  index > 0
+                                                      ? _dateColumnSpacing
+                                                      : 0,
+                                            ),
+                                            child: _buildDayColumn(
+                                              date,
+                                              slots: layout.slots,
+                                              rangeStartMinutes:
+                                                  smart.rangeStartMinutes,
+                                              slotTops: layout.slotTops,
+                                              slotHeights: layout.slotHeights,
+                                              yForMinute: layout.yForMinute,
+                                              slotIndexForMinute:
+                                                  layout.slotIndexForMinute,
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    }),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ];
+                }
+                final Widget scrollContent = SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  physics:
+                      _blockInternalScroll
+                          ? const NeverScrollableScrollPhysics()
+                          : const ClampingScrollPhysics(),
+                  child: SizedBox(
+                    width: scrollContentWidth,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: columnChildren,
                     ),
                   ),
                 );
+                final gridWithFade = AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 200),
+                  switchInCurve: Curves.easeIn,
+                  child: KeyedSubtree(
+                    key: ValueKey(widget.weekOffset),
+                    child: scrollContent,
+                  ),
+                );
+                if (_enableGridZoom) {
+                  return Listener(
+                    onPointerDown: (e) {
+                      setState(() => _activePointers.add(e.pointer));
+                    },
+                    onPointerUp: (e) {
+                      setState(() => _activePointers.remove(e.pointer));
+                    },
+                    onPointerCancel: (e) {
+                      setState(() => _activePointers.remove(e.pointer));
+                    },
+                    child: GestureDetector(
+                      // deferToChild: 확대 시 단일 손가락 가로 드래그가 ScrollView에 전달되어 스크롤 가능
+                      behavior: HitTestBehavior.deferToChild,
+                      onScaleStart: (details) {
+                        _pointerCountAtScaleStart = _activePointers.length;
+                        _scaleStart = _gridScale;
+                        setState(() => _isPinching = true);
+                      },
+                      onScaleUpdate:
+                          (d) => _applyGridScaleUpdate(_scaleStart * d.scale),
+                      onScaleEnd: (details) => _handleScaleEnd(details),
+                      child: gridWithFade,
+                    ),
+                  );
+                }
+                if (widget.onSwipeToPrevWeek != null ||
+                    widget.onSwipeToNextWeek != null) {
+                  return GestureDetector(
+                    onHorizontalDragEnd: _handleHorizontalDragEnd,
+                    behavior: HitTestBehavior.opaque,
+                    child: gridWithFade,
+                  );
+                }
+                return gridWithFade;
               },
             ),
           ),
@@ -1461,15 +1619,17 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                 });
               },
               onSelected: (Course newCourse) async {
-                // 코스 변경 시 즉시 캐시 초기화 (UI 깜빡임 방지)
-                if (_selectedCourse?.id != newCourse.id) {
-                  _overridesByDate.clear();
-                  _sessionReservationsByKey.clear();
-                  _lastOverridesHash = null;
-                  _subscribedCourseId = null;
-                  _weekSubscriptionKey = null;
-                  _pendingOverrideUpdate = false;
+                // 이전과 같은 코스면 로딩/재구독 스킵 (드롭다운만 닫기)
+                if (_selectedCourse?.id == newCourse.id) {
+                  if (mounted) {
+                    setState(() => _isDropdownOpen = false);
+                  }
+                  return;
                 }
+
+                // 코스 변경 시 즉시 기존 구독 키 초기화 → 새 구독으로 전환
+                _subscribedCourseId = null;
+                _weekSubscriptionKey = null;
 
                 setState(() {
                   _selectedCourse = newCourse;
@@ -1478,12 +1638,10 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                   _isLoadingCourse = true; // 로딩 시작
                 });
 
-                // 콜백 호출
                 widget.onCourseSelected?.call(newCourse);
 
-                // 데이터 로드 (약간의 지연을 주어 UI가 먼저 업데이트되도록)
-                await Future.delayed(const Duration(milliseconds: 50));
-                _subscribeWeekSessionReservations();
+                // 즉시 ReservationSummaryProvider 구독 전환 (지연 시 이전 코스 N/새 코스 M 혼합 표시 버그 방지)
+                _ensureWeekSubscriptions(resetViewport: true);
                 await _subscribeWeekOverrides();
 
                 // 추가 지연으로 UI 안정화
@@ -1554,6 +1712,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
   // 빈 상태 UI
   Widget _buildEmptyState() {
     final message = widget.weeklyViewMode ? '예약이 없어요' : '아직 코스가 없어요';
+
+    // "예약이 없어요" 등 기타 빈 상태
     return Container(
       height: widget.height,
       color: widget.backgroundColor ?? AppColors.backgroundWhite,
@@ -1574,10 +1734,345 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     );
   }
 
-  // 요일 헤더
-  Widget _buildDayHeaders(List<DateTime> dates) {
-    const dayNames = ['', '월', '화', '수', '목', '금', '토', '일'];
+  /// weeklyViewMode용 캘린더 콘텐츠. admin_home과 동일한 스크롤 정책·확대 구조 사용.
+  Widget _buildWeeklyViewModeContent(List<DateTime> dates) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final viewportWidth = constraints.maxWidth;
+        final viewportHeight = constraints.maxHeight;
+        final layoutViewportHeight = (viewportHeight - _minBottomPadding).clamp(
+          1.0,
+          double.infinity,
+        );
+        // 그리드 영역 = 전체 - 헤더 (header + contentHeight == viewportHeight 정확히 맞추기)
+        final gridAreaHeight = (layoutViewportHeight - _kDayHeaderHeight).clamp(
+          1.0,
+          double.infinity,
+        );
+        final smart = _computeSmartRange(
+          dates: dates,
+          viewportHeight: gridAreaHeight,
+        );
+        final layout = _buildSlotLayout(
+          dates: dates,
+          smart: smart,
+          viewportHeight: gridAreaHeight,
+        );
+        final isLoading =
+            _isLoadingCourse || _isLoadingWeek || !_showGridAfterLoad;
 
+        if (!isLoading && !_didInitialJump) {
+          _didInitialJump = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            if (_scrollController.hasClients &&
+                _scrollController.positions.length == 1) {
+              final targetMinute = layout.initialJumpMinute;
+              final targetY = layout.yForMinute(targetMinute);
+              _scrollController.jumpTo(
+                targetY.clamp(0.0, _scrollController.position.maxScrollExtent),
+              );
+            }
+          });
+        }
+
+        // double 오차 방지: 강제로 header + contentHeight == viewportHeight 맞춤
+        final contentHeight = gridAreaHeight;
+        final contentWidth = viewportWidth;
+        final scrollContentWidth =
+            _enableGridZoom ? contentWidth * _gridScale : contentWidth;
+        final scrollContentHeight =
+            _enableGridZoom ? contentHeight * _gridScale : contentHeight;
+
+        final List<Widget> columnChildren;
+        if (_enableGridZoom) {
+          columnChildren = [
+            Expanded(
+              child: Container(
+                color: widget.backgroundColor ?? AppColors.backgroundWhite,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: scrollContentWidth,
+                      height: _kDayHeaderHeight * _gridScale,
+                      child: Align(
+                        alignment: Alignment.topLeft,
+                        child: Transform.scale(
+                          scale: _gridScale,
+                          alignment: Alignment.topLeft,
+                          child: SizedBox(
+                            width: contentWidth,
+                            height: _kDayHeaderHeight,
+                            child: _buildDayHeaders(
+                              dates,
+                              contentWidth: contentWidth,
+                              timeColumnWidth: _timeColumnWidth,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        controller: _scrollController,
+                        physics: _verticalScrollPhysics,
+                        child: SizedBox(
+                          width: scrollContentWidth,
+                          height: contentHeight * _gridScale,
+                          child: Align(
+                            alignment: Alignment.topLeft,
+                            child: Transform.scale(
+                              scale: _gridScale,
+                              alignment: Alignment.topLeft,
+                              child: SizedBox(
+                                width: contentWidth,
+                                height: contentHeight,
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    _buildTimeColumn(layout),
+                                    if (isLoading)
+                                      Expanded(
+                                        child: Center(
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(24),
+                                            child: CircularProgressIndicator(
+                                              valueColor:
+                                                  AlwaysStoppedAnimation<Color>(
+                                                    AppColors.primaryGreen,
+                                                  ),
+                                            ),
+                                          ),
+                                        ),
+                                      )
+                                    else
+                                      ...dates.asMap().entries.map((entry) {
+                                        final index = entry.key;
+                                        final date = entry.value;
+                                        return Expanded(
+                                          child: TweenAnimationBuilder<double>(
+                                            key: ValueKey(
+                                              'daycol_${widget.weekOffset}_$index',
+                                            ),
+                                            tween: Tween(begin: 1, end: 1),
+                                            duration: Duration.zero,
+                                            builder: (context, value, child) {
+                                              return Opacity(
+                                                opacity: value,
+                                                child: child,
+                                              );
+                                            },
+                                            child: Padding(
+                                              padding: EdgeInsets.only(
+                                                left:
+                                                    index > 0
+                                                        ? _dateColumnSpacing
+                                                        : 0,
+                                              ),
+                                              child: _buildDayColumn(
+                                                date,
+                                                slots: layout.slots,
+                                                rangeStartMinutes:
+                                                    smart.rangeStartMinutes,
+                                                slotTops: layout.slotTops,
+                                                slotHeights: layout.slotHeights,
+                                                yForMinute: layout.yForMinute,
+                                                slotIndexForMinute:
+                                                    layout.slotIndexForMinute,
+                                              ),
+                                            ),
+                                          ),
+                                        );
+                                      }),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ];
+        } else {
+          columnChildren = [
+            _buildDayHeaders(
+              dates,
+              contentWidth: scrollContentWidth,
+              timeColumnWidth: null,
+            ),
+            Expanded(
+              child: Container(
+                color: widget.backgroundColor ?? AppColors.backgroundWhite,
+                child: SingleChildScrollView(
+                  controller: _scrollController,
+                  physics: _verticalScrollPhysics,
+                  child: SizedBox(
+                    width: scrollContentWidth,
+                    height: scrollContentHeight,
+                    child: SizedBox(
+                      height: contentHeight,
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildTimeColumn(layout),
+                          if (isLoading)
+                            Expanded(
+                              child: Center(
+                                child: Padding(
+                                  padding: const EdgeInsets.all(24),
+                                  child: CircularProgressIndicator(
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      AppColors.primaryGreen,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            )
+                          else
+                            ...dates.asMap().entries.map((entry) {
+                              final index = entry.key;
+                              final date = entry.value;
+                              return Expanded(
+                                child: TweenAnimationBuilder<double>(
+                                  key: ValueKey(
+                                    'daycol_${widget.weekOffset}_$index',
+                                  ),
+                                  tween: Tween(begin: 1, end: 1),
+                                  duration: Duration.zero,
+                                  builder: (context, value, child) {
+                                    return Opacity(
+                                      opacity: value,
+                                      child: child,
+                                    );
+                                  },
+                                  child: Padding(
+                                    padding: EdgeInsets.only(
+                                      left: index > 0 ? _dateColumnSpacing : 0,
+                                    ),
+                                    child: _buildDayColumn(
+                                      date,
+                                      slots: layout.slots,
+                                      rangeStartMinutes:
+                                          smart.rangeStartMinutes,
+                                      slotTops: layout.slotTops,
+                                      slotHeights: layout.slotHeights,
+                                      yForMinute: layout.yForMinute,
+                                      slotIndexForMinute:
+                                          layout.slotIndexForMinute,
+                                    ),
+                                  ),
+                                ),
+                              );
+                            }),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ];
+        }
+
+        final scrollContent = SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          physics:
+              _blockInternalScroll
+                  ? const NeverScrollableScrollPhysics()
+                  : const ClampingScrollPhysics(),
+          child: SizedBox(
+            width: scrollContentWidth,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: columnChildren,
+            ),
+          ),
+        );
+
+        if (_enableGridZoom) {
+          return Listener(
+            onPointerDown: (e) {
+              setState(() => _activePointers.add(e.pointer));
+            },
+            onPointerUp: (e) {
+              setState(() => _activePointers.remove(e.pointer));
+            },
+            onPointerCancel: (e) {
+              setState(() => _activePointers.remove(e.pointer));
+            },
+            child: GestureDetector(
+              behavior: HitTestBehavior.deferToChild,
+              onScaleStart: (details) {
+                _pointerCountAtScaleStart = _activePointers.length;
+                _scaleStart = _gridScale;
+                setState(() => _isPinching = true);
+              },
+              onScaleUpdate:
+                  (d) => _applyGridScaleUpdate(_scaleStart * d.scale),
+              onScaleEnd: (details) => _handleScaleEnd(details),
+              child: scrollContent,
+            ),
+          );
+        }
+        return scrollContent;
+      },
+    );
+  }
+
+  // 요일 헤더. [contentWidth]가 주어지면 그 너비로 늘어나서 그리드와 같은 가로 스케일/스크롤에 맞춤.
+  // [timeColumnWidth] 확대 시 그리드 시간열과 정렬: 그리드는 Transform.scale로 확대되므로 시간열=35*scale, 헤더도 동일 비율 적용.
+  Widget _buildDayHeaders(
+    List<DateTime> dates, {
+    double? contentWidth,
+    double? timeColumnWidth,
+  }) {
+    const dayNames = ['', '월', '화', '수', '목', '금', '토', '일'];
+    final effectiveTimeWidth = timeColumnWidth ?? _timeColumnWidth;
+
+    Widget row = Row(
+      children: [
+        SizedBox(width: effectiveTimeWidth, child: Container()),
+        ...dates.map((date) {
+          return Expanded(
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Text(
+                    dayNames[date.weekday],
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w400,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                  Text(
+                    '${date.month}/${date.day}',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      letterSpacing: 1.5,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.textPrimary.withOpacity(0.9),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }).toList(),
+      ],
+    );
+    if (contentWidth != null && contentWidth.isFinite) {
+      row = SizedBox(width: contentWidth, child: row);
+    }
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8),
       decoration: BoxDecoration(
@@ -1586,41 +2081,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
           bottom: BorderSide(color: AppColors.borderLight, width: 1),
         ),
       ),
-      child: Row(
-        children: [
-          // 시간대 컬럼 (빈 공간)
-          SizedBox(width: _timeColumnWidth, child: Container()),
-          // 각 날짜 헤더 (요일 + 날짜)
-          ...dates.map((date) {
-            return Expanded(
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      dayNames[date.weekday],
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w400,
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                    Text(
-                      '${date.month}/${date.day}',
-                      style: TextStyle(
-                        letterSpacing: 1.5,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textPrimary.withOpacity(0.9),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          }).toList(),
-        ],
-      ),
+      child: row,
     );
   }
 
@@ -1659,112 +2120,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     );
   }
 
-  // 캘린더 그리드 (세션이 있는 구간만, 동적 스케일)
-  Widget _buildCalendarGrid(
-    List<DateTime> dates, {
-    required double viewportHeight,
-  }) {
-    final smart = _computeSmartRange(
-      dates: dates,
-      viewportHeight: viewportHeight,
-    );
-    final layout = _buildSlotLayout(
-      dates: dates,
-      smart: smart,
-      viewportHeight: viewportHeight,
-    );
-
-    // 진입 즉시 "세션 구간"을 최상단으로 보이게
-    if (!_didInitialJump) {
-      _didInitialJump = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_scrollController.hasClients) {
-          final targetMinute = layout.initialJumpMinute;
-          final targetY = layout.yForMinute(targetMinute);
-          _scrollController.jumpTo(
-            targetY.clamp(0.0, _scrollController.position.maxScrollExtent),
-          );
-        }
-      });
-    }
-
-    return Container(
-      color: widget.backgroundColor ?? AppColors.backgroundWhite,
-      child: SingleChildScrollView(
-        controller: _scrollController,
-        physics:
-            _usage == CompactCalendarUsage.courseDetailView
-                ? const NeverScrollableScrollPhysics()
-                : null,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 시간대 컬럼
-            Container(
-              width: _timeColumnWidth,
-              color: widget.backgroundColor ?? AppColors.backgroundWhite,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children:
-                    layout.slots.asMap().entries.map((entry) {
-                      final idx = entry.key;
-                      final slot = entry.value;
-                      final label = slot.label; // "11" or "…"
-                      final isActiveSlot = slot.isActive;
-                      return Container(
-                        height: layout.slotHeights[idx],
-                        alignment: Alignment.topRight,
-                        padding: EdgeInsets.only(
-                          right: _timeTextPaddingRight,
-                          top: 0,
-                        ),
-                        child: Text(
-                          label,
-                          style: TextStyle(
-                            fontSize:
-                                label == '…' ? 14 : (isActiveSlot ? 16 : 13),
-                            fontWeight:
-                                isActiveSlot
-                                    ? FontWeight.w600
-                                    : FontWeight.w400,
-                            color:
-                                isActiveSlot
-                                    ? AppColors.textSecondary
-                                    : AppColors.textSecondary.withOpacity(0.4),
-                            height: 1.0,
-                          ),
-                        ),
-                      );
-                    }).toList(),
-              ),
-            ),
-            // 각 날짜 컬럼
-            ...dates.asMap().entries.map((entry) {
-              final index = entry.key;
-              final date = entry.value;
-              return Expanded(
-                child: Padding(
-                  padding: EdgeInsets.only(
-                    left: index > 0 ? _dateColumnSpacing : 0,
-                  ),
-                  child: _buildDayColumn(
-                    date,
-                    slots: layout.slots,
-                    rangeStartMinutes: smart.rangeStartMinutes,
-                    slotTops: layout.slotTops,
-                    slotHeights: layout.slotHeights,
-                    yForMinute: layout.yForMinute,
-                    slotIndexForMinute: layout.slotIndexForMinute,
-                  ),
-                ),
-              );
-            }).toList(),
-          ],
-        ),
-      ),
-    );
-  }
-
   _SmartRange _computeSmartRange({
     required List<DateTime> dates,
     required double viewportHeight,
@@ -1778,14 +2133,14 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
           startHour: 9,
           endHour: 18,
           slotCount: 9,
-          hourSlotHeight: _minHourSlotHeight,
+          hourSlotHeight: _effectiveMinHourSlotHeight,
         );
       }
 
       // 예약된 세션들의 시간 범위 계산
       // - 정기 세션이 없으면 override(비정기) 확인
       // - 그래도 없으면 예약 정보로 fallback(기본 2시간)
-      final weekStart = _startOfWeekMonday(dates.first);
+      final weekStart = CalendarUtils.startOfWeekMonday(dates.first);
       final weekStartDate = TimezoneUtils.formatDateToSeoul(weekStart);
       final courseProvider = Provider.of<CourseProvider>(
         context,
@@ -1830,7 +2185,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
               reservation.reservedDate.month,
               reservation.reservedDate.day,
             );
-            final dateString = _formatDate(dateOnly);
+            final dateString = CalendarUtils.formatDateYMD(dateOnly);
 
             final override = overrides.cast<CourseOverride?>().firstWhere(
               (o) =>
@@ -1854,15 +2209,15 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
               endTime = override.endTime!;
             } else {
               startTime = reservation.startTime;
-              final startMinutes = _parseTimeToMinutes(startTime);
+              final startMinutes = CalendarUtils.parseTimeToMinutes(startTime);
               final endMinutes = startMinutes + 120; // 기본 2시간
               endTime =
                   '${(endMinutes ~/ 60).toString().padLeft(2, '0')}:${(endMinutes % 60).toString().padLeft(2, '0')}';
             }
           }
 
-          final startMins = _parseTimeToMinutes(startTime);
-          final endMins = _parseTimeToMinutes(endTime);
+          final startMins = CalendarUtils.parseTimeToMinutes(startTime);
+          final endMins = CalendarUtils.parseTimeToMinutes(endTime);
           reservationTimes.add(startMins);
           reservationTimes.add(endMins);
           if (endMins > startMins) {
@@ -1881,7 +2236,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
           startHour: 9,
           endHour: 18,
           slotCount: 9,
-          hourSlotHeight: _minHourSlotHeight,
+          hourSlotHeight: _effectiveMinHourSlotHeight,
         );
       }
 
@@ -1890,10 +2245,10 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
 
       final optimalHourSlotHeight =
           maxSessionDuration >= 180
-              ? 45.0
+              ? 38.0
               : maxSessionDuration >= 120
-              ? 50.0
-              : _minHourSlotHeight;
+              ? 40.0
+              : _effectiveMinHourSlotHeight;
 
       var rangeStart = _floorToHour(
         (minStart - _basePaddingMinutes).clamp(0, 24 * 60),
@@ -1959,7 +2314,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
         startHour: 9,
         endHour: 18,
         slotCount: 9,
-        hourSlotHeight: _minHourSlotHeight,
+        hourSlotHeight: _effectiveMinHourSlotHeight,
       );
     }
 
@@ -1970,7 +2325,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     );
 
     // 비정기 일정도 포함 (뷰포트 범위 계산에 필요)
-    final weekStart = _startOfWeekMonday(dates.first);
+    final weekStart = CalendarUtils.startOfWeekMonday(dates.first);
     final weekStartDate = TimezoneUtils.formatDateToSeoul(weekStart);
     final courseProvider = Provider.of<CourseProvider>(context, listen: false);
     final weekOverrides =
@@ -2008,20 +2363,24 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
         startHour: 9,
         endHour: 18,
         slotCount: 9,
-        hourSlotHeight: _minHourSlotHeight,
+        hourSlotHeight: _effectiveMinHourSlotHeight,
       );
     }
 
-    final starts = allSessions.map((s) => _parseTimeToMinutes(s.startTime));
-    final ends = allSessions.map((s) => _parseTimeToMinutes(s.endTime));
+    final starts = allSessions.map(
+      (s) => CalendarUtils.parseTimeToMinutes(s.startTime),
+    );
+    final ends = allSessions.map(
+      (s) => CalendarUtils.parseTimeToMinutes(s.endTime),
+    );
     final minStart = starts.reduce((a, b) => a < b ? a : b);
     final maxEnd = ends.reduce((a, b) => a > b ? a : b);
 
     // 세션 지속 시간을 기반으로 동적 최적 높이 계산
     double maxSessionDuration = 0;
     for (final session in allSessions) {
-      final start = _parseTimeToMinutes(session.startTime);
-      final end = _parseTimeToMinutes(session.endTime);
+      final start = CalendarUtils.parseTimeToMinutes(session.startTime);
+      final end = CalendarUtils.parseTimeToMinutes(session.endTime);
       if (end > start) {
         final duration = end - start;
         if (duration > maxSessionDuration) {
@@ -2030,14 +2389,17 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       }
     }
 
-    // 세션 블록이 잘 보이기 위한 최적 높이 계산
-    // 세션이 길면 시간 간격을 줄여서 전체가 보이도록, 짧으면 시간 간격을 늘려서 한눈에 보이도록
+    // 세션 블록이 잘 보이기 위한 최적 높이 (스크롤 최소화로 컴팩트하게)
     final optimalHourSlotHeight =
         maxSessionDuration >= 180
-            ? 45.0 // 3시간 이상 세션: 시간 간격을 줄여서 전체가 보이도록
+            ? (_usage == CompactCalendarUsage.courseDetailView
+                ? 28.0
+                : 38.0) // 3시간 이상
             : maxSessionDuration >= 120
-            ? 50.0 // 2-3시간 세션: 중간 높이
-            : _minHourSlotHeight; // 2시간 미만: 기본 높이 (60px)로 한눈에 보이도록
+            ? (_usage == CompactCalendarUsage.courseDetailView
+                ? 30.0
+                : 40.0) // 2-3시간
+            : _effectiveMinHourSlotHeight; // 2시간 미만
 
     // 2시간 여백 + 시간 단위 정렬 + 경계 여백
     var rangeStart = _floorToHour(
@@ -2118,7 +2480,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       final weekdays = dates.map((d) => d.weekday).toSet();
       final activeRanges = <List<int>>[]; // [startMinute, endMinute]
 
-      final weekStart = _startOfWeekMonday(dates.first);
+      final weekStart = CalendarUtils.startOfWeekMonday(dates.first);
       final weekStartDate = TimezoneUtils.formatDateToSeoul(weekStart);
       final courseProvider = Provider.of<CourseProvider>(
         context,
@@ -2161,7 +2523,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
               reservation.reservedDate.month,
               reservation.reservedDate.day,
             );
-            final dateString = _formatDate(dateOnly);
+            final dateString = CalendarUtils.formatDateYMD(dateOnly);
 
             final override = overrides.cast<CourseOverride?>().firstWhere(
               (o) =>
@@ -2185,7 +2547,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
               endTime = override.endTime!;
             } else {
               startTime = reservation.startTime;
-              final startMinutes = _parseTimeToMinutes(startTime);
+              final startMinutes = CalendarUtils.parseTimeToMinutes(startTime);
               final endMinutes = startMinutes + 120; // 기본 2시간
               endTime =
                   '${(endMinutes ~/ 60).toString().padLeft(2, '0')}:${(endMinutes % 60).toString().padLeft(2, '0')}';
@@ -2193,8 +2555,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
           }
 
           activeRanges.add([
-            _parseTimeToMinutes(startTime),
-            _parseTimeToMinutes(endTime),
+            CalendarUtils.parseTimeToMinutes(startTime),
+            CalendarUtils.parseTimeToMinutes(endTime),
           ]);
         }
       }
@@ -2239,51 +2601,74 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
         );
       }
 
-      // 긴 공백 합치기
+      // 긴 공백 합치기 (예약 없을 때는 합치지 않아서 시간 눈금이 보이도록 함)
       final slots = <_TimeSlot>[];
-      int i = 0;
-      while (i < rawSlots.length) {
-        final slot = rawSlots[i];
-        if (slot.isActive) {
-          slots.add(slot);
-          i++;
-          continue;
-        }
-
-        int j = i;
-        while (j < rawSlots.length && !rawSlots[j].isActive) {
-          j++;
-        }
-        final gapHours = j - i;
-        if (gapHours >= _mergeGapMinHours) {
-          slots.add(
-            _TimeSlot(
-              startMinute: rawSlots[i].startMinute,
-              endMinute: rawSlots[j - 1].endMinute,
-              label: '…',
-              isActive: false,
-              isMergedGap: true,
-            ),
-          );
-        } else {
-          for (int k = i; k < j; k++) {
-            slots.add(rawSlots[k]);
+      final bool noReservations =
+          widget.weeklyViewMode &&
+          (widget.userReservations == null || widget.userReservations!.isEmpty);
+      if (noReservations) {
+        slots.addAll(rawSlots);
+      } else {
+        int i = 0;
+        while (i < rawSlots.length) {
+          final slot = rawSlots[i];
+          if (slot.isActive) {
+            slots.add(slot);
+            i++;
+            continue;
           }
+
+          int j = i;
+          while (j < rawSlots.length && !rawSlots[j].isActive) {
+            j++;
+          }
+          final gapHours = j - i;
+          if (gapHours >= _mergeGapMinHours) {
+            slots.add(
+              _TimeSlot(
+                startMinute: rawSlots[i].startMinute,
+                endMinute: rawSlots[j - 1].endMinute,
+                label: '…',
+                isActive: false,
+                isMergedGap: true,
+              ),
+            );
+          } else {
+            for (int k = i; k < j; k++) {
+              slots.add(rawSlots[k]);
+            }
+          }
+          i = j;
         }
-        i = j;
       }
 
       // 슬롯 높이 설정
       final baseSlotHeight = smart.hourSlotHeight;
-      final slotHeights = List<double>.filled(slots.length, baseSlotHeight);
-      for (int idx = 0; idx < slots.length; idx++) {
-        final s = slots[idx];
-        if (s.isActive) {
-          slotHeights[idx] = baseSlotHeight;
-        } else if (s.isMergedGap) {
-          slotHeights[idx] = _mergedGapSlotHeight;
-        } else {
-          slotHeights[idx] = _minGapHourSlotHeight;
+      List<double> slotHeights = List<double>.filled(
+        slots.length,
+        baseSlotHeight,
+      );
+      if (noReservations && slots.isNotEmpty) {
+        // 예약 없을 때: 눈금만 균등 높이로
+        final equalHeight = viewportHeight / slots.length;
+        slotHeights = List<double>.filled(slots.length, equalHeight);
+      } else {
+        for (int idx = 0; idx < slots.length; idx++) {
+          final s = slots[idx];
+          if (s.isActive) {
+            slotHeights[idx] = baseSlotHeight;
+          } else if (s.isMergedGap) {
+            final gapHours = ((s.endMinute - s.startMinute) / 60).round().clamp(
+              1,
+              24,
+            );
+            slotHeights[idx] = (_effectiveMergedGapPxPerHour * gapHours).clamp(
+              _effectiveMergedGapSlotHeight,
+              baseSlotHeight * gapHours * 0.6,
+            );
+          } else {
+            slotHeights[idx] = _effectiveMinGapHourSlotHeight;
+          }
         }
       }
 
@@ -2293,8 +2678,9 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       if (currentTotal > viewportHeight) {
         for (int idx = 0; idx < slots.length; idx++) {
           if (currentTotal <= viewportHeight) break;
-          if (slots[idx].isMergedGap && slotHeights[idx] > 12.0) {
-            final reducible = slotHeights[idx] - 12.0;
+          if (slots[idx].isMergedGap &&
+              slotHeights[idx] > _effectiveMergedGapSlotHeight) {
+            final reducible = slotHeights[idx] - _effectiveMergedGapSlotHeight;
             final need = currentTotal - viewportHeight;
             final reduce = reducible < need ? reducible : need;
             slotHeights[idx] -= reduce;
@@ -2305,8 +2691,9 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
         for (int idx = 0; idx < slots.length; idx++) {
           if (currentTotal <= viewportHeight) break;
           if (!slots[idx].isActive && !slots[idx].isMergedGap) {
-            if (slotHeights[idx] > _minGapHourSlotHeight) {
-              final reducible = slotHeights[idx] - _minGapHourSlotHeight;
+            if (slotHeights[idx] > _effectiveMinGapHourSlotHeight) {
+              final reducible =
+                  slotHeights[idx] - _effectiveMinGapHourSlotHeight;
               final need = currentTotal - viewportHeight;
               final reduce = reducible < need ? reducible : need;
               slotHeights[idx] -= reduce;
@@ -2321,10 +2708,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
           for (int idx = 0; idx < slots.length; idx++) {
             if (!slots[idx].isActive) continue;
             activeIndices.add(idx);
-            totalReducible += (slotHeights[idx] - _minActiveSlotHeight).clamp(
-              0.0,
-              double.infinity,
-            );
+            totalReducible += (slotHeights[idx] - _effectiveMinActiveSlotHeight)
+                .clamp(0.0, double.infinity);
           }
 
           if (activeIndices.isNotEmpty && totalReducible > 0) {
@@ -2332,10 +2717,9 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
             final ratio = (need / totalReducible).clamp(0.0, 1.0);
             double reduced = 0.0;
             for (final idx in activeIndices) {
-              final reducible = (slotHeights[idx] - _minActiveSlotHeight).clamp(
-                0.0,
-                double.infinity,
-              );
+              final reducible = (slotHeights[idx] -
+                      _effectiveMinActiveSlotHeight)
+                  .clamp(0.0, double.infinity);
               final reduce = reducible * ratio;
               slotHeights[idx] -= reduce;
               reduced += reduce;
@@ -2381,6 +2765,25 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
         currentTotal = slotHeights.fold<double>(0.0, (s, h) => s + h);
       }
 
+      // 5) double 오차 방지: slotHeights 합이 정확히 viewportHeight가 되도록 스케일
+      currentTotal = slotHeights.fold<double>(0.0, (s, h) => s + h);
+      if (currentTotal > 0 && (currentTotal - viewportHeight).abs() > 0.001) {
+        final scale = viewportHeight / currentTotal;
+        for (int idx = 0; idx < slots.length; idx++) {
+          slotHeights[idx] *= scale;
+        }
+      }
+      // 6) 마지막 강제 맞춤: double 오차로 1px 밀림 방지
+      currentTotal = slotHeights.fold<double>(0.0, (s, h) => s + h);
+      final diff = viewportHeight - currentTotal;
+      if (diff != 0 && slots.isNotEmpty) {
+        final lastIdx = slots.length - 1;
+        slotHeights[lastIdx] = (slotHeights[lastIdx] + diff).clamp(
+          0.0,
+          double.infinity,
+        );
+      }
+
       final slotTops = List<double>.filled(slots.length + 1, 0.0);
       for (int idx = 0; idx < slots.length; idx++) {
         slotTops[idx + 1] = slotTops[idx] + slotHeights[idx];
@@ -2415,29 +2818,15 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
         ) ??
         <CourseSession>[];
 
-    // 비정기 일정 추가 (CourseProvider의 실시간 업데이트 사용)
-    final weekStart = _startOfWeekMonday(dates.first);
+    // 비정기 일정: CourseProvider 결과만 사용
+    final weekStart = CalendarUtils.startOfWeekMonday(dates.first);
     final weekStartDate = TimezoneUtils.formatDateToSeoul(weekStart);
     final courseProvider = Provider.of<CourseProvider>(context, listen: false);
-    // _overridesByDate를 우선 사용 (더 최신 데이터), 없으면 CourseProvider 사용
-    final weekOverrides = <CourseOverride>[];
-    for (final date in dates) {
-      final dateString = _formatDate(date);
-      final dayOverrides = _overridesByDate[dateString] ?? [];
-      weekOverrides.addAll(
-        dayOverrides.where(
-          (o) => o.courseId == _selectedCourse?.id && !o.isCancelled,
-        ),
-      );
-    }
-    // _overridesByDate에 없는 경우에만 CourseProvider 사용 (fallback)
-    if (weekOverrides.isEmpty) {
-      weekOverrides.addAll(
+    final weekOverrides =
         courseProvider
             .getOverridesForWeek(weekStartDate)
-            .where((o) => o.courseId == _selectedCourse?.id && !o.isCancelled),
-      );
-    }
+            .where((o) => o.courseId == _selectedCourse?.id && !o.isCancelled)
+            .toList();
 
     // 추가된 비정기 일정을 CourseSession으로 변환
     final overrideSessions =
@@ -2466,8 +2855,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     final activePerHour = List<bool>.filled(hourSlotCount, false);
     int? minSessionStart;
     for (final s in sessions) {
-      final start = _parseTimeToMinutes(s.startTime);
-      final end = _parseTimeToMinutes(s.endTime);
+      final start = CalendarUtils.parseTimeToMinutes(s.startTime);
+      final end = CalendarUtils.parseTimeToMinutes(s.endTime);
       if (end <= start) continue;
       minSessionStart =
           minSessionStart == null
@@ -2533,7 +2922,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       i = j;
     }
 
-    // 3) 기본 슬롯 높이 설정
+    // 3) 기본 슬롯 높이 설정 (병합 공백은 시간 길이에 비례)
     final baseSlotHeight = smart.hourSlotHeight;
     final slotHeights = List<double>.filled(slots.length, baseSlotHeight);
     for (int idx = 0; idx < slots.length; idx++) {
@@ -2541,9 +2930,16 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       if (s.isActive) {
         slotHeights[idx] = baseSlotHeight;
       } else if (s.isMergedGap) {
-        slotHeights[idx] = _mergedGapSlotHeight;
+        final gapHours = ((s.endMinute - s.startMinute) / 60).round().clamp(
+          1,
+          24,
+        );
+        slotHeights[idx] = (_effectiveMergedGapPxPerHour * gapHours).clamp(
+          _effectiveMergedGapSlotHeight,
+          baseSlotHeight * gapHours * 0.6,
+        );
       } else {
-        slotHeights[idx] = _minGapHourSlotHeight;
+        slotHeights[idx] = _effectiveMinGapHourSlotHeight;
       }
     }
 
@@ -2552,11 +2948,12 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
 
     // (a) 너무 크면: gap 먼저 더 줄이고, 그래도 크면 active도 최소까지만 줄임
     if (currentTotal > viewportHeight) {
-      // merged gap: 더 압축 가능(최소 12px)
+      // merged gap: 더 압축 가능(최소 _effectiveMergedGapSlotHeight)
       for (int idx = 0; idx < slots.length; idx++) {
         if (currentTotal <= viewportHeight) break;
-        if (slots[idx].isMergedGap && slotHeights[idx] > 12.0) {
-          final reducible = slotHeights[idx] - 12.0;
+        if (slots[idx].isMergedGap &&
+            slotHeights[idx] > _effectiveMergedGapSlotHeight) {
+          final reducible = slotHeights[idx] - _effectiveMergedGapSlotHeight;
           final need = currentTotal - viewportHeight;
           final reduce = reducible < need ? reducible : need;
           slotHeights[idx] -= reduce;
@@ -2564,12 +2961,12 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
         }
       }
 
-      // 일반 gap: _minGapHourSlotHeight까지는 이미 설정되어 있지만, 혹시라도 늘어났다면 다시 줄이기
+      // 일반 gap: _effectiveMinGapHourSlotHeight까지는 이미 설정되어 있지만, 혹시라도 늘어났다면 다시 줄이기
       for (int idx = 0; idx < slots.length; idx++) {
         if (currentTotal <= viewportHeight) break;
         if (!slots[idx].isActive && !slots[idx].isMergedGap) {
-          if (slotHeights[idx] > _minGapHourSlotHeight) {
-            final reducible = slotHeights[idx] - _minGapHourSlotHeight;
+          if (slotHeights[idx] > _effectiveMinGapHourSlotHeight) {
+            final reducible = slotHeights[idx] - _effectiveMinGapHourSlotHeight;
             final need = currentTotal - viewportHeight;
             final reduce = reducible < need ? reducible : need;
             slotHeights[idx] -= reduce;
@@ -2585,10 +2982,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
         for (int idx = 0; idx < slots.length; idx++) {
           if (!slots[idx].isActive) continue;
           activeIndices.add(idx);
-          totalReducible += (slotHeights[idx] - _minActiveSlotHeight).clamp(
-            0.0,
-            double.infinity,
-          );
+          totalReducible += (slotHeights[idx] - _effectiveMinActiveSlotHeight)
+              .clamp(0.0, double.infinity);
         }
 
         if (activeIndices.isNotEmpty && totalReducible > 0) {
@@ -2596,10 +2991,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
           final ratio = (need / totalReducible).clamp(0.0, 1.0);
           double reduced = 0.0;
           for (final idx in activeIndices) {
-            final reducible = (slotHeights[idx] - _minActiveSlotHeight).clamp(
-              0.0,
-              double.infinity,
-            );
+            final reducible = (slotHeights[idx] - _effectiveMinActiveSlotHeight)
+                .clamp(0.0, double.infinity);
             final reduce = reducible * ratio;
             slotHeights[idx] -= reduce;
             reduced += reduce;
@@ -2650,6 +3043,25 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       currentTotal = slotHeights.fold<double>(0.0, (s, h) => s + h);
     }
 
+    // 5) double 오차 방지: slotHeights 합이 정확히 viewportHeight가 되도록 스케일
+    currentTotal = slotHeights.fold<double>(0.0, (s, h) => s + h);
+    if (currentTotal > 0 && (currentTotal - viewportHeight).abs() > 0.001) {
+      final scale = viewportHeight / currentTotal;
+      for (int idx = 0; idx < slots.length; idx++) {
+        slotHeights[idx] *= scale;
+      }
+    }
+    // 6) 마지막 강제 맞춤: double 오차로 1px 밀림 방지
+    currentTotal = slotHeights.fold<double>(0.0, (s, h) => s + h);
+    final diff = viewportHeight - currentTotal;
+    if (diff != 0 && slots.isNotEmpty) {
+      final lastIdx = slots.length - 1;
+      slotHeights[lastIdx] = (slotHeights[lastIdx] + diff).clamp(
+        0.0,
+        double.infinity,
+      );
+    }
+
     // prefix sum (slotTops)
     final slotTops = List<double>.filled(slots.length + 1, 0.0);
     for (int idx = 0; idx < slots.length; idx++) {
@@ -2688,14 +3100,33 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     // 일정보기 모드인 경우
     if (widget.weeklyViewMode) {
       if (widget.userReservations == null || widget.userReservations!.isEmpty) {
+        // 예약 없을 때: 눈금만 (가로 시간선만 표시)
         final totalHeight = slotTops.isNotEmpty ? slotTops.last : 0.0;
         return Container(
-          height: totalHeight,
           decoration: BoxDecoration(
-            color: AppColors.backgroundWhite,
+            color: widget.backgroundColor ?? AppColors.backgroundWhite,
             border: Border(
               left: BorderSide(color: AppColors.borderLight, width: 0.5),
             ),
+          ),
+          height: totalHeight,
+          clipBehavior: Clip.none,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              ...slots.asMap().entries.map((entry) {
+                final index = entry.key;
+                return Positioned(
+                  top: slotTops[index] + _lineOffset,
+                  left: 0,
+                  right: 0,
+                  child: Container(
+                    height: 0.5,
+                    color: AppColors.borderLight.withOpacity(0.2),
+                  ),
+                );
+              }).toList(),
+            ],
           ),
         );
       }
@@ -2743,10 +3174,10 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
 
         // 정기 세션이 없으면 비정기 세션 확인
         if (session == null) {
-          final dateString = _formatDate(date);
+          final dateString = CalendarUtils.formatDateYMD(date);
           // listen: true로 변경하여 비정기 세션이 로드되면 위젯이 리빌드되도록 함
           final courseProvider = Provider.of<CourseProvider>(context);
-          final weekStart = _startOfWeekMonday(date);
+          final weekStart = CalendarUtils.startOfWeekMonday(date);
           final weekStartDate = TimezoneUtils.formatDateToSeoul(weekStart);
           final overrides = courseProvider.getOverridesForWeek(weekStartDate);
 
@@ -2802,7 +3233,9 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
             } else {
               // override를 찾지 못했지만 예약 정보가 있으면 fallback으로 세션 생성
               // (비정기 세션이 아직 로드되지 않았을 수 있으므로 예약 정보로 표시)
-              final startMinutes = _parseTimeToMinutes(reservation.startTime);
+              final startMinutes = CalendarUtils.parseTimeToMinutes(
+                reservation.startTime,
+              );
               final endMinutes = startMinutes + 120; // 기본 2시간
               final endTime =
                   '${(endMinutes ~/ 60).toString().padLeft(2, '0')}:${(endMinutes % 60).toString().padLeft(2, '0')}';
@@ -2820,7 +3253,9 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
         // ignore: unnecessary_null_comparison
         if (session == null) continue;
 
-        final sessionStartMinutes = _parseTimeToMinutes(session.startTime);
+        final sessionStartMinutes = CalendarUtils.parseTimeToMinutes(
+          session.startTime,
+        );
         if (sessionStartMinutes < rangeStartMinutes) continue;
         if (sessionStartMinutes >=
             (slots.isNotEmpty ? slots.last.endMinute : rangeStartMinutes))
@@ -2829,7 +3264,9 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
         final idx = slotIndexForMinute(sessionStartMinutes);
         if (idx < 0 || idx >= slots.length) continue;
         if (!sessionStartSlots.containsKey(idx) ||
-            _parseTimeToMinutes(sessionStartSlots[idx]!.session.startTime) >
+            CalendarUtils.parseTimeToMinutes(
+                  sessionStartSlots[idx]!.session.startTime,
+                ) >
                 sessionStartMinutes) {
           sessionStartSlots[idx] = _ReservationSessionInfo(
             course: course,
@@ -2914,9 +3351,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     // 정기 일정 가져오기
     final regularSessions = _selectedCourse!.getSessionsByDay(date.weekday);
 
-    // 비정기 일정 확인
-    final dateString = _formatDate(date);
-    final dayOverrides = _overridesByDate[dateString] ?? [];
+    // 비정기 일정 확인 (CourseProvider에서만 조회)
+    final dayOverrides = _getOverridesForDate(context, date);
 
     // 취소된 정기 일정 필터링
     final cancelledStartTimes =
@@ -2957,7 +3393,9 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     final sessionStartSlots = <int, CourseSession>{};
 
     for (final session in daySessions) {
-      final sessionStartMinutes = _parseTimeToMinutes(session.startTime);
+      final sessionStartMinutes = CalendarUtils.parseTimeToMinutes(
+        session.startTime,
+      );
       // 표시 범위 밖이면 스킵
       if (sessionStartMinutes < rangeStartMinutes) continue;
       if (sessionStartMinutes >=
@@ -2967,7 +3405,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       final idx = slotIndexForMinute(sessionStartMinutes);
       if (idx < 0 || idx >= slots.length) continue;
       if (!sessionStartSlots.containsKey(idx) ||
-          _parseTimeToMinutes(sessionStartSlots[idx]!.startTime) >
+          CalendarUtils.parseTimeToMinutes(sessionStartSlots[idx]!.startTime) >
               sessionStartMinutes) {
         sessionStartSlots[idx] = session;
       }
@@ -3043,8 +3481,10 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     final date = info.date;
 
     // 세션의 실제 시작/끝 시간 (분 단위)
-    final sessionStartMinutes = _parseTimeToMinutes(session.startTime);
-    final sessionEndMinutes = _parseTimeToMinutes(session.endTime);
+    final sessionStartMinutes = CalendarUtils.parseTimeToMinutes(
+      session.startTime,
+    );
+    final sessionEndMinutes = CalendarUtils.parseTimeToMinutes(session.endTime);
 
     // 비선형(공백 압축) 포함한 위치/높이
     final topPosition = yForMinute(sessionStartMinutes) + _lineOffset;
@@ -3076,14 +3516,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
         date.day ==
             (widget.highlightReservation!['reservedDate'] as DateTime).day;
 
-    // 방문 완료된 경우 회색, 아니면 코스 색상
-    final baseColor =
-        isVisited ? AppColors.reservedGrey : info.course.colorValue;
-
-    final textColor = isVisited ? AppColors.reservedTextGrey : Colors.white;
-    final iconColor =
-        isVisited ? AppColors.reservedIconGrey : Colors.white.withOpacity(0.9);
-
     // 예약 처리 중인지 확인 (ReservationProvider 사용)
     final placeId =
         Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id ??
@@ -3105,15 +3537,17 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     final isProcessing =
         processingKey != null &&
         reservationProvider.isOperationInFlightByKey(processingKey);
-    final operationType =
-        processingKey != null
-            ? reservationProvider.getOperationTypeByKey(processingKey)
-            : null;
 
-    // 처리 중일 때 배경색 조정
-    final blockColor = isProcessing ? baseColor.withOpacity(0.45) : baseColor;
-    // 처리 중 로딩/텍스트는 항상 흰색으로 고정 (iconColor가 회색일 때 검정으로 깜빡이는 현상 방지)
-    const Color processingUiColor = Colors.white;
+    final blockType =
+        isProcessing
+            ? SessionBlockType.processing
+            : isVisited
+            ? SessionBlockType.locked
+            : SessionBlockType.reserved;
+    final blockStyle = SessionBlockStyle.fromType(
+      blockType,
+      courseColor: info.course.colorValue,
+    );
 
     return Positioned(
       top: topPosition,
@@ -3143,17 +3577,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                           horizontal: 12,
                           vertical: sessionHeightPx >= 50 ? 8 : 6,
                         ),
-                        decoration: BoxDecoration(
-                          color: blockColor,
-                          borderRadius: BorderRadius.circular(12),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.1),
-                              blurRadius: 4,
-                              offset: const Offset(0, 2),
-                            ),
-                          ],
-                        ),
+                        decoration: blockStyle.toBoxDecoration(),
                         child: child,
                       ),
                     );
@@ -3172,7 +3596,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                               Text(
                                 info.course.name,
                                 style: TextStyle(
-                                  color: textColor,
+                                  color: blockStyle.textColor,
                                   fontSize:
                                       sessionHeightPx >= 60
                                           ? 22
@@ -3187,7 +3611,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                                 Text(
                                   '${session.startTime} - ${session.endTime}',
                                   style: TextStyle(
-                                    color: iconColor,
+                                    color: blockStyle.iconColor,
                                     fontSize: sessionHeightPx >= 90 ? 16 : 14,
                                     fontWeight: FontWeight.w500,
                                   ),
@@ -3215,31 +3639,11 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                                     height: sessionHeightPx >= 50 ? 32 : 24,
                                     child: CircularProgressIndicator(
                                       strokeWidth: 3.0,
-                                      valueColor: const AlwaysStoppedAnimation<Color>(
-                                        processingUiColor,
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                        blockStyle.iconColor,
                                       ),
                                     ),
                                   ),
-                                  if (operationType != null &&
-                                      sessionHeightPx >= 28) ...[
-                                    SizedBox(
-                                      height: sessionHeightPx >= 50 ? 8 : 6,
-                                    ),
-                                    Text(
-                                      operationType ==
-                                              ReservationOperationType.create
-                                          ? '예약중'
-                                          : operationType ==
-                                              ReservationOperationType.cancel
-                                          ? '취소중'
-                                          : '변경중',
-                                      style: const TextStyle(
-                                        color: processingUiColor,
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ],
                                 ],
                               ),
                             ),
@@ -3253,17 +3657,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                     horizontal: 12,
                     vertical: sessionHeightPx >= 50 ? 8 : 6,
                   ),
-                  decoration: BoxDecoration(
-                    color: blockColor,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
-                        blurRadius: 4,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
+                  decoration: blockStyle.toBoxDecoration(),
                   child: Stack(
                     children: [
                       // sessionHeightPx가 아주 작아지는 케이스가 있어, 내부 Column 렌더링 시
@@ -3282,7 +3676,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                               Text(
                                 info.course.name,
                                 style: TextStyle(
-                                  color: textColor,
+                                  color: blockStyle.textColor,
                                   fontSize:
                                       sessionHeightPx >= 60
                                           ? 22
@@ -3298,7 +3692,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                                 Text(
                                   '${session.startTime} - ${session.endTime}',
                                   style: TextStyle(
-                                    color: iconColor,
+                                    color: blockStyle.iconColor,
                                     fontSize: sessionHeightPx >= 90 ? 16 : 14,
                                     fontWeight: FontWeight.w500,
                                   ),
@@ -3327,31 +3721,11 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                                     height: sessionHeightPx >= 50 ? 32 : 24,
                                     child: CircularProgressIndicator(
                                       strokeWidth: 3.0,
-                                      valueColor: const AlwaysStoppedAnimation<Color>(
-                                        processingUiColor,
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                        blockStyle.iconColor,
                                       ),
                                     ),
                                   ),
-                                  if (operationType != null &&
-                                      sessionHeightPx >= 28) ...[
-                                    SizedBox(
-                                      height: sessionHeightPx >= 50 ? 8 : 6,
-                                    ),
-                                    Text(
-                                      operationType ==
-                                              ReservationOperationType.create
-                                          ? '예약중'
-                                          : operationType ==
-                                              ReservationOperationType.cancel
-                                          ? '취소중'
-                                          : '변경중',
-                                      style: const TextStyle(
-                                        color: processingUiColor,
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ],
                                 ],
                               ),
                             ),
@@ -3375,8 +3749,10 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     if (_selectedCourse == null) return const SizedBox.shrink();
 
     // 세션의 실제 시작/끝 시간 (분 단위)
-    final sessionStartMinutes = _parseTimeToMinutes(session.startTime);
-    final sessionEndMinutes = _parseTimeToMinutes(session.endTime);
+    final sessionStartMinutes = CalendarUtils.parseTimeToMinutes(
+      session.startTime,
+    );
+    final sessionEndMinutes = CalendarUtils.parseTimeToMinutes(session.endTime);
 
     // 비선형(공백 압축) 포함한 위치/높이
     final topPosition = yForMinute(sessionStartMinutes) + _lineOffset;
@@ -3384,18 +3760,20 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
             yForMinute(sessionStartMinutes))
         .clamp(0.0, double.infinity);
 
-    // 예약/잠금 정보 (sessionReservations + 중앙 정책 엔진 기반)
+    // 예약/잠금 정보 (중앙 ReservationSummaryProvider + 정책 엔진)
+    // listen: true → 사용자 예약 시 N/M 실시간 반영
     final courseId = _selectedCourse!.id;
-    final dateString = _formatDate(date);
-    final sessionId = SessionReservation.generateSessionId(
+    final dateString = CalendarUtils.formatDateYMD(date);
+    final sessionId = SessionReservationSummary.generateSessionId(
       courseId,
       session.dayOfWeek,
       session.startTime,
     );
-    final sr = _sessionReservationsByKey['${sessionId}_$dateString'];
+    final srProvider = context.watch<ReservationSummaryProvider>();
+    final sr = srProvider.getSessionReservationSummary(sessionId, dateString);
 
-    // 비정기 일정인지 확인 (추가된 세션인지)
-    final dayOverrides = _overridesByDate[dateString] ?? [];
+    // 비정기 일정인지 확인 (CourseProvider에서만 조회)
+    final dayOverrides = _getOverridesForDate(context, date);
     final isOverrideSession = dayOverrides.any(
       (o) =>
           !o.isCancelled &&
@@ -3418,25 +3796,20 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                 .capacity
             : null;
 
-    // dateCapacityOverrides는 "특정 날짜"에 대한 가장 강한 오버라이드이므로
-    // 정기/비정기(override) 세션 모두에서 최우선으로 적용한다.
-    // 정기 일정은 코스 정의(session.getCapacityForDate)를 우선 사용하고,
-    // sr?.capacity는 과거 값일 수 있으므로(정기 일정 수정 시 sessionReservations는 갱신 안 됨) fallback만 사용.
-    final dateCapacityOverride =
-        _capacityOverridesByKey['${sessionId}_$dateString'];
-    final totalSeats =
-        dateCapacityOverride ??
-        overrideCapacity ??
-        session.getCapacityForDate(date);
+    // 수용인원: 프로바이더(날짜별) > 비정기 세션 정원 > 정기 세션 capacity
+    final totalSeats = srProvider.getTotalCapacity(
+      sessionId,
+      dateString,
+      fallback: overrideCapacity ?? session.capacity,
+    );
     final reservedCount = sr?.reservedCount ?? 0;
+    final reservedCountDisplay = srProvider.getReservedCountDisplayString(
+      sessionId,
+      dateString,
+    );
     final remainingSeats = math.max(0, totalSeats - reservedCount);
 
-    final placeId =
-        Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id ??
-        '';
-    final policy =
-        _coursePolicy ??
-        CoursePolicy.defaultFor(courseId: courseId, placeId: placeId);
+    final policy = _coursePolicy ?? CoursePolicy.defaultValue;
     final enrollmentCanReserve =
         widget.adminSelectionMode
             ? true
@@ -3457,9 +3830,15 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     // ✅ 관리자가 미리 예약 열기를 한 경우 잠금 해제
     bool isBookingWeekOpened = false;
     if (eligibility.reason == ReservationLockReason.notOpenedYet) {
-      final weekStart = _startOfWeekMonday(date);
-      final weekStartDateString = _formatDate(weekStart);
-      isBookingWeekOpened = _openedWeekStartDates.contains(weekStartDateString);
+      final weekStart = CalendarUtils.startOfWeekMonday(date);
+      final weekStartDateString = CalendarUtils.formatDateYMD(weekStart);
+      final placeId =
+          Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
+      isBookingWeekOpened =
+          placeId != null &&
+          Provider.of<CourseProvider>(context, listen: false)
+              .getBookingWeekOpens(placeId, courseId)
+              .contains(weekStartDateString);
     }
 
     // 미리 열린 주차인 경우 잠금 해제
@@ -3483,14 +3862,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
         date.month == widget.currentReservationDate!.month &&
         date.day == widget.currentReservationDate!.day;
 
-    // "선택 가능(관리자 변경 선택)" 여부:
-    // - allowAdminForceMoveWithinCourse ON: 오픈/마감/오픈전은 무시하고(서버도 허용), 과거만 차단 (꽉 찬 것은 선택 가능)
-    // - OFF: 일반 예약 정책(오픈/마감 포함)을 그대로 적용 (서버에서도 강제)
-    final forceMoveAllowed = policy.allowAdminForceMoveWithinCourse;
-    final selectableForAdminMove =
-        forceMoveAllowed
-            ? (!isCurrentReservation && !isPastDate) // 꽉 찬 것도 선택 가능
-            : (!isCurrentReservation && eligibility.canReserve);
+    // "선택 가능(관리자 변경 선택)" 여부: 관리자는 항상 오픈/마감 무시, 과거만 차단 (꽉 찬 것도 선택 가능)
+    final selectableForAdminMove = !isCurrentReservation && !isPastDate;
 
     // 지나간 일정인지 확인 (롱프레스/탭 취소 제외용) - 세션 시작 시간까지 고려
     final nowForPastCheck = TimezoneUtils.getSeoulDateTime();
@@ -3522,9 +3895,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       CompactCalendarUsage.courseDetailView => (isFull || isLocked),
     };
 
-    final baseColor =
-        visuallyDisabled ? AppColors.reservedGrey : _selectedCourse!.colorValue;
-
     // 편집 모드인지 확인 (현재 예약 정보가 전달되었으면 편집 모드)
     final isEditMode =
         widget.currentReservationDayOfWeek != null ||
@@ -3554,33 +3924,15 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     final isSelected = isSelectedFromExternal || isSelectedFromInternal;
 
     // 편집 모드일 때만 선택 가능한 세션에 opacity 적용
-    // adminSelectNewSlot 모드: 모든 타겟 세션(현재 예약이 아닌 모든 세션)을 연한 색으로 표시
-    // 선택된 세션은 진하게 표시
-    // 지나간 세션(visuallyDisabled)은 항상 진하게 표시 (회색이 확실히 보이도록)
+    // adminSelectNewSlot 모드: 이동 가능/불가 모두 회색으로 통일, 자물쇠 아이콘으로만 구분 → opacity 1.0
     // 일반 모드에서는 기본적으로 진하게 표시
     final opacity = switch (_usage) {
-      CompactCalendarUsage.adminSelectNewSlot =>
-        visuallyDisabled
-            ? 1.0 // 지나간 세션은 항상 진하게 (회색이 확실히 보이도록)
-            : (isCurrentReservation
-                ? 1.0
-                : (isSelected ? 1.0 : 0.4)), // 현재 예약 또는 선택된 세션은 진하게, 나머지는 연하게
+      CompactCalendarUsage.adminSelectNewSlot => 1.0,
       _ =>
         (isEditMode && !isCurrentReservation && !isFull && !isLocked)
             ? (isSelected ? 1.0 : 0.4)
             : 1.0,
     };
-
-    final blockColor = baseColor.withOpacity(opacity);
-    // 텍스트 색상은 visuallyDisabled 또는 현재 예약 여부를 기준으로 결정
-    final textColor =
-        (isCurrentReservation || visuallyDisabled)
-            ? AppColors.reservedTextGrey
-            : Colors.white.withOpacity(opacity);
-    final iconColor =
-        (isCurrentReservation || visuallyDisabled)
-            ? AppColors.reservedIconGrey
-            : Colors.white.withOpacity(0.9 * opacity);
 
     // 탭 가능 여부는 "정책(예약 가능)"이 아니라 "화면 목적(사용처)"이 결정
     final bool canTap = switch (_usage) {
@@ -3602,12 +3954,60 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
         '$dateStringForCancel|${session.dayOfWeek}|${session.startTime}';
     final isCancelling = _cancellingSessions.contains(cancellingKey);
 
+    // 비정기 일정 저장 중인 세션인지 확인 (compact_calendar에서 해당 박스에 로딩 스피너)
+    final weekStartDate = TimezoneUtils.formatDateToSeoul(
+      CalendarUtils.startOfWeekMonday(date),
+    );
+    final isSavingOverride = context.read<CourseProvider>().isSavingOverride(
+      weekStartDate,
+      dateStringForCancel,
+      session.dayOfWeek,
+      session.startTime,
+    );
+
+    final blockType =
+        (isCancelling || isSavingOverride)
+            ? SessionBlockType.processing
+            : isCurrentReservation
+            ? SessionBlockType.reserved
+            : visuallyDisabled
+            ? SessionBlockType.locked
+            : SessionBlockType.available;
+    // adminNavigate(관리자 홈): 예약 여부와 관계없이 코스 색상으로 통일
+    final effectiveBlockType =
+        (_usage == CompactCalendarUsage.adminNavigate &&
+                blockType == SessionBlockType.available)
+            ? SessionBlockType.reserved
+            : blockType;
     // adminSelectNewSlot 모드에서는 직접 계산한 isPastSession도 체크
     final bool canTapWithPastCheck = switch (_usage) {
       CompactCalendarUsage.adminSelectNewSlot =>
         canTap && !isPastSession, // isPastDate와 isPastSession 둘 다 체크
       _ => canTap,
     };
+
+    var blockStyle = SessionBlockStyle.fromType(
+      effectiveBlockType,
+      courseColor: _selectedCourse!.colorValue,
+    );
+    // adminSelectNewSlot: 이동 불가=회색+자물쇠, 이동 가능=연한 courseColor (선택 시 진하게)
+    if (_usage == CompactCalendarUsage.adminSelectNewSlot) {
+      final color = _selectedCourse!.colorValue;
+      final movableBg = isSelected ? color : color.withOpacity(0.3);
+      blockStyle =
+          canTapWithPastCheck
+              ? SessionBlockStyle(
+                backgroundColor: movableBg,
+                textColor: SessionBlockStyle.textColorForBackground(movableBg),
+                iconColor: SessionBlockStyle.textColorForBackground(movableBg),
+                borderRadius: 12,
+                showShadow: isSelected,
+              )
+              : SessionBlockStyle.fromType(
+                SessionBlockType.locked,
+                courseColor: color,
+              );
+    }
 
     return Positioned(
       top: topPosition,
@@ -3617,27 +4017,37 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       child: GestureDetector(
         onTap:
             canTapWithPastCheck
-                ? () {
-                  // 선택 상태는 "관리자 변경 선택"에서만 유지 (조회/이동 모드에서는 불필요한 내부 상태를 만들지 않음)
+                ? () async {
+                  // adminSelectNewSlot: 콜백을 먼저 호출하고, 취소 시(false) 내부 선택 유지(이전 opacity 복원)
                   if (_usage == CompactCalendarUsage.adminSelectNewSlot) {
-                    setState(() {
-                      // 같은 세션을 다시 클릭하면 선택 해제
-                      if (_selectedSession != null &&
-                          _selectedDate != null &&
-                          _selectedSession!.dayOfWeek == session.dayOfWeek &&
-                          _selectedSession!.startTime == session.startTime &&
-                          _selectedDate!.year == date.year &&
-                          _selectedDate!.month == date.month &&
-                          _selectedDate!.day == date.day) {
-                        _selectedSession = null;
-                        _selectedDate = null;
-                      } else {
-                        _selectedSession = session;
-                        _selectedDate = date;
-                      }
-                    });
+                    final result = widget.onSessionTap!(
+                      _selectedCourse!,
+                      session,
+                      date,
+                    );
+                    final accepted =
+                        result is Future<bool> ? await result : true;
+                    if (!mounted) return;
+                    if (accepted) {
+                      setState(() {
+                        if (_selectedSession != null &&
+                            _selectedDate != null &&
+                            _selectedSession!.dayOfWeek == session.dayOfWeek &&
+                            _selectedSession!.startTime == session.startTime &&
+                            _selectedDate!.year == date.year &&
+                            _selectedDate!.month == date.month &&
+                            _selectedDate!.day == date.day) {
+                          _selectedSession = null;
+                          _selectedDate = null;
+                        } else {
+                          _selectedSession = session;
+                          _selectedDate = date;
+                        }
+                      });
+                    }
+                  } else {
+                    widget.onSessionTap!(_selectedCourse!, session, date);
                   }
-                  widget.onSessionTap!(_selectedCourse!, session, date);
                 }
                 : null,
         onLongPress:
@@ -3651,192 +4061,273 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                   _showCancelSessionDialog(_selectedCourse!, session, date);
                 }
                 : null,
-        child: Container(
-          padding: EdgeInsets.symmetric(
-            horizontal: 4,
-            vertical: sessionHeightPx >= 50 ? 2 : 1,
-          ),
-          decoration: BoxDecoration(
-            color: blockColor,
-            borderRadius: BorderRadius.circular(12),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.1),
-                blurRadius: 4,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Stack(
-            children: [
-              // sessionHeightPx가 매우 작은 경우가 있어 Column이 overflow를 유발할 수 있음.
-              // -> 높이가 충분할 때만 텍스트 레이어를 렌더링 (필요 시 scaleDown)
-              if (sessionHeightPx >= 14)
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerLeft,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // 홈 화면이 아닐 때: 코스 이름 표시
-                      if (widget.hideCourseSelector)
+        child:
+            (opacity < 1.0
+                ? Opacity(
+                  opacity: opacity,
+                  child: _sessionBlockContainer(
+                    session,
+                    date,
+                    sessionHeightPx,
+                    blockStyle,
+                    eligibility,
+                    isBookingWeekOpened,
+                    canTapWithPastCheck,
+                    isCurrentReservation,
+                    isLocked,
+                    (isCancelling || isSavingOverride),
+                    totalSeats,
+                    reservedCount,
+                    remainingSeats,
+                    isPastSession,
+                    canTap,
+                    adminSelectNewSlotLockFilled:
+                        _usage == CompactCalendarUsage.adminSelectNewSlot
+                            ? !canTapWithPastCheck
+                            : null,
+                    isAdminSelectNewSlot:
+                        _usage == CompactCalendarUsage.adminSelectNewSlot,
+                    reservedCountDisplay: reservedCountDisplay,
+                  ),
+                )
+                : _sessionBlockContainer(
+                  session,
+                  date,
+                  sessionHeightPx,
+                  blockStyle,
+                  eligibility,
+                  isBookingWeekOpened,
+                  canTapWithPastCheck,
+                  isCurrentReservation,
+                  isLocked,
+                  isCancelling,
+                  totalSeats,
+                  reservedCount,
+                  remainingSeats,
+                  isPastSession,
+                  canTap,
+                  adminSelectNewSlotLockFilled:
+                      _usage == CompactCalendarUsage.adminSelectNewSlot
+                          ? !canTapWithPastCheck
+                          : null,
+                  isAdminSelectNewSlot:
+                      _usage == CompactCalendarUsage.adminSelectNewSlot,
+                  reservedCountDisplay: reservedCountDisplay,
+                )),
+      ),
+    );
+  }
+
+  Widget _sessionBlockContainer(
+    CourseSession session,
+    DateTime date,
+    double sessionHeightPx,
+    SessionBlockStyle blockStyle,
+    ReservationEligibility eligibility,
+    bool isBookingWeekOpened,
+    bool canTapWithPastCheck,
+    bool isCurrentReservation,
+    bool isLocked,
+    bool isCancelling,
+    int totalSeats,
+    int reservedCount,
+    int remainingSeats,
+    bool isPastSession,
+    bool canTap, {
+    bool? adminSelectNewSlotLockFilled,
+    bool isAdminSelectNewSlot = false,
+    String? reservedCountDisplay,
+  }) {
+    final nDisplay = reservedCountDisplay ?? '$reservedCount';
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: 4,
+        vertical: sessionHeightPx >= 50 ? 2 : 1,
+      ),
+      decoration: blockStyle.toBoxDecoration(),
+      child: Stack(
+        children: [
+          // sessionHeightPx가 매우 작은 경우가 있어 Column이 overflow를 유발할 수 있음.
+          if (sessionHeightPx >= 14)
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // adminSelectNewSlot: n/m만 표시
+                  if (isAdminSelectNewSlot)
+                    Text(
+                      '$nDisplay / $totalSeats',
+                      style: TextStyle(
+                        color: blockStyle.textColor,
+                        fontSize:
+                            sessionHeightPx >= 60
+                                ? 18
+                                : (sessionHeightPx >= 40 ? 20 : 18),
+                        fontWeight: FontWeight.bold,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    )
+                  else ...[
+                    if (widget.hideCourseSelector)
+                      Text(
+                        _selectedCourse!.name,
+                        style: TextStyle(
+                          color: blockStyle.textColor,
+                          fontSize:
+                              sessionHeightPx >= 60
+                                  ? 18
+                                  : (sessionHeightPx >= 40 ? 14 : 12),
+                          fontWeight: FontWeight.bold,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    // 홈 화면일 때: 현재신청/정원을 크게 표시 (예약이 아직 안 열린 경우 lock 아이콘 표시)
+                    if (!widget.hideCourseSelector) ...[
+                      if (eligibility.reason ==
+                              ReservationLockReason.notOpenedYet &&
+                          !isBookingWeekOpened)
+                        SvgPicture.asset(
+                          'assets/icons/lock.svg',
+                          width:
+                              sessionHeightPx >= 60
+                                  ? 24
+                                  : (sessionHeightPx >= 40 ? 20 : 16),
+                          height:
+                              sessionHeightPx >= 60
+                                  ? 24
+                                  : (sessionHeightPx >= 40 ? 20 : 16),
+                          colorFilter: ColorFilter.mode(
+                            blockStyle.iconColor,
+                            BlendMode.srcIn,
+                          ),
+                        )
+                      else
                         Text(
-                          _selectedCourse!.name,
+                          '$nDisplay / $totalSeats',
                           style: TextStyle(
-                            color: textColor,
+                            color: blockStyle.textColor,
                             fontSize:
                                 sessionHeightPx >= 60
                                     ? 18
-                                    : (sessionHeightPx >= 40 ? 14 : 12),
+                                    : (sessionHeightPx >= 40 ? 20 : 18),
                             fontWeight: FontWeight.bold,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
-                      // 홈 화면일 때: 현재신청/정원을 크게 표시 (예약이 아직 안 열린 경우 lock 아이콘 표시)
-                      if (!widget.hideCourseSelector) ...[
-                        if (eligibility.reason ==
-                                ReservationLockReason.notOpenedYet &&
-                            !isBookingWeekOpened)
-                          SvgPicture.asset(
-                            'assets/icons/lock.svg',
-                            width:
-                                sessionHeightPx >= 60
-                                    ? 24
-                                    : (sessionHeightPx >= 40 ? 20 : 16),
-                            height:
-                                sessionHeightPx >= 60
-                                    ? 24
-                                    : (sessionHeightPx >= 40 ? 20 : 16),
-                            colorFilter: ColorFilter.mode(
-                              iconColor,
-                              BlendMode.srcIn,
-                            ),
-                          )
-                        else
-                          Text(
-                            '$reservedCount / $totalSeats',
-                            style: TextStyle(
-                              color: textColor,
-                              fontSize:
-                                  sessionHeightPx >= 60
-                                      ? 18
-                                      : (sessionHeightPx >= 40 ? 20 : 18),
-                              fontWeight: FontWeight.bold,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                      ],
-                      // 시간 (높이가 충분할 때만 표시, 줄바꿈)
-                      if (sessionHeightPx >= 70) ...[
-                        SizedBox(height: sessionHeightPx >= 80 ? 4 : 3),
-                        Text(
-                          '${session.startTime}\n- ${session.endTime}',
-                          style: TextStyle(
-                            color: iconColor,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w500,
-                            height: 1.2,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
-                      // 남은 자리 (홈 화면이 아닐 때만, 높이가 충분할 때만 표시, courseDetailView 모드에서는 숨김)
-                      if (widget.hideCourseSelector &&
-                          sessionHeightPx >= 90 &&
-                          _usage != CompactCalendarUsage.courseDetailView) ...[
-                        SizedBox(height: sessionHeightPx >= 100 ? 3 : 2),
-                        Text(
-                          '$remainingSeats / $totalSeats',
-                          style: TextStyle(
-                            color: iconColor,
-                            fontSize: sessionHeightPx >= 110 ? 14 : 12,
-                            fontWeight: FontWeight.w500,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
                     ],
-                  ),
-                ),
-              // 자물쇠 아이콘 표시 조건:
-              // 1. 탭 불가능하고 && 현재 예약이 아니고 && 잠겨있고 && 주차가 열리지 않았거나
-              // 2. adminSelectNewSlot 모드에서 지나간 세션인 경우
-              if ((!canTapWithPastCheck &&
-                      !isCurrentReservation &&
-                      isLocked &&
-                      !isBookingWeekOpened) ||
-                  (_usage == CompactCalendarUsage.adminSelectNewSlot &&
-                      isPastSession))
-                Positioned(
-                  top: 0,
-                  right: 0,
-                  child: Icon(
-                    Icons.lock_rounded,
-                    size: sessionHeightPx >= 60 ? 18 : 14,
-                    color: iconColor,
-                  ),
-                ),
-              if (!canTap &&
-                  !isCurrentReservation &&
-                  !isBookingWeekOpened &&
-                  eligibility.reason == ReservationLockReason.notOpenedYet &&
-                  eligibility.openAt != null &&
-                  sessionHeightPx >= 70)
-                Positioned(
-                  bottom: 2,
-                  right: 4,
-                  child: Text(
-                    '오픈 ${eligibility.openAt!.month}/${eligibility.openAt!.day} ${eligibility.openAt!.hour.toString().padLeft(2, '0')}:${eligibility.openAt!.minute.toString().padLeft(2, '0')}',
-                    style: TextStyle(
-                      color: iconColor,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              // 취소 중인 세션에 로딩 스피너 표시
-              if (isCancelling)
-                Positioned.fill(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Center(
-                      child: SizedBox(
-                        width: sessionHeightPx >= 60 ? 24 : 20,
-                        height: sessionHeightPx >= 60 ? 24 : 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            Colors.white,
-                          ),
-                        ),
+                  ],
+                  // 시간 (높이가 충분할 때만 표시, 줄바꿈) - adminSelectNewSlot에서는 숨김
+                  if (sessionHeightPx >= 70 && !isAdminSelectNewSlot) ...[
+                    SizedBox(height: sessionHeightPx >= 80 ? 4 : 3),
+                    Text(
+                      '${session.startTime}\n- ${session.endTime}',
+                      style: TextStyle(
+                        color: blockStyle.iconColor,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        height: 1.2,
                       ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                  // 남은 자리 (홈 화면이 아닐 때만, 높이가 충분할 때만 표시, courseDetailView/adminSelectNewSlot에서는 숨김)
+                  if (widget.hideCourseSelector &&
+                      sessionHeightPx >= 90 &&
+                      _usage != CompactCalendarUsage.courseDetailView &&
+                      !isAdminSelectNewSlot) ...[
+                    SizedBox(height: sessionHeightPx >= 100 ? 3 : 2),
+                    Text(
+                      '$remainingSeats / $totalSeats',
+                      style: TextStyle(
+                        color: blockStyle.iconColor,
+                        fontSize: sessionHeightPx >= 110 ? 14 : 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          // 자물쇠 아이콘 표시 조건:
+          // adminSelectNewSlot: 이동 불가일 때만 채운 자물쇠 표시 (이동 가능은 아이콘 없음)
+          // 그 외: 탭 불가 && 현재 예약 아님 && 잠김 && 주차 미오픈
+          if (adminSelectNewSlotLockFilled == true)
+            Positioned(
+              top: 0,
+              right: 0,
+              child: Icon(
+                Icons.lock_rounded,
+                size: sessionHeightPx >= 60 ? 18 : 14,
+                color: blockStyle.iconColor,
+              ),
+            )
+          else if (adminSelectNewSlotLockFilled == null &&
+              !canTapWithPastCheck &&
+              !isCurrentReservation &&
+              isLocked &&
+              !isBookingWeekOpened)
+            Positioned(
+              top: 0,
+              right: 0,
+              child: Icon(
+                Icons.lock_rounded,
+                size: sessionHeightPx >= 60 ? 18 : 14,
+                color: blockStyle.iconColor,
+              ),
+            ),
+          if (!canTap &&
+              !isCurrentReservation &&
+              !isBookingWeekOpened &&
+              eligibility.reason == ReservationLockReason.notOpenedYet &&
+              eligibility.openAt != null &&
+              sessionHeightPx >= 70)
+            Positioned(
+              bottom: 2,
+              right: 4,
+              child: Text(
+                '오픈 ${eligibility.openAt!.month}/${eligibility.openAt!.day} ${eligibility.openAt!.hour.toString().padLeft(2, '0')}:${eligibility.openAt!.minute.toString().padLeft(2, '0')}',
+                style: TextStyle(
+                  color: blockStyle.iconColor,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          // 취소 중인 세션에 로딩 스피너 표시
+          if (isCancelling)
+            Positioned.fill(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Center(
+                  child: SizedBox(
+                    width: sessionHeightPx >= 60 ? 24 : 20,
+                    height: sessionHeightPx >= 60 ? 24 : 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                     ),
                   ),
                 ),
-            ],
-          ),
-        ),
+              ),
+            ),
+        ],
       ),
     );
-  }
-
-  // 시간 문자열을 분 단위로 변환
-  int _parseTimeToMinutes(String time) {
-    final parts = time.split(':');
-    final hour = int.parse(parts[0]);
-    final minute = int.parse(parts[1]);
-    return hour * 60 + minute;
   }
 
   // 합쳐진 긴 공백(… 슬롯) 내부에 미세 눈금선을 그려 “간격이 있다”는 느낌을 주기
@@ -3942,7 +4433,7 @@ class _TimeSlot {
 class _ReservationSessionInfo {
   final Course course;
   final CourseSession session;
-  final Reservation reservation;
+  final SessionReservation reservation;
   final DateTime date;
 
   const _ReservationSessionInfo({

@@ -55,9 +55,8 @@ class PlaceProvider with ChangeNotifier {
 
     try {
       // 이미 로드된 플레이스는 스킵
-      final placeIdsToLoad = placeIds
-          .where((placeId) => !_places.containsKey(placeId))
-          .toList();
+      final placeIdsToLoad =
+          placeIds.where((placeId) => !_places.containsKey(placeId)).toList();
 
       if (placeIdsToLoad.isEmpty) {
         _isLoading = false;
@@ -99,6 +98,7 @@ class PlaceProvider with ChangeNotifier {
     String? description,
     String? appBarText,
     String? greetingText,
+    bool hideGreeting = false,
     String? imageUrl,
     required String adminId,
   }) async {
@@ -111,9 +111,9 @@ class PlaceProvider with ChangeNotifier {
         name: name,
         adminId: adminId,
         description: description,
-        location: null, // location 필드는 더 이상 사용하지 않음
         appBarText: appBarText,
         greetingText: greetingText,
+        hideGreeting: hideGreeting,
         imageUrl: imageUrl,
         courses: [],
       );
@@ -159,18 +159,21 @@ class PlaceProvider with ChangeNotifier {
   Future<void> updatePlaceSettings({
     String? appBarText,
     String? greetingText,
+    bool? hideGreeting,
   }) async {
     if (_currentPlace == null) return;
 
     final updatedPlace = _currentPlace!.copyWith(
       appBarText: appBarText ?? _currentPlace!.appBarText,
       greetingText: greetingText ?? _currentPlace!.greetingText,
+      hideGreeting: hideGreeting ?? _currentPlace!.hideGreeting,
     );
 
     await updatePlace(updatedPlace);
   }
 
   /// 플레이스 삭제
+  /// 서버 성공 시 반드시 provider 업데이트 (서버·로컬 동기화 보장)
   Future<void> deletePlace(String placeId) async {
     _isLoading = true;
     notifyListeners();
@@ -178,7 +181,7 @@ class PlaceProvider with ChangeNotifier {
     try {
       await _firestoreService.deletePlace(placeId);
 
-      // Provider에서 제거
+      // Provider에서 제거 (서버 성공 시 동기화 필수)
       _places.remove(placeId);
 
       // 현재 플레이스가 삭제된 플레이스인 경우 초기화

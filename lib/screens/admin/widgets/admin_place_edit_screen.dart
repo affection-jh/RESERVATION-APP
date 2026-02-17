@@ -6,14 +6,17 @@ import 'package:provider/provider.dart';
 import 'package:reservation/utils/text_field_decoration_util.dart';
 import '../../../theme/app_colors.dart';
 import '../../../models/place.dart';
+import '../../../models/place_member.dart';
+import '../../../services/member_service.dart';
 import '../../../utils/snackbar_util.dart';
+import '../../../utils/timezone_utils.dart';
 import '../../../widgets/cached_image_widget.dart' show PlaceImageWidget;
 import '../../../widgets/story_card.dart';
 import '../../../services/storage_service.dart';
 import '../../../providers/place_provider.dart';
 import '../../../providers/auth_provider.dart';
-import '../../../providers/admin_provider.dart';
 import '../../../services/user_service.dart';
+import '../../../widgets/common_dialog.dart';
 import 'place_delete_confirm_screen.dart';
 
 class AdminPlaceEditScreen extends StatefulWidget {
@@ -44,6 +47,7 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
   String? _uploadedImageUrl;
   String? _existingImageUrl;
   bool _isUploadingImage = false;
+  Future<String?>? _uploadFuture; // 업로드 중 뒤로갈 때 완료 후 삭제용
 
   // 저장 관련
   bool _isSaving = false;
@@ -54,6 +58,8 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
   String _initialDescription = '';
   String _initialAppBarText = '';
   String _initialGreetingText = '';
+  bool _hideGreeting = false;
+  bool _initialHideGreeting = false;
 
   @override
   void initState() {
@@ -61,11 +67,12 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
     // 기존 플레이스 정보가 있으면 초기값 설정
     if (widget.place != null) {
       _initialName = widget.place!.name;
-      _initialLocation = widget.place!.location ?? '';
       _initialDescription = widget.place!.description ?? '';
       _existingImageUrl = widget.place!.imageUrl;
       _initialAppBarText = widget.place!.appBarText ?? '';
       _initialGreetingText = widget.place!.greetingText ?? '';
+      _hideGreeting = widget.place!.hideGreeting;
+      _initialHideGreeting = widget.place!.hideGreeting;
 
       // 모든 컨트롤러에 현재 값 설정
       _nameController.text = _initialName;
@@ -118,64 +125,99 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
     _greetingFocusNode.unfocus();
   }
 
-  bool _isFormValid() {
-    return _nameController.text.trim().isNotEmpty &&
-        _locationController.text.trim().isNotEmpty &&
-        _appBarTextController.text.trim().isNotEmpty &&
-        _greetingTextController.text.trim().isNotEmpty;
-  }
-
-  // 변경사항이 있는지 확인
+  // 변경사항이 있는지 확인 (저장 버튼·뒤로가기 확인용)
   bool _hasChanges() {
     if (widget.place == null) {
-      // 새로 등록하는 경우 항상 활성화
-      return _isFormValid();
+      return _nameController.text.trim().isNotEmpty ||
+          _locationController.text.trim().isNotEmpty ||
+          _descriptionController.text.trim().isNotEmpty ||
+          _appBarTextController.text.trim().isNotEmpty ||
+          _greetingTextController.text.trim().isNotEmpty ||
+          _hideGreeting ||
+          _uploadedImageUrl != null;
     }
-    // 수정하는 경우 변경사항이 있을 때만 활성화
+    // 수정 시: 현재 이미지(새로 올린 것 또는 기존 URL)가 초기와 다를 때만 변경으로 간주
+    final currentImageUrl = _uploadedImageUrl ?? _existingImageUrl;
     return _nameController.text.trim() != _initialName ||
         _locationController.text.trim() != _initialLocation ||
         _descriptionController.text.trim() != _initialDescription ||
         _appBarTextController.text.trim() != _initialAppBarText ||
         _greetingTextController.text.trim() != _initialGreetingText ||
-        _uploadedImageUrl != null;
+        _hideGreeting != _initialHideGreeting ||
+        currentImageUrl != widget.place!.imageUrl;
+  }
+
+  Future<void> _handleBack() async {
+    _removeFocus();
+    if (!_hasChanges()) {
+      if (mounted) Navigator.of(context).pop();
+      return;
+    }
+    final confirmed = await CommonDialog.show(
+      context: context,
+      title: '변경사항이 있습니다',
+      message: '변경된 내용이 사라집니다.\n나가시겠습니까?',
+      cancelText: '취소',
+      confirmText: '나가기',
+      confirmButtonColor: Colors.red,
+    );
+    if (confirmed != true || !mounted) return;
+    if (_uploadedImageUrl != null &&
+        _uploadedImageUrl != widget.place?.imageUrl) {
+      StorageService.deleteImagesInBackground([_uploadedImageUrl!]);
+    } else if (_isUploadingImage && _uploadFuture != null) {
+      _uploadFuture!.then((url) {
+        if (url != null && url.isNotEmpty) {
+          StorageService.deleteImagesInBackground([url]);
+        }
+      });
+    }
+    Navigator.of(context).pop();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.backgroundWhite,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // 헤더
-            _buildHeader(),
+    return PopScope(
+      canPop: !_hasChanges(),
+      onPopInvokedWithResult: (bool didPop, dynamic result) {
+        if (didPop) return;
+        _handleBack();
+      },
+      child: Scaffold(
+        backgroundColor: AppColors.backgroundWhite,
+        body: SafeArea(
+          child: Column(
+            children: [
+              // 헤더
+              _buildHeader(),
 
-            // 메인 콘텐츠
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const SizedBox(height: 32),
+              // 메인 콘텐츠
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 32),
 
-                    // 플레이스 기본 정보 섹션
-                    _buildBasicInfoSection(),
+                      // 플레이스 기본 정보 섹션
+                      _buildBasicInfoSection(),
 
-                    const SizedBox(height: 32),
+                      const SizedBox(height: 32),
 
-                    // 인사말 설정 섹션
-                    _buildGreetingSection(),
+                      // 인사말 설정 섹션
+                      _buildGreetingSection(),
 
-                    const SizedBox(height: 40),
-                  ],
+                      const SizedBox(height: 40),
+                    ],
+                  ),
                 ),
               ),
-            ),
 
-            // 하단 버튼
-            _buildBottomButtons(),
-          ],
+              // 하단 버튼
+              _buildBottomButtons(),
+            ],
+          ),
         ),
       ),
     );
@@ -188,10 +230,7 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
       child: Row(
         children: [
           IconButton(
-            onPressed: () {
-              _removeFocus();
-              Navigator.of(context).pop();
-            },
+            onPressed: _handleBack,
             icon: Icon(
               Icons.arrow_back_ios,
               size: 24,
@@ -209,17 +248,29 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
           const Spacer(),
           // 삭제 버튼 (수정 모드일 때만 표시)
           if (widget.place != null)
-            IconButton(
+            OutlinedButton(
               onPressed: () {
                 _showDeleteDialog(context);
               },
-              icon: SvgPicture.asset(
-                'assets/icons/delete.svg',
-                width: 24,
-                height: 24,
-                colorFilter: ColorFilter.mode(
-                  AppColors.textSecondary.withOpacity(0.75),
-                  BlendMode.srcIn,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.textPrimary,
+                side: BorderSide(
+                  color: AppColors.textSecondary.withOpacity(0.6),
+                ),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              child: const Text(
+                '플레이스 삭제',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
                 ),
               ),
             ),
@@ -253,9 +304,8 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
           _selectedImage = File(image.path);
           _isUploadingImage = true;
         });
-
-        // 이미지 업로드
-        await _uploadImage();
+        _uploadFuture = _uploadImage();
+        await _uploadFuture;
       }
     } catch (e) {
       if (mounted) {
@@ -264,9 +314,9 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
     }
   }
 
-  // 이미지 업로드
-  Future<void> _uploadImage() async {
-    if (_selectedImage == null) return;
+  // 이미지 업로드. 성공 시 URL 반환, 실패 시 null.
+  Future<String?> _uploadImage() async {
+    if (_selectedImage == null) return null;
 
     try {
       final storageService = StorageService();
@@ -286,15 +336,15 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         folder: 'places',
       );
 
-      if (mounted) {
-        setState(() {
-          _uploadedImageUrl = imageUrl;
-          _existingImageUrl = imageUrl;
-          _selectedImage = null;
-          _isUploadingImage = false;
-        });
-        SnackbarUtil.showSuccess(context, '이미지가 업로드되었습니다');
-      }
+      if (!mounted) return imageUrl;
+      setState(() {
+        _uploadedImageUrl = imageUrl;
+        _existingImageUrl = imageUrl;
+        _selectedImage = null;
+        _isUploadingImage = false;
+      });
+      SnackbarUtil.showSuccess(context, '이미지가 업로드되었습니다');
+      return imageUrl;
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -302,6 +352,7 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         });
         SnackbarUtil.showInfo(context, '이미지 업로드에 실패했습니다');
       }
+      return null;
     }
   }
 
@@ -379,7 +430,8 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
           ),
           controller: _descriptionController,
           focusNode: _descriptionFocusNode,
-          textInputAction: TextInputAction.next,
+          textInputAction: TextInputAction.newline,
+
           onSubmitted: (_) {
             _appBarFocusNode.requestFocus();
           },
@@ -388,7 +440,8 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
             floatingLabelBehavior: FloatingLabelBehavior.always,
             hasFocus: _descriptionFocusNode.hasFocus,
           ),
-          maxLines: 3,
+          maxLines: null,
+          minLines: 3,
           onChanged: (_) => setState(() {}),
         ),
       ],
@@ -411,7 +464,53 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         const SizedBox(height: 16),
         // 미리보기 섹션
         _buildPreviewSection(),
+        const SizedBox(height: 20),
+        // 환영메시지 숨기기 체크박스 (원형 커스텀)
+        _buildHideGreetingCheckbox(),
       ],
+    );
+  }
+
+  /// 환영메시지 숨기기 체크박스 (원형 커스텀)
+  Widget _buildHideGreetingCheckbox() {
+    return GestureDetector(
+      onTap: () => setState(() => _hideGreeting = !_hideGreeting),
+      behavior: HitTestBehavior.opaque,
+      child: Row(
+        children: [
+          SizedBox(
+            width: 24,
+            height: 24,
+            child: Container(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color:
+                      _hideGreeting
+                          ? AppColors.primaryGreen
+                          : AppColors.textSecondary.withOpacity(0.5),
+                  width: 2,
+                ),
+                color:
+                    _hideGreeting ? AppColors.primaryGreen : Colors.transparent,
+              ),
+              child:
+                  _hideGreeting
+                      ? Icon(Icons.check, size: 16, color: Colors.white)
+                      : null,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Text(
+            '환영메시지 숨기기',
+            style: TextStyle(
+              fontSize: 16,
+              color: AppColors.textPrimary,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -454,8 +553,8 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
           children: [
             // 헤더
             _buildPreviewHeader(),
-            // 제목 섹션
-            _buildPreviewTitleSection(),
+            // 제목 섹션 (환영메시지 숨기기 체크 시 미리보기에서 미표시)
+            if (!_hideGreeting) _buildPreviewTitleSection(),
             const SizedBox(height: 20),
             // 탭
             _buildPreviewTabs(),
@@ -700,6 +799,7 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
           style: FilledButton.styleFrom(
             backgroundColor: AppColors.primaryGreen,
             disabledBackgroundColor: AppColors.borderLight,
+            disabledForegroundColor: AppColors.textSecondary,
             padding: const EdgeInsets.symmetric(vertical: 16),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
@@ -708,13 +808,11 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
           child:
               _isSaving
                   ? const SizedBox(
-                    width: 20,
-                    height: 20,
+                    width: 24,
+                    height: 24,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        AppColors.primaryGreen,
-                      ),
+                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                     ),
                   )
                   : Text(
@@ -722,7 +820,10 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
-                      color: Colors.white,
+                      color:
+                          (_hasChanges() && !_isSaving)
+                              ? Colors.white
+                              : AppColors.textSecondary,
                     ),
                   ),
         ),
@@ -742,11 +843,8 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
 
     final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final adminProvider = Provider.of<AdminProvider>(context, listen: false);
     final userService = UserService();
-
-    final currentAdmin =
-        authProvider.currentAdmin ?? adminProvider.currentAdmin;
+    final currentAdmin = authProvider.currentAdmin;
     if (currentAdmin == null) {
       if (mounted) {
         setState(() {
@@ -774,20 +872,45 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
               _greetingTextController.text.trim().isEmpty
                   ? null
                   : _greetingTextController.text.trim(),
+          hideGreeting: _hideGreeting,
           imageUrl: _uploadedImageUrl,
           adminId: currentAdmin.userId,
         );
 
-        // Admin의 placeIds에 추가
+        // 생성자를 해당 플레이스 members에 manager로 추가 (접근 가능 플레이스 = members 기준)
+        // adminDisplayName은 반드시 생성자(매니저) 표시 이름으로 채움
+        final creatorDisplayName =
+            currentAdmin.username.trim().isNotEmpty
+                ? currentAdmin.username.trim()
+                : '관리자';
+        final now = TimezoneUtils.getSeoulDateTime();
+        final creatorMember = PlaceMember(
+          userId: currentAdmin.userId,
+          placeId: newPlace.id,
+          role: PlaceMemberRole.manager,
+          adminDisplayName: creatorDisplayName,
+          phoneNumber: currentAdmin.phoneNumber,
+          manageableCourseIds: const [],
+          createdAt: now,
+          updatedAt: null,
+        );
+        await MemberService().setPlaceMember(
+          newPlace.id,
+          currentAdmin.userId,
+          creatorMember,
+        );
+
         final updatedAdmin = currentAdmin.addPlace(newPlace.id);
         await userService.updateAdmin(updatedAdmin);
-
-        // Provider 업데이트
         if (authProvider.currentAdmin?.userId == updatedAdmin.userId) {
           authProvider.setCurrentAdmin(updatedAdmin);
         }
-        if (adminProvider.currentAdmin?.userId == updatedAdmin.userId) {
-          adminProvider.setCurrentAdmin(updatedAdmin);
+        authProvider.addAdminManagedPlace(newPlace.id);
+
+        // PlaceSwitch에서 "일반 모드" 진입용: approvedPlaceIds에 새 플레이스 추가
+        final currentApproved = authProvider.approvedPlaceIds;
+        if (!currentApproved.contains(newPlace.id)) {
+          authProvider.setApprovedPlaceIds([...currentApproved, newPlace.id]);
         }
 
         if (mounted) {
@@ -798,7 +921,6 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         // 수정
         final updatedPlace = widget.place!.copyWith(
           name: _nameController.text.trim(),
-          location: _locationController.text.trim(),
           description:
               _descriptionController.text.trim().isEmpty
                   ? null
@@ -811,6 +933,7 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
               _greetingTextController.text.trim().isEmpty
                   ? null
                   : _greetingTextController.text.trim(),
+          hideGreeting: _hideGreeting,
           imageUrl: _uploadedImageUrl ?? widget.place!.imageUrl,
         );
 

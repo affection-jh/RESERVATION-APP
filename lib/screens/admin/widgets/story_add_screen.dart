@@ -1,14 +1,35 @@
 import 'dart:io';
-import 'dart:ui' as ui;
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:image/image.dart' as img;
 import 'package:flutter_svg/svg.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import '../../../models/story.dart';
 import '../../../theme/app_colors.dart';
-import '../../../models/admin_models.dart';
 import '../../../utils/snackbar_util.dart';
 import '../../../services/storage_service.dart' as firebase_storage;
 import '../../../widgets/common_dialog.dart';
+
+/// Isolate에서 실행: 메인 스레드 블로킹 없이 리사이즈 (로딩 UI 지연 완화)
+/// 모든 이미지를 quality 98 + yuv444로 재인코딩해 파란/빨간 점 아티팩트 최소화
+Uint8List? _resizeStoryImageInIsolate(Uint8List bytes) {
+  try {
+    final image = img.decodeImage(bytes);
+    if (image == null) return null;
+    final toEncode =
+        image.width > 1920 ? img.copyResize(image, width: 1920) : image;
+    final encoded = img.encodeJpg(
+      toEncode,
+      quality: 98,
+      chroma: img.JpegChroma.yuv444,
+    );
+    return Uint8List.fromList(encoded);
+  } catch (_) {
+    return null;
+  }
+}
 
 // 이미지 데이터 타입
 enum _ImageType { uploaded, selected }
@@ -24,6 +45,7 @@ class _ImageData {
 
 /// 스토리 추가 화면
 class StoryAddScreen extends StatefulWidget {
+  static const int maxImageCount = 6;
   final StoryData? existingStory;
   final Function(StoryData) onSave;
   final Function()? onDelete;
@@ -51,6 +73,10 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
   // 각 이미지의 업로드 상태를 추적 (파일 경로 -> 업로드 중 여부)
   Map<String, bool> _uploadingStatus = {};
   bool _isSaving = false; // 게시 중 여부
+  // 업로드 중 뒤로갈 때 완료 후 삭제용
+  final List<Future<String?>> _uploadFutures = [];
+  // 업로드 중 사용자가 삭제한 파일 경로 → 완료 시 Storage에서 삭제하고 목록에 넣지 않음
+  final Set<String> _deletedPathsWhileUploading = {};
 
   // 초기값 저장 (변경사항 감지용)
   String _initialTitle = '';
@@ -91,21 +117,33 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
   }
 
   Future<void> _pickImage() async {
+    final currentCount = _uploadedImageUrls.length + _selectedImages.length;
+    if (currentCount >= StoryAddScreen.maxImageCount) {
+      SnackbarUtil.showInfo(
+        context,
+        '이미지는 최대 ${StoryAddScreen.maxImageCount}개까지 추가할 수 있습니다.',
+      );
+      return;
+    }
+
     try {
       final List<XFile> images = await _imagePicker.pickMultiImage(
-        imageQuality: 70, // 화질을 낮춰서 파일 크기 감소
+        imageQuality: 90, // 고품질로 선택 후 스토리 인코딩에서 일괄 처리 (파란/빨간 점 방지)
       );
 
       if (images.isNotEmpty) {
-        // 모든 이미지를 먼저 추가
         final List<File> newFiles = [];
         for (final xFile in images) {
+          if (currentCount + newFiles.length >= StoryAddScreen.maxImageCount) {
+            break;
+          }
           final file = File(xFile.path);
           newFiles.add(file);
         }
 
+        if (newFiles.isEmpty) return;
+
         setState(() {
-          // 모든 이미지를 한 번에 추가
           _selectedImages.addAll(newFiles);
           // 모든 새 이미지를 업로드 중 상태로 설정 (파일 경로를 키로 사용)
           for (final file in newFiles) {
@@ -113,9 +151,10 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
           }
         });
 
-        // 모든 이미지를 병렬로 업로드 시작 (파일 경로를 사용하여 추적)
+        // 모든 이미지를 병렬로 업로드 시작 (뒤로가기 시 완료 후 삭제용 Future 저장)
         final uploadFutures =
             newFiles.map((file) => _uploadImageByFile(file)).toList();
+        _uploadFutures.addAll(uploadFutures);
         await Future.wait(uploadFutures);
       }
     } catch (e) {
@@ -125,71 +164,34 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
     }
   }
 
-  /// 이미지 리사이징 (최대 너비 1920px로 제한)
+  /// 이미지 리사이징 (최대 너비 1920px). Isolate에서 수행해 UI 지연 최소화.
   Future<File?> _resizeImageIfNeeded(File imageFile) async {
     try {
       final bytes = await imageFile.readAsBytes();
-      final codec = await ui.instantiateImageCodec(bytes);
-      final frame = await codec.getNextFrame();
-      final image = frame.image;
+      final resizedBytes = await compute(_resizeStoryImageInIsolate, bytes);
+      if (resizedBytes == null) return imageFile;
 
-      // 이미지가 이미 작으면 리사이징 불필요
-      if (image.width <= 1920) {
-        image.dispose();
-        return imageFile;
-      }
-
-      // 비율 유지하며 리사이징
-      final ratio = image.width / image.height;
-      final newWidth = 1920;
-      final newHeight = (1920 / ratio).round();
-
-      final recorder = ui.PictureRecorder();
-      final canvas = Canvas(recorder);
-      final paint = Paint()..filterQuality = FilterQuality.medium;
-
-      canvas.drawImageRect(
-        image,
-        Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
-        Rect.fromLTWH(0, 0, newWidth.toDouble(), newHeight.toDouble()),
-        paint,
-      );
-      image.dispose();
-
-      final picture = recorder.endRecording();
-      final resizedImage = await picture.toImage(newWidth, newHeight);
-      final byteData = await resizedImage.toByteData(
-        format: ui.ImageByteFormat.png,
-      );
-      resizedImage.dispose();
-      picture.dispose();
-
-      if (byteData == null) {
-        return imageFile;
-      }
-
-      // 임시 파일에 저장 (원본 확장자 유지)
       final originalPath = imageFile.path;
       final extension =
           originalPath.contains('.')
               ? originalPath.substring(originalPath.lastIndexOf('.'))
               : '.jpg';
       final resizedFile = File('${originalPath}_resized$extension');
-      await resizedFile.writeAsBytes(byteData.buffer.asUint8List());
-
+      await resizedFile.writeAsBytes(resizedBytes);
       return resizedFile;
     } catch (e) {
       debugPrint('이미지 리사이징 실패: $e');
-      return imageFile; // 실패 시 원본 파일 반환
+      return imageFile;
     }
   }
 
-  Future<void> _uploadImageByFile(File file) async {
+  /// 업로드 성공 시 URL 반환, 실패 시 null
+  Future<String?> _uploadImageByFile(File file) async {
     final filePath = file.path;
 
     // 파일이 _selectedImages에 있는지 확인하고 인덱스 찾기
     final index = _selectedImages.indexWhere((f) => f.path == filePath);
-    if (index == -1) return; // 파일이 이미 제거되었거나 없음
+    if (index == -1) return null; // 파일이 이미 제거되었거나 없음
 
     try {
       // 이미지 리사이징 (필요한 경우)
@@ -211,28 +213,28 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
         }
       }
 
-      if (mounted) {
+      if (!mounted) return imageUrl;
+      // 업로드 완료 전에 사용자가 삭제한 경우: Storage에서 삭제하고 목록에 넣지 않음
+      if (_deletedPathsWhileUploading.remove(filePath)) {
         setState(() {
-          // 업로드 완료: 해당 파일 경로의 업로드 상태 제거
           _uploadingStatus.remove(filePath);
-
-          // 업로드된 이미지는 _selectedImages에서 제거하고 _uploadedImageUrls에 추가
           _selectedImages.removeWhere((f) => f.path == filePath);
-          _uploadedImageUrls.add(imageUrl);
         });
+        firebase_storage.StorageService.deleteImagesInBackground([imageUrl]);
+        return imageUrl;
       }
+      setState(() {
+        _uploadingStatus.remove(filePath);
+        _selectedImages.removeWhere((f) => f.path == filePath);
+        _uploadedImageUrls.add(imageUrl);
+      });
+      return imageUrl;
     } catch (e) {
       if (mounted) {
-        // 업로드 실패 시 파일 경로로 찾아서 제거
         setState(() {
-          // 업로드 상태 제거
           _uploadingStatus.remove(filePath);
-
-          // 파일 경로로 찾아서 제거
           _selectedImages.removeWhere((f) => f.path == filePath);
         });
-
-        // 파일 삭제는 setState 이후에 수행 (UI 업데이트 후)
         try {
           if (await file.exists()) {
             await file.delete();
@@ -240,11 +242,9 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
         } catch (deleteError) {
           debugPrint('파일 삭제 실패: $deleteError');
         }
-
-        if (mounted) {
-          SnackbarUtil.showInfo(context, '이미지 업로드에 실패했습니다');
-        }
+        SnackbarUtil.showInfo(context, '이미지 업로드에 실패했습니다');
       }
+      return null;
     }
   }
 
@@ -352,43 +352,42 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
     return title.isNotEmpty && _hasChanges() && !hasUploadingImages;
   }
 
-  Future<void> _deleteImage(int index) async {
-    // index가 업로드된 이미지 범위 내인지 확인
+  void _deleteImage(int index) {
+    final total = _uploadedImageUrls.length + _selectedImages.length;
+    if (index < 0 || index >= total) return;
+
     if (index < _uploadedImageUrls.length) {
-      // 업로드된 이미지 삭제
+      // 이미 Storage에 업로드된 이미지: UI에서 바로 제거, Storage 삭제는 백그라운드
       final urlToDelete = _uploadedImageUrls[index];
-      try {
-        final storageService = firebase_storage.StorageService();
-        await storageService.deleteImage(urlToDelete);
-      } catch (e) {
-        debugPrint('이미지 삭제 실패: $e');
-      }
       setState(() {
         _uploadedImageUrls.removeAt(index);
-        // 업로드된 이미지가 삭제되면 해당 인덱스의 선택 이미지도 삭제
-        if (index < _selectedImages.length) {
-          _selectedImages.removeAt(index);
-        }
       });
-      setState(() {}); // 변경사항 감지를 위해
+      firebase_storage.StorageService.deleteImagesInBackground([urlToDelete]);
     } else {
-      // 선택만 하고 아직 업로드되지 않은 이미지 삭제
+      // 선택만 하고 아직 업로드되지 않은 이미지 (또는 업로드 중인 이미지)
       final localIndex = index - _uploadedImageUrls.length;
       if (localIndex >= 0 && localIndex < _selectedImages.length) {
+        final file = _selectedImages[localIndex];
+        final path = file.path;
+        if (_uploadingStatus[path] == true) {
+          // 업로드 중 삭제 → 완료 시 Storage 삭제 후 목록에 넣지 않도록 표시
+          _deletedPathsWhileUploading.add(path);
+        }
         setState(() {
           _selectedImages.removeAt(localIndex);
+          _uploadingStatus.remove(path);
         });
       }
-      setState(() {}); // 변경사항 감지를 위해
     }
+    setState(() {});
   }
 
   void _handleSave() async {
     final title = _titleController.text.trim();
     final content = _contentController.text.trim();
 
-    if (title.isEmpty || content.isEmpty) {
-      SnackbarUtil.showInfo(context, '제목과 내용을 입력해주세요');
+    if (title.isEmpty) {
+      SnackbarUtil.showInfo(context, '제목을 입력해주세요');
       return;
     }
 
@@ -459,7 +458,18 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
             results.where((r) => r['success'] == false).toList();
 
         if (failedUploads.isNotEmpty) {
-          // 실패한 이미지들을 _selectedImages에서 제거
+          // 일부만 업로드된 경우 성공한 URL은 Storage에서 삭제 (고아 이미지 방지)
+          final orphanUrls =
+              results
+                  .where((r) => r['success'] == true && r['url'] != null)
+                  .map((r) => r['url'] as String)
+                  .where((s) => s.isNotEmpty)
+                  .toList();
+          if (orphanUrls.isNotEmpty) {
+            firebase_storage.StorageService.deleteImagesInBackground(
+              orphanUrls,
+            );
+          }
           setState(() {
             for (final result in failedUploads.reversed) {
               final index = result['index'] as int;
@@ -511,6 +521,10 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
     );
 
     widget.onSave(story);
+
+    // 스토리가 홈에 반영될 시간 + 로딩 2바퀴 정도 (약 1.5초)
+    await Future.delayed(const Duration(milliseconds: 1500));
+
     if (mounted) {
       setState(() {
         _isSaving = false;
@@ -536,13 +550,34 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
                 final confirmed = await CommonDialog.show(
                   context: context,
                   title: '변경사항이 있습니다',
-                  message: '저장하지 않고 나가시면\n변경된 내용이 사라집니다.\n',
-                  secondaryMessage: '정말 나가시겠습니까?',
+                  message: '변경된 내용이 사라집니다.\n정말 나가시겠습니까?',
                   cancelText: '취소',
                   confirmText: '나가기',
                   confirmButtonColor: Colors.red,
                 );
                 if (confirmed == true && mounted) {
+                  // 이미 업로드된 URL 중 초기값이 아닌 것 → Storage 삭제
+                  final orphans =
+                      _uploadedImageUrls
+                          .where((url) => !_initialImageUrls.contains(url))
+                          .toList();
+                  if (orphans.isNotEmpty) {
+                    firebase_storage.StorageService.deleteImagesInBackground(
+                      orphans,
+                    );
+                  }
+                  // 업로드 중인 이미지: 완료 시 목록에 넣지 않고 Storage만 삭제
+                  _deletedPathsWhileUploading.addAll(_uploadingStatus.keys);
+                  final futures = List<Future<String?>>.from(_uploadFutures);
+                  _uploadFutures.clear();
+                  for (final f in futures) {
+                    f.then((url) {
+                      if (url != null && url.isNotEmpty) {
+                        firebase_storage
+                            .StorageService.deleteImagesInBackground([url]);
+                      }
+                    });
+                  }
                   Navigator.of(context).pop();
                 }
               } else {
@@ -619,6 +654,8 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
                 style: FilledButton.styleFrom(
                   backgroundColor: AppColors.primaryGreen,
                   disabledBackgroundColor: AppColors.borderLight,
+                  disabledForegroundColor: AppColors.textSecondary,
+                  foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(
                     horizontal: 20,
                     vertical: 8,
@@ -628,26 +665,31 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
                   ),
                   elevation: 0,
                 ),
-                child:
-                    _isSaving
-                        ? SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 1,
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              AppColors.primaryGreen,
+                child: SizedBox(
+                  width: 88,
+                  height: 24,
+                  child: Center(
+                    child:
+                        _isSaving
+                            ? SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  AppColors.primaryGreen,
+                                ),
+                              ),
+                            )
+                            : Text(
+                              widget.existingStory == null ? '게시하기' : '수정하기',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
-                          ),
-                        )
-                        : Text(
-                          widget.existingStory == null ? '게시하기' : '수정하기',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
-                          ),
-                        ),
+                  ),
+                ),
               ),
             ),
           ],
@@ -736,7 +778,7 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
                           focusNode: _titleFocusNode,
 
                           style: TextStyle(
-                            fontSize: 32,
+                            fontSize: 24,
                             fontWeight: FontWeight.w700,
                             color: AppColors.textPrimary,
                             height: 1.3,
@@ -745,7 +787,7 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
                             hintText: '제목을 입력하세요',
                             hintStyle: TextStyle(
                               color: AppColors.textSecondary.withOpacity(0.4),
-                              fontSize: 32,
+                              fontSize: 24,
                               fontWeight: FontWeight.w700,
                               height: 1.3,
                             ),
@@ -799,7 +841,17 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(50),
                 ),
-                onPressed: _pickImage,
+                onPressed: () {
+                  if ((_uploadedImageUrls.length + _selectedImages.length) >=
+                      StoryAddScreen.maxImageCount) {
+                    SnackbarUtil.showInfo(
+                      context,
+                      '이미지는 최대 ${StoryAddScreen.maxImageCount}개까지 추가할 수 있습니다.',
+                    );
+                    return;
+                  }
+                  _pickImage();
+                },
                 backgroundColor: AppColors.primaryGreen,
                 child: SvgPicture.asset(
                   'assets/icons/gallery-icon.svg',

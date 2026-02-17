@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import '../../../theme/app_colors.dart';
 import '../../../models/course.dart';
-import '../../../models/admin_models.dart';
+import '../../../models/member_view.dart';
 import '../../../models/course_enrollment.dart';
 import '../../../models/pending_member.dart';
 import '../../../widgets/common_dialog.dart';
@@ -25,13 +27,13 @@ import 'member_course_enrollment_screen.dart';
 import 'dart:async';
 
 class MemberDetailBottomSheet extends StatefulWidget {
-  final MemberData member;
+  final MemberView member;
 
   const MemberDetailBottomSheet({super.key, required this.member});
 
   static void show({
     required BuildContext context,
-    required MemberData member,
+    required MemberView member,
   }) {
     showModalBottomSheet(
       context: context,
@@ -55,9 +57,11 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
   List<CourseEnrollment> _enrollments = [];
   Set<String> _processedCourseIds = {}; // 재등록 또는 삭제 처리된 코스 ID들
   StreamSubscription<List<CourseEnrollment>>? _enrollmentSubscription;
+  StreamSubscription<DocumentSnapshot>? _pendingMemberSubscription;
   List<String> _allPendingCourseIds = []; // pendingMembers에서 가져온 원본 코스 ID들
   List<String> _pendingCourseIds = []; // enrollments에 없는 pending 코스 ID들 (계산된 값)
-  PendingMember? _pendingMember; // pendingMember 전체 정보 저장
+  List<CourseEnrollment> _pendingEnrollments =
+      []; // pendingMembers의 courseEnrollments 파싱
   bool _enrollmentsLoaded = false;
   bool _pendingMembersLoaded = false;
   TextEditingController? _nameController;
@@ -88,9 +92,10 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     _enrollmentProvider?.removeListener(_onEnrollmentsChanged);
     _enrollmentProvider = null;
 
-    // 기존 subscription도 취소 (혹시 모를 경우 대비)
     _enrollmentSubscription?.cancel();
     _enrollmentSubscription = null;
+    _pendingMemberSubscription?.cancel();
+    _pendingMemberSubscription = null;
 
     _nameController?.dispose();
     super.dispose();
@@ -139,8 +144,34 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
         _isLoading = !(_enrollmentsLoaded && _pendingMembersLoaded);
       }
 
-      // pendingMembers 조회
-      await _loadPendingMembers(placeId, normalizedPhone);
+      if (isPendingUser) {
+        // 대기중 멤버: pendingMembers 경로 구독 (수강취소/횟수편집/휴쵸기간 변경 시 즉시 반영)
+        final pendingId = '${placeId}_$normalizedPhone';
+        final pendingRef = FirestoreService().firestore
+            .collection('places')
+            .doc(placeId)
+            .collection('pendingMembers')
+            .doc(pendingId);
+        _pendingMemberSubscription = pendingRef.snapshots().listen(
+          (snapshot) {
+            if (!mounted) return;
+            _applyPendingMemberSnapshot(placeId, snapshot);
+          },
+          onError: (e) {
+            debugPrint(
+              '[MemberDetailBottomSheet] pendingMembers stream error: $e',
+            );
+            if (mounted) {
+              setState(() {
+                _pendingMembersLoaded = true;
+                _isLoading = !(_enrollmentsLoaded && _pendingMembersLoaded);
+              });
+            }
+          },
+        );
+      } else {
+        await _loadPendingMembers(placeId, normalizedPhone);
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -172,7 +203,101 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     });
   }
 
-  /// pendingMembers만 다시 조회 (코스 등록 후 갱신용)
+  /// pendingMembers 스냅샷 적용 (스트림 리스너 및 일회성 로드 공통)
+  void _applyPendingMemberSnapshot(
+    String placeId,
+    DocumentSnapshot? pendingDoc,
+  ) {
+    if (!mounted) return;
+
+    PendingMember? foundPendingMember;
+    final data = pendingDoc?.data();
+    if (pendingDoc != null && pendingDoc.exists && data != null) {
+      try {
+        foundPendingMember = PendingMember.fromJson(
+          Map<String, dynamic>.from(data as Map),
+          docId: pendingDoc.id,
+          placeId: placeId,
+        );
+      } catch (e) {
+        debugPrint('PendingMember 파싱 오류: $e');
+        foundPendingMember = null;
+      }
+    }
+
+    List<CourseEnrollment> pendingEnrollments = [];
+    if (pendingDoc != null && pendingDoc.exists && data != null) {
+      final dataMap = Map<String, dynamic>.from(data as Map);
+      final raw = dataMap['courseEnrollments'];
+      if (raw is List && raw.isNotEmpty) {
+        final now = TimezoneUtils.getSeoulDateTime();
+        final adminName = widget.member.adminDisplayName;
+        for (final item in raw) {
+          if (item is! Map) continue;
+          final map = Map<String, dynamic>.from(item);
+          final courseId = map['courseId'] as String?;
+          if (courseId == null || courseId.isEmpty) continue;
+          final total =
+              (map['totalReservations'] is int)
+                  ? map['totalReservations'] as int
+                  : (int.tryParse('${map['totalReservations']}') ?? 10);
+          final remaining =
+              (map['remainingReservations'] is int)
+                  ? map['remainingReservations'] as int
+                  : (int.tryParse('${map['remainingReservations']}') ?? total);
+          DateTime validFrom = now;
+          DateTime validUntil = now.add(const Duration(days: 365));
+          DateTime enrolledAt = now;
+          final vf = map['validFrom'];
+          if (vf != null) {
+            if (vf is Timestamp)
+              validFrom = vf.toDate();
+            else if (vf is String)
+              validFrom = DateTime.parse(vf);
+          }
+          final vu = map['validUntil'];
+          if (vu != null) {
+            if (vu is Timestamp)
+              validUntil = vu.toDate();
+            else if (vu is String)
+              validUntil = DateTime.parse(vu);
+          }
+          final ca = map['createdAt'];
+          if (ca != null) {
+            if (ca is Timestamp)
+              enrolledAt = ca.toDate();
+            else if (ca is String)
+              enrolledAt = DateTime.parse(ca);
+          }
+          pendingEnrollments.add(
+            CourseEnrollment(
+              id: '',
+              userId: widget.member.userId,
+              courseId: courseId,
+              userName: adminName,
+              adminDisplayName: adminName,
+              placeId: placeId,
+              enrolledAt: enrolledAt,
+              validFrom: validFrom,
+              validUntil: validUntil,
+              totalReservations: total,
+              remainingReservations: remaining,
+            ),
+          );
+        }
+      }
+    }
+
+    setState(() {
+      _pendingEnrollments = pendingEnrollments;
+      _allPendingCourseIds = foundPendingMember?.effectiveCourseIds ?? [];
+      _updatePendingCourseIds();
+      _pendingMembersLoaded = true;
+      _isLoading = !(_enrollmentsLoaded && _pendingMembersLoaded);
+    });
+  }
+
+  /// pendingMembers만 다시 조회 (일반 멤버용 일회성, places/{placeId}/pendingMembers)
   Future<void> _loadPendingMembers(
     String placeId,
     String normalizedPhone,
@@ -180,41 +305,15 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     final firestoreService = FirestoreService();
     final pendingId = '${placeId}_$normalizedPhone';
     final pendingRef = firestoreService.firestore
+        .collection('places')
+        .doc(placeId)
         .collection('pendingMembers')
         .doc(pendingId);
 
     try {
       final pendingDoc = await pendingRef.get();
       if (!mounted) return;
-
-      PendingMember? foundPendingMember;
-      if (pendingDoc.exists) {
-        try {
-          foundPendingMember = PendingMember.fromJson(
-            pendingDoc.data()!..['id'] = pendingDoc.id,
-          );
-        } catch (e) {
-          debugPrint('PendingMember 파싱 오류: $e');
-          foundPendingMember = null;
-        }
-      }
-
-      if (mounted) {
-        setState(() {
-          // pendingMember 전체 정보 저장
-          _pendingMember = foundPendingMember;
-
-          // pendingMembers는 courseIds(legacy) 또는 courseEnrollments(new) 둘 다 올 수 있음.
-          // 항상 derivedCourseIds로 표준화해서 사용한다.
-          _allPendingCourseIds = foundPendingMember?.derivedCourseIds ?? [];
-
-          // enrollments에 없는 pending 코스만 필터링
-          _updatePendingCourseIds();
-
-          _pendingMembersLoaded = true;
-          _isLoading = !(_enrollmentsLoaded && _pendingMembersLoaded);
-        });
-      }
+      _applyPendingMemberSnapshot(placeId, pendingDoc);
     } catch (e) {
       debugPrint('PendingMember 조회 오류: $e');
       if (mounted) {
@@ -374,13 +473,14 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
               onTap: _handleEditName,
             ),
             const SizedBox(width: 8),
-            // 삭제 버튼
-            _buildSvgIconButton(
-              svgPath: 'assets/icons/delete.svg',
-              color: AppColors.textPrimary,
-              onTap: _handleDeleteMember,
-            ),
-            const SizedBox(width: 8),
+            // 삭제 버튼: 일반 멤버만 제거 가능 (매니저·부매니저·소유자 차단)
+            if (_canRemoveFromPlace(context))
+              _buildSvgIconButton(
+                svgPath: 'assets/icons/delete.svg',
+                color: AppColors.textPrimary,
+                onTap: _handleDeleteMember,
+              ),
+            if (_canRemoveFromPlace(context)) const SizedBox(width: 8),
             // 닫기 버튼
             _buildIconButton(
               icon: Icons.close,
@@ -495,21 +595,16 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
         context,
         listen: false,
       );
-      // 비동기로 새로고침 (UI 블로킹 방지)
-      memberProvider.loadMembers(placeId, forceRefreshUsers: true).then((_) {
-        // MemberProvider에서 업데이트된 member 찾기
-        try {
-          final updatedMember = memberProvider.members.firstWhere(
-            (m) => m.phoneNumber == widget.member.phoneNumber,
-          );
-          if (mounted && updatedMember.name != _currentMemberName) {
-            setState(() {
-              _currentMemberName = updatedMember.name;
-            });
-          }
-        } catch (e) {
-          // member를 찾을 수 없으면 무시 (이미 로컬 상태 업데이트됨)
-          debugPrint('업데이트된 member를 찾을 수 없음: $e');
+      memberProvider.setPlaceId(placeId);
+      Future.delayed(const Duration(milliseconds: 600), () {
+        if (!mounted) return;
+        final list =
+            memberProvider.allMembers
+                .where((v) => v.phoneNumber == widget.member.phoneNumber)
+                .toList();
+        if (list.isNotEmpty &&
+            list.first.adminDisplayName != _currentMemberName) {
+          setState(() => _currentMemberName = list.first.adminDisplayName);
         }
       });
 
@@ -525,7 +620,20 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     }
   }
 
+  /// 일반 멤버만 플레이스에서 제거 가능. 매니저·부매니저·플레이스 소유자는 제거 불가.
+  bool _canRemoveFromPlace(BuildContext context) {
+    if (!widget.member.isMember) return false;
+    final place =
+        Provider.of<PlaceProvider>(context, listen: false).currentPlace;
+    if (place == null) return false;
+    return place.adminId != widget.member.userId;
+  }
+
   Future<void> _handleDeleteMember() async {
+    if (!_canRemoveFromPlace(context)) {
+      SnackbarUtil.showInfo(context, '매니저·부매니저·소유자는 제거할 수 없어요.');
+      return;
+    }
     final rootNavigator = Navigator.of(context, rootNavigator: true);
     final rootContext = rootNavigator.context;
 
@@ -536,8 +644,7 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     final shouldDelete = await CommonDialog.show(
       context: rootContext,
       title: '멤버 삭제',
-      message: '이 멤버는 더이상 접속할 수 없어요',
-      secondaryMessage: '이 멤버를 플레이스에서 제거할까요?',
+      message: '이 멤버는 더이상 접속할 수 없어요\n이 멤버를 플레이스에서 제거할까요?',
       cancelText: '취소',
       confirmText: '삭제',
       confirmButtonColor: Colors.red,
@@ -566,7 +673,7 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
       '',
     );
     final authProvider = Provider.of<AuthProvider>(rootContext, listen: false);
-    final adminUserId = authProvider.currentAdmin?.userId;
+    final adminUserId = authProvider.currentUser?.userId;
 
     try {
       // ✅ 로딩 오버레이는 제거하고, 멤버 카드에서 "삭제중" 오버레이로 표시한다.
@@ -581,13 +688,50 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
         adminUserId: adminUserId,
       );
 
-      // users.placeIds는 더 이상 사용하지 않음 (courseMembers 기반으로 조회)
+      memberProvider.setPlaceId(placeId);
+    } on FirebaseFunctionsException catch (e) {
+      debugPrint(
+        '[MemberDetailBottomSheet] removeMemberFromPlace HttpsError: ${e.code} ${e.message}',
+      );
+      if (rootContext.mounted) {
+        final msg =
+            (e.message ?? '').trim().isNotEmpty
+                ? e.message!
+                : _fallbackMessage(e.code);
+        SnackbarUtil.showInfo(rootContext, msg);
+        // 에러 시 바텀시트 다시 열지 않음 — 닫고 메시지만 표시
+        if (Navigator.of(rootContext).canPop()) {
+          Navigator.of(rootContext).pop();
+        }
+      }
+    } catch (e, stack) {
+      debugPrint(
+        '[MemberDetailBottomSheet] removeMemberFromPlace error: $e\n$stack',
+      );
+      if (rootContext.mounted) {
+        SnackbarUtil.showInfo(rootContext, '멤버를 제거하지 못했어요. 다시 시도해 주세요.');
+        // 에러 시 바텀시트 다시 열지 않음 — 닫고 메시지만 표시
+        if (Navigator.of(rootContext).canPop()) {
+          Navigator.of(rootContext).pop();
+        }
+      }
+    }
+  }
 
-      // 스트림으로 자동 반영되지만, 즉시 갱신이 필요하면 재로드
-      await memberProvider.loadMembers(placeId, forceRefreshUsers: true);
-    } catch (e) {
-      // 에러 발생 시 바텀시트 다시 열기
-      MemberDetailBottomSheet.show(context: rootContext, member: widget.member);
+  String _fallbackMessage(String? code) {
+    switch (code) {
+      case 'unauthenticated':
+        return '로그인이 필요해요.';
+      case 'permission-denied':
+        return '권한이 없어요.';
+      case 'invalid-argument':
+        return '잘못된 요청이에요.';
+      case 'failed-precondition':
+        return '서버 설정 문제로 제거에 실패했어요. 잠시 후 다시 시도해 주세요.';
+      case 'internal':
+        return '멤버를 제거하지 못했어요. 다시 시도해 주세요.';
+      default:
+        return '멤버를 제거하지 못했어요. 다시 시도해 주세요.';
     }
   }
 
@@ -608,11 +752,6 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
       return true;
     }
 
-    // 연장 요청 있음 (유효기간 증가 필요)
-    if (enrollment.hasPendingExtensionRequest) {
-      return true;
-    }
-
     return false;
   }
 
@@ -620,9 +759,13 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     final courseProvider = Provider.of<CourseProvider>(context, listen: false);
     final allCourses = courseProvider.courses;
 
+    // pending 멤버는 _pendingEnrollments 사용, 일반 멤버는 _enrollments 사용
+    final sourceEnrollments =
+        widget.member.isPending ? _pendingEnrollments : _enrollments;
+
     // 만료되었거나 횟수가 0인 enrollments (회색 배경, 앞쪽에 배치)
     final expiredOrEmptyEnrollments =
-        _enrollments
+        sourceEnrollments
             .where(
               (e) =>
                   !_processedCourseIds.contains(e.courseId) &&
@@ -632,7 +775,7 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
 
     // 유효한 enrollments (만료되지 않고 횟수가 남은 것)
     final validEnrollments =
-        _enrollments
+        sourceEnrollments
             .where(
               (e) =>
                   !e.isExpired &&
@@ -641,33 +784,37 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
             )
             .toList();
 
-    // pending 상태인 코스들 (enrollments에 없는 것만)
-    final pendingCourses =
+    // pending 상태인 코스들 (courseEnrollments/enrollments에 없는 것만, 새로 추가용)
+    final enrolledCourseIds = sourceEnrollments.map((e) => e.courseId).toSet();
+    final pendingCourseIdsOnly =
         _pendingCourseIds
-            .where((courseId) => !_processedCourseIds.contains(courseId))
-            .map((courseId) {
-              final course = allCourses.firstWhere(
-                (c) => c.id == courseId,
-                orElse: () => allCourses.first,
-              );
-              return course;
-            })
+            .where(
+              (id) =>
+                  !enrolledCourseIds.contains(id) &&
+                  !_processedCourseIds.contains(id),
+            )
             .toList();
+    final pendingCourses =
+        pendingCourseIdsOnly.map((courseId) {
+          final course = allCourses.firstWhere(
+            (c) => c.id == courseId,
+            orElse: () => allCourses.first,
+          );
+          return course;
+        }).toList();
 
     final totalCourses =
         expiredOrEmptyEnrollments.length +
         validEnrollments.length +
         pendingCourses.length;
 
-    // 등록된 코스가 없을 때
-    if (totalCourses == 0) {
-      return _buildEmptyCoursesSection(allCourses);
-    }
+    // 그리드: 코스 카드들 + 항상 맨 마지막에 "코스 추가" 셀 1개 (회색 + 버튼)
+    final gridItemCount = totalCourses + 1;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // 코스 그리드
+        // 코스 그리드 (+ 코스 추가 카드 항상 1개 포함)
         SizedBox(
           width: double.infinity,
           child: GridView.builder(
@@ -680,8 +827,12 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
               mainAxisSpacing: 8,
               childAspectRatio: 1.15,
             ),
-            itemCount: totalCourses,
+            itemCount: gridItemCount,
             itemBuilder: (context, index) {
+              // 마지막 셀: 항상 "코스 추가" 회색 카드
+              if (index == totalCourses) {
+                return _buildAddCourseCard();
+              }
               // 순서: 만료/횟수 0 -> 유효한 enrollments -> pending 코스
               if (index < expiredOrEmptyEnrollments.length) {
                 final enrollment = expiredOrEmptyEnrollments[index];
@@ -695,18 +846,12 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                     // 바텀시트를 먼저 닫고 새로운 화면으로 이동
                     Navigator.of(context).pop();
 
-                    // 재등록이 필요한 경우 재등록 탭으로 이동
-                    // 단, 연장 요청이 있으면 기간 연장 탭이 표시되므로 탭 인덱스 계산 필요
                     final hasRemainingReservations =
                         enrollment.remainingReservations > 0;
-                    final hasPendingExtensionRequest =
-                        enrollment.hasPendingExtensionRequest;
                     final initialTabIndex =
-                        hasPendingExtensionRequest
-                            ? 1 // 연장 요청이 있으면 기간 연장 탭으로 이동
-                            : (hasRemainingReservations
-                                ? 2 // 재등록/취소 탭 (기간 연장 탭 포함)
-                                : 1); // 재등록/취소 탭 (기간 연장 탭 없음)
+                        hasRemainingReservations
+                            ? 2 // 재등록/취소 탭
+                            : 1; // 재등록/취소 탭 (기간 연장 탭 없음)
 
                     final result = await Navigator.of(context).push(
                       MaterialPageRoute(
@@ -720,7 +865,6 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                       ),
                     );
                     if (result == true && mounted) {
-                      // 새로고침
                       final placeProvider = Provider.of<PlaceProvider>(
                         context,
                         listen: false,
@@ -731,13 +875,13 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                           context,
                           listen: false,
                         );
-                        await memberProvider.loadMembers(
-                          placeId,
-                          forceRefreshUsers: true,
-                        );
-                        setState(() {
-                          // 상태 업데이트
-                        });
+                        memberProvider.setPlaceId(placeId);
+                        if (widget.member.isPending) {
+                          final normalizedPhone = widget.member.phoneNumber
+                              .replaceAll(RegExp(r'[^\d]'), '');
+                          await _loadPendingMembers(placeId, normalizedPhone);
+                        }
+                        setState(() {});
                       }
                     }
                   },
@@ -758,12 +902,7 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                     // 바텀시트를 먼저 닫고 새로운 화면으로 이동
                     Navigator.of(context).pop();
 
-                    // 연장 요청이 있는 경우 기간 연장 탭으로 이동
-                    // 연장 요청이 있으면 기간 연장 탭이 표시됨 (횟수가 0이어도)
-                    final initialTabIndex =
-                        enrollment.hasPendingExtensionRequest
-                            ? 1 // 기간 연장 탭
-                            : null; // 기본값 (횟수 조정 탭)
+                    const initialTabIndex = null; // 기본값 (횟수 조정 탭)
 
                     final result = await Navigator.of(context).push(
                       MaterialPageRoute(
@@ -777,7 +916,6 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                       ),
                     );
                     if (result == true && mounted) {
-                      // 새로고침
                       final placeProvider = Provider.of<PlaceProvider>(
                         context,
                         listen: false,
@@ -788,13 +926,13 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                           context,
                           listen: false,
                         );
-                        await memberProvider.loadMembers(
-                          placeId,
-                          forceRefreshUsers: true,
-                        );
-                        setState(() {
-                          // 상태 업데이트
-                        });
+                        memberProvider.setPlaceId(placeId);
+                        if (widget.member.isPending) {
+                          final normalizedPhone = widget.member.phoneNumber
+                              .replaceAll(RegExp(r'[^\d]'), '');
+                          await _loadPendingMembers(placeId, normalizedPhone);
+                        }
+                        setState(() {});
                       }
                     }
                   },
@@ -821,54 +959,18 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                     }
 
                     final now = TimezoneUtils.getSeoulDateTime();
-
-                    // pendingMember의 courseEnrollments에서 해당 코스 정보 찾기
-                    Map<String, dynamic>? courseEnrollmentData;
-                    if (_pendingMember?.courseEnrollments != null) {
-                      courseEnrollmentData = _pendingMember!.courseEnrollments!
-                          .firstWhere(
-                            (e) => e['courseId'] == course.id,
-                            orElse: () => <String, dynamic>{},
-                          );
-                    }
-
-                    // courseEnrollments에서 정보가 있으면 사용, 없으면 기본값 사용
-                    DateTime validFrom;
-                    DateTime validUntil;
-                    int totalReservations;
-                    int remainingReservations;
-
-                    if (courseEnrollmentData != null &&
-                        courseEnrollmentData.isNotEmpty) {
-                      // courseEnrollments에서 가져온 정보 사용
-                      validFrom =
-                          courseEnrollmentData['validFrom'] != null
-                              ? DateTime.parse(
-                                courseEnrollmentData['validFrom'],
-                              )
-                              : now;
-                      validUntil =
-                          courseEnrollmentData['validUntil'] != null
-                              ? DateTime.parse(
-                                courseEnrollmentData['validUntil'],
-                              )
-                              : now.add(const Duration(days: 365));
-                      totalReservations =
-                          courseEnrollmentData['totalReservations'] != null
-                              ? courseEnrollmentData['totalReservations'] as int
-                              : course.defaultTotalReservations;
-                      remainingReservations = totalReservations;
-                    } else {
-                      // 기본값 사용
-                      validFrom = now;
-                      validUntil = now.add(const Duration(days: 365));
-                      totalReservations = course.defaultTotalReservations;
-                      remainingReservations = course.defaultTotalReservations;
-                    }
+                    // 초대 토큰에는 enrollment 설정 미저장 → 기본값 사용
+                    final validFrom = now;
+                    final validUntil = now.add(const Duration(days: 365));
+                    final totalReservations = course.defaultTotalReservations;
+                    final remainingReservations =
+                        course.defaultTotalReservations;
 
                     final tempEnrollment = CourseEnrollment(
                       id: '', // 빈 ID는 새로 생성할 enrollment를 의미
                       userId: widget.member.userId,
+                      userName: widget.member.adminDisplayName,
+                      adminDisplayName: widget.member.adminDisplayName,
                       courseId: course.id,
                       placeId: placeId,
                       enrolledAt: now,
@@ -904,79 +1006,6 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                 );
               }
             },
-          ),
-        ),
-      ],
-    );
-  }
-
-  // 등록된 코스가 없을 때 안내 메시지와 버튼
-  Widget _buildEmptyCoursesSection(List<Course> allCourses) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 0),
-
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '등록된 코스가 없어요',
-                style: TextStyle(
-                  fontSize: 16,
-                  color: AppColors.textSecondary,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () async {
-                    final result = await Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder:
-                            (context) => MemberCourseEnrollmentScreen(
-                              member: widget.member,
-                            ),
-                      ),
-                    );
-                    // 코스 등록이 성공적으로 완료되면 pendingMembers만 갱신
-                    // enrollments는 스트림으로 자동 갱신됨
-                    if (result == true && mounted) {
-                      final placeProvider = Provider.of<PlaceProvider>(
-                        context,
-                        listen: false,
-                      );
-                      final placeId = placeProvider.currentPlace?.id;
-                      if (placeId != null) {
-                        final normalizedPhone = widget.member.phoneNumber
-                            .replaceAll(RegExp(r'[^\d]'), '');
-                        await _loadPendingMembers(placeId, normalizedPhone);
-                      }
-                    }
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primaryGreen,
-                    padding: const EdgeInsets.symmetric(vertical: 18),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    elevation: 0,
-                  ),
-                  child: Text(
-                    '코스 등록 하기',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white,
-                    ),
-                  ),
-                ),
-              ),
-            ],
           ),
         ),
       ],
@@ -1146,6 +1175,68 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
             overflow: TextOverflow.ellipsis,
           ),
         ],
+      ),
+    );
+  }
+
+  /// 그리드 맨 마지막에 항상 표시되는 "코스 추가" 회색 카드 (+ 버튼)
+  Widget _buildAddCourseCard() {
+    return GestureDetector(
+      onTap: () async {
+        // 이미 등록된(또는 초대된) 코스는 등록 화면에서 숨김
+        final enrolledIds = _enrollments.map((e) => e.courseId).toSet();
+        final pendingIds = _allPendingCourseIds.toSet();
+        final excludeCourseIds = [...enrolledIds, ...pendingIds];
+
+        final result = await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder:
+                (context) => MemberCourseEnrollmentScreen(
+                  member: widget.member,
+                  excludeCourseIds: excludeCourseIds,
+                ),
+          ),
+        );
+        if (result == true && mounted) {
+          final placeProvider = Provider.of<PlaceProvider>(
+            context,
+            listen: false,
+          );
+          final placeId = placeProvider.currentPlace?.id;
+          if (placeId != null) {
+            final normalizedPhone = widget.member.phoneNumber.replaceAll(
+              RegExp(r'[^\d]'),
+              '',
+            );
+            await _loadPendingMembers(placeId, normalizedPhone);
+          }
+          final enrollmentProvider = _enrollmentProvider;
+          if (enrollmentProvider != null) {
+            _updateEnrollmentsFromProvider(enrollmentProvider);
+          }
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        decoration: BoxDecoration(
+          color: AppColors.textSecondary.withOpacity(0.07),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.add, size: 32, color: AppColors.textSecondary),
+            const SizedBox(height: 4),
+            Text(
+              '코스 등록',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textSecondary,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

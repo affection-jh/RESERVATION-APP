@@ -13,7 +13,7 @@ import '../../../widgets/common_dialog.dart';
 import '../../../widgets/valid_period_input_widget.dart';
 import '../../../widgets/reservations_input_widget.dart';
 import '../../../models/course.dart' as course_models;
-import '../../../models/admin_models.dart';
+import '../../../models/member_view.dart';
 
 /// 유효기간 단위 타입 (Course 모델의 PeriodType 사용)
 typedef PeriodType = course_models.PeriodType;
@@ -41,9 +41,16 @@ class CourseEnrollmentConfig {
 
 /// 멤버 코스 등록 화면
 class MemberCourseEnrollmentScreen extends StatefulWidget {
-  final MemberData member;
+  final MemberView member;
 
-  const MemberCourseEnrollmentScreen({super.key, required this.member});
+  /// 이미 등록된(또는 초대된) 코스 ID 목록. 이 코스들은 목록에서 숨김.
+  final List<String>? excludeCourseIds;
+
+  const MemberCourseEnrollmentScreen({
+    super.key,
+    required this.member,
+    this.excludeCourseIds,
+  });
 
   @override
   State<MemberCourseEnrollmentScreen> createState() =>
@@ -61,6 +68,7 @@ class _MemberCourseEnrollmentScreenState
   final Map<String, ValidPeriodMode> _validPeriodModes = {}; // 코스별 모드 관리
   String? _courseErrorText;
   bool _isSaving = false;
+  bool _leaveRequested = false;
 
   @override
   void dispose() {
@@ -167,6 +175,7 @@ class _MemberCourseEnrollmentScreenState
       _isSaving = true;
       _courseErrorText = null;
     });
+    if (_leaveRequested) return;
 
     try {
       final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
@@ -207,7 +216,7 @@ class _MemberCourseEnrollmentScreenState
       // ⚠️ 중앙 로직: pending/일반 멤버 자동 분기 처리
       final memberService = MemberService();
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
-      final adminId = authProvider.currentAdmin?.userId;
+      final adminId = authProvider.currentUser?.userId;
 
       final success = await memberService.enrollMemberToCourseOrUpdatePending(
         userId: widget.member.userId,
@@ -216,7 +225,9 @@ class _MemberCourseEnrollmentScreenState
         courseEnrollments: courseEnrollments,
         courses: courseProvider.courses,
         adminId: adminId,
+        adminDisplayName: widget.member.adminDisplayName,
       );
+      if (_leaveRequested) return;
 
       if (!success) {
         throw Exception('코스 등록에 실패했습니다.');
@@ -227,7 +238,7 @@ class _MemberCourseEnrollmentScreenState
         context,
         listen: false,
       );
-      await memberProvider.loadMembers(placeId);
+      memberProvider.setPlaceId(placeId);
 
       if (mounted) {
         SnackbarUtil.showSuccess(
@@ -238,17 +249,7 @@ class _MemberCourseEnrollmentScreenState
       }
     } catch (e) {
       if (mounted) {
-        // 에러 메시지를 클라이언트 친화적으로 변환
-        String errorMessage = '코스 등록 중 오류가 발생했습니다.';
-        final errorStr = e.toString();
-        if (errorStr.contains('이미 등록되어 있습니다') || errorStr.contains('이미 등록된')) {
-          errorMessage = '이미 등록되어 있습니다.';
-        } else if (errorStr.contains('코스 등록에 실패')) {
-          errorMessage = '코스 등록에 실패했습니다.';
-        } else {
-          errorMessage = '코스 등록 중 오류가 발생했습니다.';
-        }
-        SnackbarUtil.showInfo(context, errorMessage);
+        SnackbarUtil.showInfoFromError(context, e, fallback: '코스 등록 중 오류가 발생했습니다.');
       }
     } finally {
       if (mounted) {
@@ -260,6 +261,10 @@ class _MemberCourseEnrollmentScreenState
   }
 
   Future<void> _handleSave() async {
+    if (_selectedCourseIds.isEmpty) {
+      SnackbarUtil.showInfo(context, '코스를 먼저 선택해주세요.');
+      return;
+    }
     if (!_isValid()) {
       setState(() {
         _courseErrorText = '모든 설정을 올바르게 입력해주세요.';
@@ -277,6 +282,7 @@ class _MemberCourseEnrollmentScreenState
 
   /// 뒤로가기 확인 다이얼로그
   Future<bool> _onWillPop() async {
+    if (_isSaving) return _handleBackDuringSave();
     if (!_hasInput()) {
       return true;
     }
@@ -290,6 +296,19 @@ class _MemberCourseEnrollmentScreenState
     );
 
     return confirmed == true;
+  }
+
+  Future<bool> _handleBackDuringSave() async {
+    if (!_isSaving) return false;
+    final leave = await CommonDialog.showSavingLeaveConfirm(
+      context: context,
+      onLeave: () => _leaveRequested = true,
+    );
+    if (leave && mounted) {
+      setState(() => _isSaving = false);
+      return true;
+    }
+    return false;
   }
 
   @override
@@ -356,6 +375,17 @@ class _MemberCourseEnrollmentScreenState
           child: Consumer<CourseProvider>(
             builder: (context, courseProvider, _) {
               final allCourses = courseProvider.courses;
+              final excludeSet =
+                  widget.excludeCourseIds != null &&
+                          widget.excludeCourseIds!.isNotEmpty
+                      ? Set<String>.from(widget.excludeCourseIds!)
+                      : null;
+              final displayCourses =
+                  excludeSet != null
+                      ? allCourses
+                          .where((c) => !excludeSet.contains(c.id))
+                          .toList()
+                      : allCourses;
 
               return Column(
                 children: [
@@ -384,7 +414,7 @@ class _MemberCourseEnrollmentScreenState
                                 Text(
                                   '*',
                                   style: TextStyle(
-                                    fontSize: 16,
+                                    fontSize: 24,
                                     fontWeight: FontWeight.w600,
                                     color: Colors.red,
                                   ),
@@ -392,147 +422,153 @@ class _MemberCourseEnrollmentScreenState
                               ],
                             ),
                             const SizedBox(height: 12),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children:
-                                  allCourses.map((course) {
-                                    final isSelected = _selectedCourseIds
-                                        .contains(course.id);
-                                    return GestureDetector(
-                                      onTap: () {
-                                        setState(() {
-                                          if (isSelected) {
-                                            _selectedCourseIds.remove(
-                                              course.id,
-                                            );
-                                            _courseConfigs.remove(course.id);
-                                            _validPeriodModes.remove(course.id);
-                                            _periodControllers[course.id]
-                                                ?.dispose();
-                                            _periodControllers.remove(
-                                              course.id,
-                                            );
-                                            _totalReservationsControllers['${course.id}_total']
-                                                ?.dispose();
-                                            _totalReservationsControllers
-                                                .remove('${course.id}_total');
-                                            _totalReservationsFocusNodes['${course.id}_total']
-                                                ?.dispose();
-                                            _totalReservationsFocusNodes.remove(
-                                              '${course.id}_total',
-                                            );
-                                            _totalReservationsPinFocusNodes['${course.id}_total']
-                                                ?.dispose();
-                                            _totalReservationsPinFocusNodes
-                                                .remove('${course.id}_total');
-                                          } else {
-                                            _selectedCourseIds.add(course.id);
-                                            // 일괄 적용 모드 확인
-                                            final now =
-                                                TimezoneUtils.getSeoulDateTime();
-                                            final useUniform =
-                                                course.useUniformSettings;
-                                            final uniformTotal =
-                                                course
-                                                    .uniformTotalReservations ??
-                                                course.defaultTotalReservations;
-                                            final uniformPeriodType =
-                                                course.uniformPeriodType ??
-                                                PeriodType.weeks;
-                                            final uniformPeriodValue =
-                                                course.uniformPeriodValue ?? 1;
+                            if (displayCourses.isEmpty)
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 24,
+                                  horizontal: 0,
+                                ),
+                                child: Text(
+                                  '추가 등록할 코스가 없어요.\n이미 모든 코스에 등록되어 있습니다.',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    color: AppColors.textSecondary,
+                                    height: 1.4,
+                                  ),
+                                  textAlign: TextAlign.start,
+                                ),
+                              )
+                            else
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children:
+                                    displayCourses.map((course) {
+                                      final isSelected = _selectedCourseIds
+                                          .contains(course.id);
+                                      return GestureDetector(
+                                        onTap: () {
+                                          setState(() {
+                                            if (isSelected) {
+                                              _selectedCourseIds.remove(
+                                                course.id,
+                                              );
+                                              _courseConfigs.remove(course.id);
+                                              _validPeriodModes.remove(
+                                                course.id,
+                                              );
+                                              _periodControllers[course.id]
+                                                  ?.dispose();
+                                              _periodControllers.remove(
+                                                course.id,
+                                              );
+                                              _totalReservationsControllers['${course.id}_total']
+                                                  ?.dispose();
+                                              _totalReservationsControllers
+                                                  .remove('${course.id}_total');
+                                              _totalReservationsFocusNodes['${course.id}_total']
+                                                  ?.dispose();
+                                              _totalReservationsFocusNodes
+                                                  .remove('${course.id}_total');
+                                              _totalReservationsPinFocusNodes['${course.id}_total']
+                                                  ?.dispose();
+                                              _totalReservationsPinFocusNodes
+                                                  .remove('${course.id}_total');
+                                            } else {
+                                              _selectedCourseIds.add(course.id);
+                                              // 일괄 적용 모드 확인
+                                              final now =
+                                                  TimezoneUtils.getSeoulDateTime();
+                                              final defaultTotal =
+                                                  course
+                                                      .defaultTotalReservations;
+                                              final defaultPeriodType =
+                                                  course.defaultPeriodType ??
+                                                  PeriodType.weeks;
+                                              final defaultPeriodValue =
+                                                  course.defaultPeriodValue ??
+                                                  1;
 
-                                            // 유효기간 계산
-                                            final Duration duration;
-                                            switch (uniformPeriodType) {
-                                              case PeriodType.weeks:
-                                                duration = Duration(
-                                                  days: uniformPeriodValue * 7,
-                                                );
-                                                break;
-                                              case PeriodType.days:
-                                                duration = Duration(
-                                                  days: uniformPeriodValue,
-                                                );
-                                                break;
-                                              case PeriodType.months:
-                                                duration = Duration(
-                                                  days: uniformPeriodValue * 30,
-                                                );
-                                                break;
+                                              final Duration duration;
+                                              switch (defaultPeriodType) {
+                                                case PeriodType.weeks:
+                                                  duration = Duration(
+                                                    days:
+                                                        defaultPeriodValue * 7,
+                                                  );
+                                                  break;
+                                                case PeriodType.days:
+                                                  duration = Duration(
+                                                    days: defaultPeriodValue,
+                                                  );
+                                                  break;
+                                                case PeriodType.months:
+                                                  duration = Duration(
+                                                    days:
+                                                        defaultPeriodValue * 30,
+                                                  );
+                                                  break;
+                                              }
+
+                                              _courseConfigs[course
+                                                  .id] = CourseEnrollmentConfig(
+                                                courseId: course.id,
+                                                totalReservations: defaultTotal,
+                                                validFrom: now,
+                                                validUntil: now.add(duration),
+                                                periodType: defaultPeriodType,
+                                                periodValue: defaultPeriodValue,
+                                                validPeriodMode:
+                                                    ValidPeriodMode.period,
+                                              );
+                                              _validPeriodModes[course.id] =
+                                                  ValidPeriodMode.period;
                                             }
-
-                                            _courseConfigs[course
-                                                .id] = CourseEnrollmentConfig(
-                                              courseId: course.id,
-                                              totalReservations:
-                                                  useUniform ? uniformTotal : 0,
-                                              validFrom: now,
-                                              validUntil:
-                                                  useUniform
-                                                      ? now.add(duration)
-                                                      : now.add(
-                                                        const Duration(days: 7),
-                                                      ),
-                                              periodType:
-                                                  useUniform
-                                                      ? uniformPeriodType
-                                                      : PeriodType.weeks,
-                                              periodValue:
-                                                  useUniform
-                                                      ? uniformPeriodValue
-                                                      : 1,
-                                              validPeriodMode:
-                                                  ValidPeriodMode.period,
-                                            );
-                                            _validPeriodModes[course.id] =
-                                                ValidPeriodMode.period;
-                                          }
-                                          _courseErrorText = null;
-                                        });
-                                      },
-                                      child: AnimatedContainer(
-                                        duration: const Duration(
-                                          milliseconds: 200,
-                                        ),
-                                        curve: Curves.easeInOut,
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 18,
-                                          vertical: 10,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color:
-                                              isSelected
-                                                  ? AppColors.textPrimary
-                                                  : AppColors.backgroundWhite,
-                                          borderRadius: BorderRadius.circular(
-                                            16,
+                                            _courseErrorText = null;
+                                          });
+                                        },
+                                        child: AnimatedContainer(
+                                          duration: const Duration(
+                                            milliseconds: 200,
                                           ),
-                                          border:
-                                              isSelected
-                                                  ? null
-                                                  : Border.all(
-                                                    color:
-                                                        AppColors.borderLight,
-                                                    width: 1,
-                                                  ),
-                                        ),
-                                        child: Text(
-                                          course.name,
-                                          style: TextStyle(
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.w500,
+                                          curve: Curves.easeInOut,
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 18,
+                                            vertical: 10,
+                                          ),
+                                          decoration: BoxDecoration(
                                             color:
                                                 isSelected
-                                                    ? AppColors.backgroundWhite
-                                                    : AppColors.textPrimary,
+                                                    ? AppColors.textPrimary
+                                                    : AppColors.backgroundWhite,
+                                            borderRadius: BorderRadius.circular(
+                                              16,
+                                            ),
+                                            border:
+                                                isSelected
+                                                    ? null
+                                                    : Border.all(
+                                                      color:
+                                                          AppColors.borderLight,
+                                                      width: 1,
+                                                    ),
+                                          ),
+                                          child: Text(
+                                            course.name,
+                                            style: TextStyle(
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.w500,
+                                              color:
+                                                  isSelected
+                                                      ? AppColors
+                                                          .backgroundWhite
+                                                      : AppColors.textPrimary,
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                    );
-                                  }).toList(),
-                            ),
+                                      );
+                                    }).toList(),
+                              ),
                             if (_courseErrorText != null) ...[
                               const SizedBox(height: 8),
                               Padding(
@@ -580,8 +616,7 @@ class _MemberCourseEnrollmentScreenState
                     child: SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed:
-                            _isSaving || !_isValid() ? null : _handleSave,
+                        onPressed: _isSaving ? null : _handleSave,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.primaryGreen,
                           foregroundColor: Colors.white,
@@ -671,14 +706,6 @@ class _MemberCourseEnrollmentScreenState
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                '예약 가능 횟수',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: AppColors.textSecondary,
-                ),
-              ),
               const SizedBox(height: 12),
               ReservationsInputWidget(
                 controller: totalReservationsController,

@@ -1,15 +1,15 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
-import '../models/reservation.dart';
+import '../models/session_reservation.dart';
 import '../services/firestore_service.dart';
-import '../utils/timezone_utils.dart';
+import '../services/reservation_service.dart';
 
 enum ReservationOperationType { create, cancel, move }
 
 class ReservationOperationEvent {
   final ReservationOperationType type;
   final bool success;
-  final Reservation? reservation; // create 성공/실패, cancel 시 대상 예약(가능하면)
+  final SessionReservation? reservation; // create 성공/실패, cancel 시 대상 예약(가능하면)
   final Object? error;
   final StackTrace? stackTrace;
 
@@ -22,16 +22,18 @@ class ReservationOperationEvent {
   });
 }
 
-/// 예약 관리 Provider
+/// [내 예약] 전용 Provider — 개별 예약 목록 + 생성/취소/이동
 ///
-/// 사용자 예약 및 관리 기능
+/// - 데이터: SessionReservation 리스트 (reservations 글로벌 컬렉션, 사용자별)
+/// - 용도: 마이페이지·홈 "내 예약", 예약 생성/취소/이동 UI, in-flight 상태
+/// - 세션별 집계(SessionReservationSummary)는 ReservationSummaryProvider 사용
 class ReservationProvider with ChangeNotifier {
   final FirestoreService _firestoreService = FirestoreService();
 
-  List<Reservation> _reservations = [];
+  List<SessionReservation> _reservations = [];
   bool _isLoading = false;
   String? _error;
-  StreamSubscription<List<Reservation>>? _reservationSubscription;
+  StreamSubscription<List<SessionReservation>>? _reservationSubscription;
   final Set<String> _createInFlightKeys = <String>{};
   final Set<String> _cancelInFlightKeys = <String>{};
   final Set<String> _moveInFlightKeys = <String>{};
@@ -40,56 +42,13 @@ class ReservationProvider with ChangeNotifier {
   String? _currentUserId;
   String? _currentPlaceId;
 
-  List<Reservation> get reservations => List.unmodifiable(_reservations);
+  List<SessionReservation> get reservations => List.unmodifiable(_reservations);
   bool get isLoading => _isLoading;
   String? get error => _error;
   Stream<ReservationOperationEvent> get operationEvents => _opController.stream;
 
-  static int _parseTimeToMinutes(String? time) {
-    if (time == null || time.isEmpty) return 0;
-    final parts = time.split(':');
-    if (parts.isEmpty) return 0;
-    final h = int.tryParse(parts[0]) ?? 0;
-    final m = (parts.length > 1) ? (int.tryParse(parts[1]) ?? 0) : 0;
-    return (h.clamp(0, 23) * 60) + (m.clamp(0, 59));
-  }
-
-  static DateTime _reservationStartDateTime(Reservation r) {
-    final minutes = _parseTimeToMinutes(r.startTime);
-    return DateTime(
-      r.reservedDate.year,
-      r.reservedDate.month,
-      r.reservedDate.day,
-      minutes ~/ 60,
-      minutes % 60,
-    );
-  }
-
-  /// "임박한 예약"이 먼저 오도록 정렬:
-  /// - 미래/현재 예약: 시간 오름차순 (가장 임박한 순)
-  /// - 과거 예약: 시간 내림차순 (가장 최근 과거가 위)
-  static List<Reservation> _sortUpcomingFirst(List<Reservation> input) {
-    final now = TimezoneUtils.getSeoulDateTime();
-    final next = [...input];
-    next.sort((a, b) {
-      final aDt = _reservationStartDateTime(a);
-      final bDt = _reservationStartDateTime(b);
-      final aUpcoming = !aDt.isBefore(now);
-      final bUpcoming = !bDt.isBefore(now);
-      if (aUpcoming != bUpcoming) return aUpcoming ? -1 : 1;
-      final cmp = aUpcoming ? aDt.compareTo(bDt) : bDt.compareTo(aDt);
-      if (cmp != 0) return cmp;
-      return a.id.compareTo(b.id);
-    });
-    return next;
-  }
-
-  String _reservationKey(Reservation r) {
-    final d = r.reservedDate;
-    final dateString =
-        '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-    return '${r.placeId}|${r.courseId}|${r.dayOfWeek}|${r.startTime}|$dateString';
-  }
+  String _reservationKey(SessionReservation r) =>
+      ReservationService.reservationKey(r);
 
   String operationKeyFromParts({
     required String placeId,
@@ -97,12 +56,14 @@ class ReservationProvider with ChangeNotifier {
     required int dayOfWeek,
     required String startTime,
     required DateTime date,
-  }) {
-    final d = DateTime(date.year, date.month, date.day);
-    final dateString =
-        '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-    return '$placeId|$courseId|$dayOfWeek|$startTime|$dateString';
-  }
+  }) =>
+      ReservationService.operationKeyFromParts(
+        placeId: placeId,
+        courseId: courseId,
+        dayOfWeek: dayOfWeek,
+        startTime: startTime,
+        date: date,
+      );
 
   bool isOperationInFlightByKey(String key) {
     return _createInFlightKeys.contains(key) ||
@@ -124,11 +85,11 @@ class ReservationProvider with ChangeNotifier {
     return null;
   }
 
-  bool isCreatingReservation(Reservation reservation) {
+  bool isCreatingReservation(SessionReservation reservation) {
     return _createInFlightKeys.contains(_reservationKey(reservation));
   }
 
-  bool isCancellingReservation(Reservation reservation) {
+  bool isCancellingReservation(SessionReservation reservation) {
     return _cancelInFlightKeys.contains(_reservationKey(reservation));
   }
 
@@ -143,7 +104,7 @@ class ReservationProvider with ChangeNotifier {
   ///
   /// - oldKey + newKey 둘 다 in-flight에 넣어 UI(세션 블록)에서 처리 중 표시 가능
   Future<void> moveReservationWithinCourse({
-    required Reservation reservation,
+    required SessionReservation reservation,
     required int newDayOfWeek,
     required String newStartTime,
     required DateTime newReservedDate,
@@ -176,18 +137,8 @@ class ReservationProvider with ChangeNotifier {
         newStartTime: newStartTime,
         newReservedDate: newReservedDate,
       );
+      ReservationService.throwIfBatchMoveFailed(result);
 
-      final results = result['results'] as List<dynamic>? ?? [];
-      final failedResults =
-          results.where((r) => (r as Map)['success'] != true).toList();
-      if (failedResults.isNotEmpty) {
-        final error =
-            (failedResults.first as Map)['error'] as String? ??
-            '예약 이동에 실패했습니다.';
-        throw Exception(error);
-      }
-
-      // ✅ 낙관적 업데이트: 스트림이 늦게 오더라도 UI에 즉시 반영
       final updated = reservation.copyWith(
         dayOfWeek: newDayOfWeek,
         startTime: newStartTime,
@@ -201,7 +152,7 @@ class ReservationProvider with ChangeNotifier {
       if (idx >= 0) {
         final next = [..._reservations];
         next[idx] = updated;
-        _reservations = _sortUpcomingFirst(next);
+        _reservations = ReservationService.sortReservationsUpcomingFirst(next);
         notifyListeners();
       }
 
@@ -265,7 +216,8 @@ class ReservationProvider with ChangeNotifier {
           .watchUserReservations(userId, placeId: placeId)
           .listen(
             (reservations) {
-              _reservations = _sortUpcomingFirst(reservations);
+              _reservations =
+                  ReservationService.sortReservationsUpcomingFirst(reservations);
               _error = null;
               _isLoading = false;
               notifyListeners();
@@ -286,14 +238,15 @@ class ReservationProvider with ChangeNotifier {
   }
 
   /// 사용자 예약 실시간 구독
-  Stream<List<Reservation>> watchUserReservations({
+  Stream<List<SessionReservation>> watchUserReservations({
     required String userId,
     required String placeId,
   }) {
     return _firestoreService
         .watchUserReservations(userId, placeId: placeId)
         .map((reservations) {
-          _reservations = _sortUpcomingFirst(reservations);
+          _reservations =
+              ReservationService.sortReservationsUpcomingFirst(reservations);
           notifyListeners();
           return _reservations;
         });
@@ -301,8 +254,12 @@ class ReservationProvider with ChangeNotifier {
 
   /// 예약 생성
   ///
+  /// [force] true일 때 관리자 권한으로 마감 임박·정원초과 등 정책 우회 가능.
   /// Stream 구독이 자동으로 상태를 업데이트하므로 로컬 상태 업데이트는 하지 않습니다.
-  Future<Reservation> createReservation(Reservation reservation) async {
+  Future<SessionReservation> createReservation(
+    SessionReservation reservation, {
+    bool force = false,
+  }) async {
     debugPrint('[ReservationProvider] createReservation 시작');
     debugPrint('[ReservationProvider] reservation.id: ${reservation.id}');
     debugPrint(
@@ -345,7 +302,8 @@ class ReservationProvider with ChangeNotifier {
       debugPrint(
         '[ReservationProvider] FirestoreService.createReservation 호출 시작',
       );
-      final created = await _firestoreService.createReservation(reservation);
+      final created =
+          await _firestoreService.createReservation(reservation, force: force);
       debugPrint('[ReservationProvider] FirestoreService.createReservation 성공');
       debugPrint('[ReservationProvider] 생성된 예약 ID: ${created.id}');
 
@@ -355,7 +313,8 @@ class ReservationProvider with ChangeNotifier {
       final alreadyExists = _reservations.any((r) => _reservationKey(r) == key);
       debugPrint('[ReservationProvider] 이미 존재하는 예약인지: $alreadyExists');
       if (!alreadyExists) {
-        _reservations = _sortUpcomingFirst([..._reservations, created]);
+        _reservations =
+            ReservationService.sortReservationsUpcomingFirst([..._reservations, created]);
         debugPrint(
           '[ReservationProvider] 로컬 예약 목록에 추가 (총 ${_reservations.length}개)',
         );
@@ -404,7 +363,7 @@ class ReservationProvider with ChangeNotifier {
   }
 
   /// 예약 취소 (권장: 예약 객체를 넘겨서 in-flight/캘린더 UI 표시까지 가능)
-  Future<void> cancelReservation(Reservation reservation) async {
+  Future<void> cancelReservation(SessionReservation reservation) async {
     debugPrint('[ReservationProvider] cancelReservation 시작');
     debugPrint('[ReservationProvider] reservationId: ${reservation.id}');
     debugPrint('[ReservationProvider] placeId: ${reservation.placeId}');
@@ -426,16 +385,7 @@ class ReservationProvider with ChangeNotifier {
         reservationIds: [reservation.id],
         placeId: reservation.placeId,
       );
-
-      final results = result['results'] as List<dynamic>? ?? [];
-      final failedResults =
-          results.where((r) => (r as Map)['success'] != true).toList();
-      if (failedResults.isNotEmpty) {
-        final error =
-            (failedResults.first as Map)['error'] as String? ??
-            '예약 취소에 실패했습니다.';
-        throw Exception(error);
-      }
+      ReservationService.throwIfBatchCancelFailed(result);
 
       debugPrint('[ReservationProvider] cancelReservation 성공');
 
@@ -523,7 +473,7 @@ class ReservationProvider with ChangeNotifier {
   }
 
   /// 예약 가져오기
-  Reservation? getReservation(String reservationId) {
+  SessionReservation? getReservation(String reservationId) {
     try {
       return _reservations.firstWhere((r) => r.id == reservationId);
     } catch (e) {

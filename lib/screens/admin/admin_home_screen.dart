@@ -8,21 +8,22 @@ import '../../widgets/place_switch_widget.dart'
 import '../../widgets/compact_calendar_widget.dart';
 import '../../widgets/week_tab_bar.dart';
 import '../../widgets/notification_icon_widget.dart';
-import '../../models/admin_models.dart';
 import 'widgets/session_detail_screen.dart';
 import 'widgets/story_add_screen.dart';
 import 'widgets/course_add_flow.dart';
 import 'widgets/weekly_override_schedule_screen.dart';
+import 'widgets/empty_state_card.dart';
 import '../../providers/place_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/course_provider.dart';
-import '../../providers/story_provider.dart' show Story, StoryProvider;
+import '../../models/story.dart';
+import '../../providers/story_provider.dart';
 import '../../models/course.dart';
 import '../../services/firestore_service.dart';
 import '../../utils/week_range_calculator.dart';
-import '../../utils/storage_service.dart';
+import '../../utils/local_storage_util.dart';
 import '../../utils/timezone_utils.dart';
-import '../../policies/course_policy.dart';
+import '../../models/course_policy.dart';
 
 class AdminHomeScreen extends StatefulWidget {
   const AdminHomeScreen({super.key});
@@ -47,9 +48,10 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
   // 정책 기반 주차 범위
   final FirestoreService _firestoreService = FirestoreService();
   List<int> _availableWeekOffsets = [0, 1, 2]; // 기본값: 이번주, 다음주, 다다음주
-  StreamSubscription<Set<String>>? _bookingWeekOpensSub;
-  Set<String> _openedWeekStartDates = {}; // 미리 열린 주차의 weekStartDate 집합
   CoursePolicy? _currentCoursePolicy; // 현재 코스의 정책
+  String? _bookingWeekOpensPlaceId;
+  String? _bookingWeekOpensCourseId;
+  Set<String> _lastOpenedWeekStartDates = {};
 
   @override
   bool get wantKeepAlive => true; // 상태 유지 활성화
@@ -65,7 +67,6 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
 
   @override
   void dispose() {
-    _bookingWeekOpensSub?.cancel();
     super.dispose();
   }
 
@@ -163,7 +164,11 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
         placeId: placeId,
       );
       _currentCoursePolicy = policy;
-      _updateAvailableWeekOffsets(policy);
+      _updateAvailableWeekOffsets(
+        policy,
+        placeId: placeId,
+        courseId: course.id,
+      );
     } catch (_) {
       // 정책 로드 실패 시 기본값 사용
       if (mounted) {
@@ -176,11 +181,23 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
   }
 
   /// 정책 기반 주차 범위 계산 (미리 열린 주차 포함)
-  void _updateAvailableWeekOffsets(CoursePolicy? policy) {
+  void _updateAvailableWeekOffsets(
+    CoursePolicy? policy, {
+    String? placeId,
+    String? courseId,
+  }) {
     if (policy == null) {
       setState(() => _availableWeekOffsets = [0, 1, 2]);
       return;
     }
+
+    final openedWeekStartDates =
+        (placeId != null && courseId != null)
+            ? Provider.of<CourseProvider>(
+              context,
+              listen: false,
+            ).getBookingWeekOpens(placeId, courseId)
+            : <String>{};
 
     // 정책 기반 기본 주차 범위
     final baseOffsets = WeekRangeCalculator.getAvailableWeekOffsets(policy);
@@ -190,7 +207,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
 
     // 미리 열린 주차의 weekOffset 계산
     final openedOffsets = <int>{};
-    for (final weekStartDateStr in _openedWeekStartDates) {
+    for (final weekStartDateStr in openedWeekStartDates) {
       try {
         final parts = weekStartDateStr.split('-');
         final weekStartDate = DateTime(
@@ -238,41 +255,50 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
     }
   }
 
-  /// 미리 열린 주차 구독
+  /// 미리 열린 주차 구독 (CourseProvider에서 단일 구독 공유)
   void _subscribeBookingWeekOpens(Course? course, String placeId) {
-    _bookingWeekOpensSub?.cancel();
-
     if (course == null) return;
-
-    try {
-      _bookingWeekOpensSub = _firestoreService
-          .streamBookingWeekOpens(placeId: placeId, courseId: course.id)
-          .listen(
-            (openedWeekStartDates) {
-              if (!mounted) return;
-              // 스트림이 빌드 중에 즉시 emit될 수 있어, setState는 프레임 이후로 미룸.
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (!mounted) return;
-                setState(() {
-                  _openedWeekStartDates = openedWeekStartDates;
-                });
-                if (_currentCoursePolicy != null) {
-                  _updateAvailableWeekOffsets(_currentCoursePolicy);
-                }
-              });
-            },
-            onError: (e) {
-              debugPrint('[AdminHomeScreen] bookingWeekOpens stream error: $e');
-            },
-          );
-    } catch (e) {
-      debugPrint('[AdminHomeScreen] bookingWeekOpens subscribe error: $e');
+    _bookingWeekOpensPlaceId = placeId;
+    _bookingWeekOpensCourseId = course.id;
+    Provider.of<CourseProvider>(
+      context,
+      listen: false,
+    ).subscribeToBookingWeekOpens(placeId, course.id);
+    if (_currentCoursePolicy != null) {
+      _updateAvailableWeekOffsets(
+        _currentCoursePolicy,
+        placeId: placeId,
+        courseId: course.id,
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
     super.build(context); // AutomaticKeepAliveClientMixin을 위해 필요
+    final courseProvider = context.watch<CourseProvider>();
+    if (_currentCoursePolicy != null &&
+        _bookingWeekOpensPlaceId != null &&
+        _bookingWeekOpensCourseId != null) {
+      final currentOpened = courseProvider.getBookingWeekOpens(
+        _bookingWeekOpensPlaceId!,
+        _bookingWeekOpensCourseId!,
+      );
+      final openedChanged =
+          currentOpened.length != _lastOpenedWeekStartDates.length ||
+          currentOpened.any((e) => !_lastOpenedWeekStartDates.contains(e));
+      if (openedChanged) {
+        _lastOpenedWeekStartDates = Set.from(currentOpened);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _updateAvailableWeekOffsets(
+            _currentCoursePolicy,
+            placeId: _bookingWeekOpensPlaceId,
+            courseId: _bookingWeekOpensCourseId,
+          );
+        });
+      }
+    }
 
     // 플레이스 변경 감지하여 데이터 다시 로드
     final placeProvider = Provider.of<PlaceProvider>(context);
@@ -379,7 +405,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
             !adminIds.contains(place.id);
         final isLoggedIn =
             authProvider.currentUser != null ||
-            authProvider.currentAdmin != null;
+            authProvider.currentManagerUser != null;
         // 로그인 안 되어 있어도 나가기 버튼 표시
         final showExitButton = place != null && (!isLoggedIn || isUnregistered);
 
@@ -387,10 +413,12 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
           children: [
             Expanded(
               child: PlaceSwitchWidget(
-                enabled: false,
+                enabled: true,
                 showDescription: false,
                 padding: EdgeInsets.zero,
                 heroTagSuffix: 'admin_home',
+                isAdminContext: true,
+                hideChevron: true,
               ),
             ),
             const SizedBox(width: 12),
@@ -426,6 +454,18 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
     // Consumer를 사용하여 CourseProvider 변경 시에만 리빌드
     return Consumer<CourseProvider>(
       builder: (context, courseProvider, child) {
+        // 코스가 없을 때: 스토리 카드와 동일한 CTA (둥근 모서리 + 가로 마진)
+        if (courseProvider.courses.isEmpty) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: EmptyStateCard(
+              title: '아직 코스가 없어요',
+              buttonText: '코스 추가하기',
+              onPressed: () => _showCourseAddFlow(context),
+            ),
+          );
+        }
+
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: Container(
@@ -446,7 +486,21 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
               courses: courseProvider.courses,
               usage: CompactCalendarUsage.adminNavigate,
               weekOffset: _selectedWeekTab,
-              height: 450,
+              availableWeekOffsets: _availableWeekOffsets,
+              height: 500,
+              onSwipeToPrevWeek:
+                  _availableWeekOffsets.length > 1 && _selectedWeekTab > 0
+                      ? () {
+                        setState(() => _selectedWeekTab--);
+                      }
+                      : null,
+              onSwipeToNextWeek:
+                  _availableWeekOffsets.length > 1 &&
+                          _selectedWeekTab < _availableWeekOffsets.length - 1
+                      ? () {
+                        setState(() => _selectedWeekTab++);
+                      }
+                      : null,
               onSessionTap: (course, session, date) {
                 final placeId =
                     Provider.of<PlaceProvider>(
@@ -500,57 +554,11 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
 
     if (stories.isEmpty) {
       return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-          decoration: BoxDecoration(
-            color: AppColors.backgroundWhite,
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.05),
-                blurRadius: 10,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                '아직 스토리가 없어요',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textSecondary.withOpacity(0.6),
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 10),
-              Center(
-                child: ElevatedButton(
-                  onPressed: () => _showStoryAddScreen(context),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primaryGreen,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 16,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    elevation: 0,
-                  ),
-                  child: const Text(
-                    '스토리 추가하기',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ),
-            ],
-          ),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: EmptyStateCard(
+          title: '아직 스토리가 없어요',
+          buttonText: '스토리 추가하기',
+          onPressed: () => _showStoryAddScreen(context),
         ),
       );
     }
@@ -615,8 +623,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
             builder:
                 (context) => StoryAddScreen(
                   existingStory: _storyToStoryData(story),
-                  onSave: (updatedStory) async {
-                    // StoryData를 Story로 변환하여 업데이트
+                  onSave: (StoryData updatedStory) async {
                     final updated = Story(
                       id: story.id,
                       placeId: story.placeId,
@@ -629,7 +636,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
                     await storyProvider.updateStory(updated);
                   },
                   onDelete: () async {
-                    await storyProvider.deleteStory(story.id);
+                    await storyProvider.deleteStory(story.placeId, story.id);
                   },
                 ),
           ),
@@ -678,10 +685,21 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
         // 코스 데이터 다시 로드하여 비정기 일정 반영
         await courseProvider.loadCourses(currentPlace.id);
 
-        // 비정기 일정 구독 시작 (현재 주차 포함)
+        // 현재 주차 비정기 일정 즉시 새로고침 (스트림 수신 전 UI 반영)
         final now = TimezoneUtils.getSeoulDateTime();
         final daysFromMonday = now.weekday - 1;
         final thisWeekMonday = now.subtract(Duration(days: daysFromMonday));
+        final currentWeekStart = thisWeekMonday.add(
+          Duration(days: 7 * _selectedWeekTab),
+        );
+        final weekStartDate =
+            TimezoneUtils.formatDateToSeoul(currentWeekStart);
+        await courseProvider.refreshOverridesForWeek(
+          currentPlace.id,
+          weekStartDate,
+        );
+
+        // 비정기 일정 구독 시작 (현재 주차 포함)
         final weekStartDates = List.generate(3, (i) {
           final weekStart = thisWeekMonday.add(Duration(days: 7 * i));
           return TimezoneUtils.formatDateToSeoul(weekStart);
@@ -708,8 +726,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
       MaterialPageRoute(
         builder:
             (context) => StoryAddScreen(
-              existingStory: null, // 새 스토리 추가
-              onSave: (storyData) async {
+              existingStory: null,
+              onSave: (StoryData storyData) async {
                 await storyProvider.createStory(
                   placeId: currentPlace.id,
                   title: storyData.title,

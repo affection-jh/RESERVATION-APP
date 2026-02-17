@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:reservation/utils/calendar_utils.dart';
 import 'package:reservation/utils/timezone_utils.dart';
 import '../../../theme/app_colors.dart';
 import '../../../models/session_draft.dart';
+import '../../../widgets/session_block_style.dart';
 
 /// 드래그 가능한 캘린더 에디터
 class DragCalendarEditor extends StatefulWidget {
@@ -17,6 +19,7 @@ class DragCalendarEditor extends StatefulWidget {
   final double? hourSlotHeight;
   final double? totalHeight;
   final ScrollController? scrollController;
+
   /// 드래그 영역(캘린더 그리드) RenderBox용 키 - 상하단 자동스크롤을 전역 화면이 아닌 이 영역 기준으로 함
   final GlobalKey? dragAreaKey;
   final Function(List<SessionDraft>) onSessionsChanged;
@@ -108,7 +111,10 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
 
   /// 포인터 위치를 "드래그 영역(캘린더 그리드)" 기준 viewportY로 저장
   /// - 전역 화면 기준이 아니라 dragAreaKey 기준
-  void _updateFingerViewportY(double fingerContentY, Offset pointerGlobalPosition) {
+  void _updateFingerViewportY(
+    double fingerContentY,
+    Offset pointerGlobalPosition,
+  ) {
     final controller = _scrollController;
     if (controller == null || !controller.hasClients) return;
 
@@ -169,8 +175,10 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
     // 슬롯: 손가락 위치 그대로 따라감 (일반모드와 동일 - contentY = offset + viewportY)
     if (_dragYForMinute != null && _dragStartSlot != null) {
       final contentY = controller.offset + yClamped;
-      final dyAdjusted =
-          (contentY - _longPressDyUpwardOffset).clamp(0.0, double.infinity);
+      final dyAdjusted = (contentY - _longPressDyUpwardOffset).clamp(
+        0.0,
+        double.infinity,
+      );
       final slot = _getSlotFromPosition(
         dyAdjusted,
         _dragRangeStartMinutes,
@@ -181,7 +189,10 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
       if (endSlot - startSlot >= 1) {
         final startMinutes = _dragRangeStartMinutes + (startSlot * 30);
         final endMinutes = _dragRangeStartMinutes + ((endSlot + 1) * 30);
-        if (!_hasOverlap(_minutesToTime(startMinutes), _minutesToTime(endMinutes))) {
+        if (!_hasOverlap(
+          CalendarUtils.minutesToTimeString(startMinutes),
+          CalendarUtils.minutesToTimeString(endMinutes),
+        )) {
           setState(() => _dragEndSlot = slot);
         }
       }
@@ -429,8 +440,8 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
     required double Function(int minute) yForMinute,
     bool isPreview = false,
   }) {
-    final sessionStartMinutes = _parseTimeToMinutes(session.startTime);
-    final sessionEndMinutes = _parseTimeToMinutes(session.endTime);
+    final sessionStartMinutes = CalendarUtils.parseTimeToMinutes(session.startTime);
+    final sessionEndMinutes = CalendarUtils.parseTimeToMinutes(session.endTime);
     final topPosition = yForMinute(sessionStartMinutes) + 1.0;
     final sessionHeightPx = (yForMinute(sessionEndMinutes) -
             yForMinute(sessionStartMinutes))
@@ -444,8 +455,15 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
               r.startTime == session.startTime && r.endTime == session.endTime,
         );
 
-    // 정기 세션이면 회색, 비정기 세션이면 코스 색상
-    final sessionColor = isRegular ? Colors.grey[400]! : widget.courseColor;
+    final blockType = isPreview
+        ? SessionBlockType.preview
+        : isRegular
+            ? SessionBlockType.regularSchedule
+            : SessionBlockType.overrideSchedule;
+    final blockStyle = SessionBlockStyle.fromType(
+      blockType,
+      courseColor: widget.courseColor,
+    );
 
     // 세션 위젯 내용
     Widget sessionContent = Container(
@@ -453,80 +471,47 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
         horizontal: 8,
         vertical: sessionHeightPx >= 50 ? 4 : 2,
       ),
-      decoration: BoxDecoration(
-        color: isPreview ? sessionColor.withOpacity(0.3) : sessionColor,
-        borderRadius: BorderRadius.circular(8),
-        boxShadow:
-            isPreview
-                ? []
-                : [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    blurRadius: 4,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-      ),
-      child: Builder(
-        builder: (context) {
-          // 배경색 밝기에 따라 텍스트 색상 동적 결정
-          // opacity가 적용된 색상의 실제 밝기를 계산하기 위해
-          // 배경이 흰색이라고 가정하고 블렌딩된 색상의 밝기 계산
-          final backgroundColor = AppColors.backgroundWhite;
-          final actualBlockColor =
-              isPreview ? sessionColor.withOpacity(0.3) : sessionColor;
-          final blendedColor = Color.alphaBlend(
-            actualBlockColor,
-            backgroundColor,
-          );
-          final luminance = blendedColor.computeLuminance();
-
-          // 밝기에 따라 텍스트 색상 결정 (밝으면 검정, 어두우면 흰색)
-          final textColor =
-              luminance > 0.5 ? AppColors.textPrimary : Colors.white;
-
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.center,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (isRegular) ...[
-                Text(
-                  '정기일정',
-                  style: TextStyle(
-                    color: textColor,
-                    fontSize: sessionHeightPx >= 60 ? 13 : 11,
-                    fontWeight: FontWeight.w500,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                if (sessionHeightPx >= 50) const SizedBox(height: 2),
-              ],
-              Text(
-                '${session.startTime} - ${session.endTime}',
-                style: TextStyle(
-                  color: textColor,
-                  fontSize: sessionHeightPx >= 60 ? 15 : 13,
-                  fontWeight: FontWeight.w600,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+      decoration: blockStyle.toBoxDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (isRegular) ...[
+            Text(
+              '정기일정',
+              style: TextStyle(
+                color: blockStyle.textColor,
+                fontSize: sessionHeightPx >= 60 ? 13 : 11,
+                fontWeight: FontWeight.w500,
               ),
-              if (sessionHeightPx >= 70) ...[
-                const SizedBox(height: 4),
-                Text(
-                  '${session.capacity}명',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: textColor.withOpacity(0.9),
-                    fontSize: sessionHeightPx >= 90 ? 17 : 14,
-                  ),
-                ),
-              ],
-            ],
-          );
-        },
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            if (sessionHeightPx >= 50) const SizedBox(height: 2),
+          ],
+          Text(
+            '${session.startTime} - ${session.endTime}',
+            style: TextStyle(
+              color: blockStyle.textColor,
+              fontSize: sessionHeightPx >= 60 ? 15 : 13,
+              fontWeight: FontWeight.w600,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          if (sessionHeightPx >= 70) ...[
+            const SizedBox(height: 4),
+            Text(
+              '${session.capacity}명',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: blockStyle.iconColor,
+                fontSize: sessionHeightPx >= 90 ? 17 : 14,
+              ),
+            ),
+          ],
+        ],
       ),
     );
 
@@ -615,8 +600,11 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
               if (dragBox != null && dragBox.hasSize) h = dragBox.size.height;
               final yV = _lastFingerViewportY;
               if (yV != null) {
-                _autoScrollDirection =
-                    _computeAutoScrollDirection(yV, h, _autoScrollDirection);
+                _autoScrollDirection = _computeAutoScrollDirection(
+                  yV,
+                  h,
+                  _autoScrollDirection,
+                );
               }
             }
             // 1️⃣ 슬롯 계산 기준 통일: 항상 offset + viewportY (timer와 동일)
@@ -625,8 +613,10 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
             int? slot;
             if (controller != null && controller.hasClients && yV != null) {
               final contentY = controller.offset + yV;
-              final dyAdjusted = (contentY - _longPressDyUpwardOffset)
-                  .clamp(0.0, double.infinity);
+              final dyAdjusted = (contentY - _longPressDyUpwardOffset).clamp(
+                0.0,
+                double.infinity,
+              );
               slot = _getSlotFromPosition(
                 dyAdjusted,
                 rangeStartMinutes,
@@ -640,8 +630,8 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
               if (endSlot - startSlot >= 1) {
                 final startMinutes = rangeStartMinutes + (startSlot * 30);
                 final endMinutes = rangeStartMinutes + ((endSlot + 1) * 30);
-                final startTime = _minutesToTime(startMinutes);
-                final endTime = _minutesToTime(endMinutes);
+                final startTime = CalendarUtils.minutesToTimeString(startMinutes);
+                final endTime = CalendarUtils.minutesToTimeString(endMinutes);
 
                 // 겹침이 있으면 드래그 중단
                 if (_hasOverlap(startTime, endTime)) {
@@ -776,8 +766,8 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
     final startMinutes = rangeStartMinutes + (startSlot * 30);
     final endMinutes = rangeStartMinutes + ((endSlot + 1) * 30);
 
-    final startTime = _minutesToTime(startMinutes);
-    final endTime = _minutesToTime(endMinutes);
+    final startTime = CalendarUtils.minutesToTimeString(startMinutes);
+    final endTime = CalendarUtils.minutesToTimeString(endMinutes);
 
     // 겹침 체크
     if (_hasOverlap(startTime, endTime)) {
@@ -804,15 +794,15 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
 
   // 겹침 체크
   bool _hasOverlap(String startTime, String endTime) {
-    final newStart = _parseTimeToMinutes(startTime);
-    final newEnd = _parseTimeToMinutes(endTime);
+    final newStart = CalendarUtils.parseTimeToMinutes(startTime);
+    final newEnd = CalendarUtils.parseTimeToMinutes(endTime);
 
     for (final session in <SessionDraft>[
       ...widget.sessions,
       ...widget.blockedSessions,
     ]) {
-      final sessionStart = _parseTimeToMinutes(session.startTime);
-      final sessionEnd = _parseTimeToMinutes(session.endTime);
+      final sessionStart = CalendarUtils.parseTimeToMinutes(session.startTime);
+      final sessionEnd = CalendarUtils.parseTimeToMinutes(session.endTime);
 
       // 겹침 체크: 새 세션이 기존 세션과 겹치는지
       if (newStart < sessionEnd && newEnd > sessionStart) {
@@ -841,8 +831,8 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
     double Function(int minute) yForMinute,
   ) {
     for (final session in widget.sessions) {
-      final sessionStartMinutes = _parseTimeToMinutes(session.startTime);
-      final sessionEndMinutes = _parseTimeToMinutes(session.endTime);
+      final sessionStartMinutes = CalendarUtils.parseTimeToMinutes(session.startTime);
+      final sessionEndMinutes = CalendarUtils.parseTimeToMinutes(session.endTime);
       final topPosition = yForMinute(sessionStartMinutes) + 1.0;
       final bottomPosition = yForMinute(sessionEndMinutes);
 
@@ -872,19 +862,6 @@ class _DragCalendarEditorState extends State<DragCalendarEditor> {
     }
 
     return bestSlot;
-  }
-
-  int _parseTimeToMinutes(String time) {
-    final parts = time.split(':');
-    final hour = int.parse(parts[0]);
-    final minute = int.parse(parts[1]);
-    return hour * 60 + minute;
-  }
-
-  String _minutesToTime(int minutes) {
-    final hour = (minutes ~/ 60) % 24;
-    final minute = minutes % 60;
-    return '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
   }
 
   List<String> _generateTimeSlots({

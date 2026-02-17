@@ -44,16 +44,31 @@ class TimezoneUtils {
 
   /// 주어진 DateTime을 서울 시간대 기준으로 날짜만 추출 (시간 제거)
   ///
-  /// 서버의 seoulDateOnly()와 유사한 로직입니다.
+  /// Firestore Timestamp 등 "시각(instant)"은 항상 UTC 기준으로 해석한 뒤
+  /// 서울(UTC+9) 날짜로 변환한다. 기기 로컬 날짜를 쓰면 타임존에 따라 하루 어긋날 수 있음.
   static DateTime getSeoulDateOnly(DateTime date) {
-    // date가 이미 "서울 시각을 로컬 DateTime으로 재구성한 값"일 수 있으므로
-    // isUtc 여부에 따라 처리 분기한다.
-    if (!date.isUtc) {
-      return DateTime(date.year, date.month, date.day);
-    }
-
-    final seoul = date.toUtc().add(const Duration(hours: 9));
+    final utc = date.toUtc();
+    final seoul = utc.add(const Duration(hours: 9));
     return DateTime(seoul.year, seoul.month, seoul.day);
+  }
+
+  /// 서울 기준 해당 날짜의 00:00:00.000 (수강 유효 시작일 저장/비교용)
+  static DateTime getSeoulStartOfDay(DateTime date) {
+    return getSeoulDateOnly(date);
+  }
+
+  /// 서울 기준 해당 날짜의 23:59:59.999 (수강 마감일 당일 전체까지 예약 가능하도록)
+  static DateTime getSeoulEndOfDay(DateTime date) {
+    final dateOnly = getSeoulDateOnly(date);
+    return DateTime(
+      dateOnly.year,
+      dateOnly.month,
+      dateOnly.day,
+      23,
+      59,
+      59,
+      999,
+    );
   }
 
   /// 날짜와 시간 문자열("HH:mm")을 결합하여 서울 시간대 DateTime 생성

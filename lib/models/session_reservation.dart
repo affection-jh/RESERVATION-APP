@@ -1,127 +1,100 @@
-/// 세션별 예약 집계 모델
-///
-/// 특정 세션의 특정 날짜에 대한 예약 현황을 집계하여 저장
-/// 캘린더 화면 성능 최적화를 위한 컬렉션
+/// 예약 모델 (개별 사용자 예약)
 class SessionReservation {
   final String id;
-  final String sessionId; // "courseId_dayOfWeek_startTime"
+  final String userId;
   final String courseId;
   final String placeId;
+  final String enrollmentId; // 등록권 문서 ID (차감/환불/조회용)
   final int dayOfWeek;
   final String startTime;
-  final String date; // "YYYY-MM-DD"
-  final int capacity; // 해당 날짜의 수용인원
-  final int reservedCount; // 예약된 인원 수
-  final DateTime lastUpdated;
-  final DateTime? createdAt;
+  final DateTime reservedAt;
+  final DateTime reservedDate;
+  /// courseId_reservedDateString_startTime (조회/인덱스 단순화용)
+  final String sessionKey;
 
   SessionReservation({
     required this.id,
-    required this.sessionId,
+    required this.userId,
     required this.courseId,
     required this.placeId,
+    this.enrollmentId = '',
     required this.dayOfWeek,
     required this.startTime,
-    required this.date,
-    required this.capacity,
-    required this.reservedCount,
-    required this.lastUpdated,
-    this.createdAt,
+    required this.reservedAt,
+    required this.reservedDate,
+    this.sessionKey = '',
   });
 
-  /// 남은 좌석 수
-  int get remainingSeats => capacity - reservedCount;
-
-  /// 예약 가능 여부
-  bool get isAvailable => remainingSeats > 0;
-
-  /// 세션 ID 생성 헬퍼
-  static String generateSessionId(
-    String courseId,
-    int dayOfWeek,
-    String startTime,
-  ) {
-    return '${courseId}_${dayOfWeek}_${startTime}';
-  }
-
-  /// 복사본 생성
   SessionReservation copyWith({
     String? id,
-    String? sessionId,
+    String? userId,
     String? courseId,
     String? placeId,
+    String? enrollmentId,
     int? dayOfWeek,
     String? startTime,
-    String? date,
-    int? capacity,
-    int? reservedCount,
-    DateTime? lastUpdated,
-    DateTime? createdAt,
+    DateTime? reservedAt,
+    DateTime? reservedDate,
+    String? sessionKey,
   }) {
     return SessionReservation(
       id: id ?? this.id,
-      sessionId: sessionId ?? this.sessionId,
+      userId: userId ?? this.userId,
       courseId: courseId ?? this.courseId,
       placeId: placeId ?? this.placeId,
+      enrollmentId: enrollmentId ?? this.enrollmentId,
       dayOfWeek: dayOfWeek ?? this.dayOfWeek,
       startTime: startTime ?? this.startTime,
-      date: date ?? this.date,
-      capacity: capacity ?? this.capacity,
-      reservedCount: reservedCount ?? this.reservedCount,
-      lastUpdated: lastUpdated ?? this.lastUpdated,
-      createdAt: createdAt ?? this.createdAt,
+      reservedAt: reservedAt ?? this.reservedAt,
+      reservedDate: reservedDate ?? this.reservedDate,
+      sessionKey: sessionKey ?? this.sessionKey,
     );
   }
 
-  /// JSON 변환
   Map<String, dynamic> toJson() {
     return {
       'id': id,
-      'sessionId': sessionId,
+      'userId': userId,
       'courseId': courseId,
       'placeId': placeId,
+      if (enrollmentId.isNotEmpty) 'enrollmentId': enrollmentId,
       'dayOfWeek': dayOfWeek,
       'startTime': startTime,
-      'date': date,
-      'capacity': capacity,
-      'reservedCount': reservedCount,
-      'lastUpdated': lastUpdated.toIso8601String(),
-      'createdAt': createdAt?.toIso8601String(),
+      'reservedAt': reservedAt.toIso8601String(),
+      'reservedDate': reservedDate.toIso8601String(),
+      if (sessionKey.isNotEmpty) 'sessionKey': sessionKey,
     };
   }
 
-  /// JSON에서 생성 (Firestore 문서에 null 필드가 있어도 안전)
   factory SessionReservation.fromJson(Map<String, dynamic> json) {
     return SessionReservation(
       id: json['id'] as String,
-      sessionId: json['sessionId'] as String,
+      userId: json['userId'] as String,
       courseId: json['courseId'] as String,
-      placeId: json['placeId'] as String,
-      dayOfWeek: (json['dayOfWeek'] as num?)?.toInt() ?? 0,
+      placeId: json['placeId'] as String? ?? '',
+      enrollmentId: json['enrollmentId'] as String? ?? '',
+      dayOfWeek: json['dayOfWeek'] as int,
       startTime: json['startTime'] as String,
-      date: json['date'] as String,
-      capacity: (json['capacity'] as num?)?.toInt() ?? 0,
-      reservedCount: (json['reservedCount'] as num?)?.toInt() ?? 0,
-      lastUpdated: DateTime.parse(json['lastUpdated'] as String),
-      createdAt: json['createdAt'] != null
-          ? DateTime.parse(json['createdAt'] as String)
-          : null,
+      reservedAt: DateTime.parse(json['reservedAt'] as String),
+      reservedDate:
+          json['reservedDate'] != null
+              ? DateTime.parse(json['reservedDate'] as String)
+              : DateTime.parse(json['reservedAt'] as String),
+      sessionKey: json['sessionKey'] as String? ?? '',
     );
   }
 
   @override
   String toString() {
-    return 'SessionReservation(sessionId: $sessionId, date: $date, reserved: $reservedCount/$capacity)';
+    return 'SessionReservation(id: $id, courseId: $courseId, dayOfWeek: $dayOfWeek, startTime: $startTime)';
   }
 
   @override
   bool operator ==(Object other) {
     if (identical(this, other)) return true;
-    return other is SessionReservation &&
-        other.sessionId == sessionId &&
-        other.date == date;
+    return other is SessionReservation && other.id == id;
   }
 
   @override
-  int get hashCode => sessionId.hashCode ^ date.hashCode;
+  int get hashCode => id.hashCode;
 }

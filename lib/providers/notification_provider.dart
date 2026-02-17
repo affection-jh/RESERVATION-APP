@@ -2,195 +2,183 @@ import 'package:flutter/foundation.dart';
 import '../models/notification.dart';
 import '../services/firestore_service.dart';
 
-/// 알림 관리 Provider
+/// 알림 관리 Provider (일회성 로드 + FCM 수신 시 추가)
 class NotificationProvider with ChangeNotifier {
-  final FirestoreService _firestoreService = FirestoreService();
+  final FirestoreService _firestore = FirestoreService();
 
   List<AppNotification> _notifications = [];
   bool _isLoading = false;
   String? _error;
-  String? _currentPlaceId; // 현재 플레이스 ID 저장
+  String? _currentUserId;
+  String? _currentPlaceId;
+  bool? _lastLoadIsAdmin;
+  DateTime? _lastLoadTime;
 
   List<AppNotification> get notifications => List.unmodifiable(_notifications);
   bool get isLoading => _isLoading;
   String? get error => _error;
 
-  // 읽지 않은 알림 개수 (현재 플레이스에 맞는 것만)
-  int get unreadCount {
-    return _notifications.where((n) {
-      // 플레이스 필터링: placeId가 null이거나 현재 플레이스와 일치
-      if (_currentPlaceId != null && n.placeId != null) {
-        if (n.placeId != _currentPlaceId) {
+  int get unreadCount =>
+      _notifications.where((n) {
+        if (_currentPlaceId != null &&
+            n.placeId != null &&
+            n.placeId != _currentPlaceId) {
           return false;
         }
-      }
-      return !n.isRead;
-    }).length;
-  }
+        return !n.isRead;
+      }).length;
 
-  /// 사용자 알림 목록 로드 (역할별, 플레이스별) — 일회성 조회, 실시간은 FCM 수신 시 addNotificationFromId
   Future<void> loadNotifications(
     String userId, {
     bool isAdmin = false,
     String? placeId,
+    bool forceRefresh = false,
   }) async {
-    debugPrint('[NotificationProvider] loadNotifications() start userId=$userId isAdmin=$isAdmin placeId=$placeId');
+    // 동일 파라미터 + 30초 이내 재호출 시 Firestore 재요청 생략
+    if (!forceRefresh &&
+        _currentUserId == userId &&
+        _currentPlaceId == placeId &&
+        _lastLoadIsAdmin == isAdmin &&
+        _lastLoadTime != null &&
+        DateTime.now().difference(_lastLoadTime!) <
+            const Duration(seconds: 30)) {
+      return;
+    }
+
     _isLoading = true;
     _error = null;
+    _currentUserId = userId;
     _currentPlaceId = placeId;
+    _lastLoadIsAdmin = isAdmin;
     notifyListeners();
 
     try {
-      final allNotifications = await _firestoreService.getUserNotifications(
+      final all = await _firestore.getUserNotifications(
         userId,
         isAdmin: isAdmin,
       );
-      debugPrint('[NotificationProvider] getUserNotifications 반환 개수: ${allNotifications.length}');
-
-      if (placeId != null) {
-        _notifications =
-            allNotifications
-                .where((n) => n.placeId == null || n.placeId == placeId)
-                .toList();
-        debugPrint('[NotificationProvider] placeId 필터 후 개수: ${_notifications.length}');
-      } else {
-        _notifications = allNotifications;
-      }
-
-      _error = null;
+      _notifications =
+          placeId == null
+              ? all
+              : all
+                  .where((n) => n.placeId == null || n.placeId == placeId)
+                  .toList();
     } catch (e) {
-      debugPrint('[NotificationProvider] 알림 로드 실패: $e');
-      _error = null;
+      if (kDebugMode)
+        debugPrint('[NotificationProvider] loadNotifications: $e');
       _notifications = [];
     } finally {
       _isLoading = false;
+      _lastLoadTime = DateTime.now();
       notifyListeners();
-      debugPrint('[NotificationProvider] loadNotifications() end notifications.length=${_notifications.length}');
     }
   }
 
-  /// 알림 읽음 처리
   Future<void> markAsRead(String notificationId) async {
+    final userId = _currentUserId;
+    if (userId == null) return;
+    final i = _notifications.indexWhere((n) => n.id == notificationId);
+    if (i == -1) return;
+    final n = _notifications[i];
+    if (n.isRead) return;
     try {
-      final index = _notifications.indexWhere((n) => n.id == notificationId);
-      if (index == -1) return;
-
-      final notification = _notifications[index];
-      if (notification.isRead) return;
-
-      await _firestoreService.markNotificationAsRead(notificationId);
-      _notifications[index] = notification.markAsRead();
+      await _firestore.markNotificationAsRead(notificationId, userId);
+      _notifications[i] = n.markAsRead();
       notifyListeners();
     } catch (e) {
-      debugPrint('[NotificationProvider] markAsRead 오류: $e');
-      // 오류 발생 시 조용히 처리 (UI에 오류 표시하지 않음)
+      if (kDebugMode) debugPrint('[NotificationProvider] markAsRead: $e');
     }
   }
 
-  /// 모든 알림 읽음 처리
   Future<void> markAllAsRead() async {
+    final userId = _currentUserId;
+    if (userId == null) return;
+    final unread = _notifications.where((n) => !n.isRead).toList();
+    if (unread.isEmpty) return;
     try {
-      final unreadNotifications =
-          _notifications.where((n) => !n.isRead).toList();
-      if (unreadNotifications.isEmpty) return;
-
-      await _firestoreService.markAllNotificationsAsRead(
-        unreadNotifications.map((n) => n.id).toList(),
+      await _firestore.markAllNotificationsAsRead(
+        unread.map((n) => n.id).toList(),
+        userId,
       );
-
       _notifications = _notifications.map((n) => n.markAsRead()).toList();
       notifyListeners();
     } catch (e) {
-      debugPrint('[NotificationProvider] markAllAsRead 오류: $e');
-      // 오류 발생 시 조용히 처리 (UI에 오류 표시하지 않음)
+      if (kDebugMode) debugPrint('[NotificationProvider] markAllAsRead: $e');
     }
   }
 
-  /// 알림 삭제
   Future<void> deleteNotification(String notificationId) async {
+    final userId = _currentUserId;
+    if (userId == null) return;
     try {
-      await _firestoreService.deleteNotification(notificationId);
+      await _firestore.deleteNotification(notificationId, userId);
       _notifications =
           _notifications.where((n) => n.id != notificationId).toList();
       notifyListeners();
     } catch (e) {
-      debugPrint('[NotificationProvider] deleteNotification 오류: $e');
-      // 오류 발생 시 조용히 처리 (UI에 오류 표시하지 않음)
+      if (kDebugMode)
+        debugPrint('[NotificationProvider] deleteNotification: $e');
     }
   }
 
-  /// 모든 알림 삭제
   Future<void> deleteAllNotifications() async {
     if (_notifications.isEmpty) return;
+    final userId = _currentUserId;
+    if (userId == null) return;
     try {
       final ids = _notifications.map((n) => n.id).toList();
-      await _firestoreService.deleteNotifications(ids);
+      await _firestore.deleteNotifications(ids, userId);
       _notifications = [];
       notifyListeners();
     } catch (e) {
-      debugPrint('[NotificationProvider] deleteAllNotifications 오류: $e');
+      if (kDebugMode)
+        debugPrint('[NotificationProvider] deleteAllNotifications: $e');
       rethrow;
     }
   }
 
-  /// 새 알림 추가 (FCM 수신 시 사용)
+  /// FCM 수신 시 알림 문서 조회 후 목록에 추가
   Future<void> addNotificationFromId(
     String notificationId,
     String currentUserId,
     bool isAdmin, {
     String? placeId,
   }) async {
-    debugPrint('[NotificationProvider] addNotificationFromId() notificationId=$notificationId currentUserId=$currentUserId isAdmin=$isAdmin placeId=$placeId');
+    if (_notifications.any((n) => n.id == notificationId)) return;
     try {
-      if (_notifications.any((n) => n.id == notificationId)) {
-        debugPrint('[NotificationProvider] addNotificationFromId 이미 존재 → 스킵');
-        return;
-      }
-
-      final notification = await _firestoreService.getNotificationById(
+      final notification = await _firestore.getNotificationById(
         notificationId,
+        currentUserId,
       );
-      if (notification == null) {
-        debugPrint('[NotificationProvider] addNotificationFromId Firestore에서 알림 없음 (doc 없거나 파싱 실패)');
+      if (notification == null) return;
+      if (notification.userId != currentUserId ||
+          notification.isAdminNotification != isAdmin)
         return;
-      }
-      debugPrint('[NotificationProvider] addNotificationFromId Firestore 조회됨 userId=${notification.userId} isAdminNotification=${notification.isAdminNotification} placeId=${notification.placeId}');
-
-      if (notification.userId != currentUserId) {
-        debugPrint('[NotificationProvider] addNotificationFromId 알림 사용자 불일치 → 스킵');
+      if (placeId != null &&
+          notification.placeId != null &&
+          notification.placeId != placeId)
         return;
-      }
 
-      if (notification.isAdminNotification != isAdmin) {
-        debugPrint('[NotificationProvider] addNotificationFromId 알림 타입 불일치 → 스킵');
-        return;
-      }
-
-      if (placeId != null && notification.placeId != null) {
-        if (notification.placeId != placeId) {
-          debugPrint('[NotificationProvider] addNotificationFromId 알림 플레이스 불일치 → 스킵');
-          return;
-        }
-      }
-
-      _notifications.insert(0, notification);
-      _notifications.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      _notifications = [notification, ..._notifications]
+        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
       if (_notifications.length > 100) {
         _notifications = _notifications.take(100).toList();
       }
       notifyListeners();
-      debugPrint('[NotificationProvider] addNotificationFromId 추가 완료, 목록 개수=${_notifications.length}');
     } catch (e) {
-      debugPrint('[NotificationProvider] addNotificationFromId error: $e');
+      if (kDebugMode)
+        debugPrint('[NotificationProvider] addNotificationFromId: $e');
     }
   }
 
-  /// 데이터 초기화
   void clear() {
     _notifications = [];
     _isLoading = false;
     _error = null;
+    _currentUserId = null;
     _currentPlaceId = null;
+    _lastLoadIsAdmin = null;
+    _lastLoadTime = null;
     notifyListeners();
   }
 }

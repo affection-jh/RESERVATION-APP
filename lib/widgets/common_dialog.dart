@@ -25,6 +25,31 @@ class CommonDialog extends StatelessWidget {
     this.confirmButtonColor,
   });
 
+  /// 저장/로딩 중 뒤로가기 시 "저장 중입니다. 나가시겠습니까?" 다이얼로그
+  /// 취소 → 다이얼로그만 닫음. 나가기 → onLeave 호출 후 true 반환 (호출측에서 pop)
+  static Future<bool> showSavingLeaveConfirm({
+    required BuildContext context,
+    String title = '저장 중입니다',
+    String message = '변경사항이 저장되지 않을 수 있습니다.\n정말 나가시겠습니까?',
+    String cancelText = '취소',
+    String leaveText = '나가기',
+    VoidCallback? onLeave,
+  }) async {
+    final result = await show(
+      context: context,
+      title: title,
+      message: message,
+      cancelText: cancelText,
+      confirmText: leaveText,
+      confirmButtonColor: Colors.red,
+      onCancel: () {},
+      onConfirm: () {
+        onLeave?.call();
+      },
+    );
+    return result == true;
+  }
+
   static Future<bool?> show({
     required BuildContext context,
     required String title,
@@ -148,6 +173,168 @@ class CommonDialog extends StatelessWidget {
                     ),
                     child: Text(
                       confirmText,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.backgroundWhite,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 제한되는 멤버만 "이름: 사유"로 명시. 취소 / 한 번에 모두 추가 2버튼. 공통 다이얼로그 스타일.
+/// [restrictedEntries] 각 항목: { displayName, reason }
+/// 반환: 'cancel' | 'forceAll'
+class BatchAddConfirmDialog extends StatelessWidget {
+  final String title;
+  final List<MapEntry<String, String>> restrictedEntries;
+  final String cancelText;
+  final String forceAllText;
+
+  const BatchAddConfirmDialog({
+    super.key,
+    required this.title,
+    required this.restrictedEntries,
+    this.cancelText = '취소',
+    this.forceAllText = '한 번에 모두 추가',
+  });
+
+  static Future<String?> show({
+    required BuildContext context,
+    required String title,
+    required List<MapEntry<String, String>> restrictedEntries,
+    String cancelText = '취소',
+    String forceAllText = '한 번에 모두 추가',
+  }) {
+    return showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder:
+          (context) => BatchAddConfirmDialog(
+            title: title,
+            restrictedEntries: restrictedEntries,
+            cancelText: cancelText,
+            forceAllText: forceAllText,
+          ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 32, 24, 12),
+            child: Text(
+              title,
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: AppColors.textPrimary,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Text(
+              '아래 멤버는 다음과 같은 사유로 제한됩니다.',
+              style: TextStyle(fontSize: 14, color: AppColors.textPrimary),
+              textAlign: TextAlign.center,
+            ),
+          ),
+          const SizedBox(height: 12),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 200),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children:
+                    restrictedEntries
+                        .map(
+                          (e) => Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                            child: Text(
+                              '· ${e.key}: ${e.value}',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: AppColors.textPrimary,
+                              ),
+                            ),
+                          ),
+                        )
+                        .toList(),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Text(
+              '관리자 권한으로 한 번에 추가하시겠습니까?',
+              style: TextStyle(fontSize: 14, color: AppColors.textPrimary),
+              textAlign: TextAlign.center,
+            ),
+          ),
+          const SizedBox(height: 24),
+          Row(
+            children: [
+              Expanded(
+                child: InkWell(
+                  onTap: () => Navigator.of(context).pop('cancel'),
+                  borderRadius: const BorderRadius.only(
+                    bottomLeft: Radius.circular(20),
+                  ),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    decoration: BoxDecoration(
+                      color: AppColors.backgroundLight,
+                      borderRadius: const BorderRadius.only(
+                        bottomLeft: Radius.circular(20),
+                      ),
+                    ),
+                    child: Text(
+                      cancelText,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+              ),
+              Expanded(
+                child: InkWell(
+                  onTap: () => Navigator.of(context).pop('forceAll'),
+                  borderRadius: const BorderRadius.only(
+                    bottomRight: Radius.circular(20),
+                  ),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    decoration: BoxDecoration(
+                      color: AppColors.primaryGreen,
+                      borderRadius: const BorderRadius.only(
+                        bottomRight: Radius.circular(20),
+                      ),
+                    ),
+                    child: Text(
+                      forceAllText,
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,

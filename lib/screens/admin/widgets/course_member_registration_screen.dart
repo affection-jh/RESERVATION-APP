@@ -2,17 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
-import '../../../models/course.dart' as reservation_models;
-import '../../../models/course_enrollment.dart';
-import '../../../models/pending_member.dart';
-import '../../../models/user.dart';
+import '../../../models/course.dart' as models;
 import '../../../providers/course_provider.dart';
 import '../../../providers/member_provider.dart';
 import '../../../providers/place_provider.dart';
-import '../../../services/firestore_service.dart';
 import '../../../services/member_service.dart';
 import '../../../utils/snackbar_util.dart';
-import '../../../utils/member_utils.dart';
 import '../../../theme/app_colors.dart';
 import '../../../utils/text_field_decoration_util.dart';
 import '../../../utils/timezone_utils.dart';
@@ -21,7 +16,7 @@ import '../../../widgets/reservations_input_widget.dart';
 import '../../../widgets/valid_period_input_widget.dart';
 import '../../../widgets/defualt_tapbar.dart';
 
-typedef PeriodType = reservation_models.PeriodType;
+typedef PeriodType = models.PeriodType;
 
 /// 코스 상세보기 전용 멤버 등록 화면 모드
 enum CourseMemberRegistrationMode {
@@ -88,7 +83,6 @@ class _CourseMemberRegistrationScreenState
     extends State<CourseMemberRegistrationScreen> {
   CourseMemberRegistrationMode _mode = CourseMemberRegistrationMode.inputNew;
   String _lastMemberSearchLogKey = '';
-  String? _memberLoadRequestedPlaceId;
 
   // 신규 입력 컨트롤러
   late TextEditingController _nameCtrl;
@@ -110,6 +104,7 @@ class _CourseMemberRegistrationScreenState
   late TextEditingController _currentTotalReservationsCtrl;
 
   bool _isSaving = false;
+  bool _leaveRequested = false;
   bool _isExistingMember = false; // 기존 멤버 여부 (신규 추가 막기용)
   bool _isCheckingPhone = false;
   String? _phoneErrorText;
@@ -124,37 +119,26 @@ class _CourseMemberRegistrationScreenState
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeCurrentConfig();
-      _loadMembersIfNeeded();
+      _ensureMemberProviderPlaceId();
     });
   }
 
-  /// 현재 플레이스의 멤버를 로드 (필요한 경우에만)
-  Future<void> _loadMembersIfNeeded() async {
+  void _ensureMemberProviderPlaceId() {
     if (!mounted) return;
-    final memberProvider = Provider.of<MemberProvider>(context, listen: false);
-    final placeId = widget.placeId;
-
-    // 멤버가 이미 로드되어 있지 않은 경우에만 로드
-    if (memberProvider.members.isEmpty) {
-      try {
-        if (kDebugMode) {
-          debugPrint(
-            '[CourseMemberRegistrationScreen] loadMembersIfNeeded placeId=$placeId (members empty -> load)',
-          );
-        }
-        await memberProvider.loadMembers(placeId);
-      } catch (e) {
-        // 에러 발생 시에도 계속 진행
-        debugPrint('멤버 로드 실패: $e');
-      }
-    } else {
-      if (kDebugMode) {
-        debugPrint(
-          '[CourseMemberRegistrationScreen] loadMembersIfNeeded placeId=$placeId (already loaded count=${memberProvider.members.length})',
-        );
-      }
-    }
+    Provider.of<MemberProvider>(
+      context,
+      listen: false,
+    ).setPlaceId(widget.placeId);
   }
+
+  String _placeId() =>
+      Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id ??
+      widget.placeId;
+
+  models.Course _course() => Provider.of<CourseProvider>(
+    context,
+    listen: false,
+  ).courses.firstWhere((c) => c.id == widget.courseId);
 
   @override
   void dispose() {
@@ -169,37 +153,30 @@ class _CourseMemberRegistrationScreenState
 
   void _initializeCurrentConfig() {
     if (!mounted) return;
-    final courseProvider = Provider.of<CourseProvider>(context, listen: false);
-    final course = courseProvider.courses.firstWhere(
-      (c) => c.id == widget.courseId,
-      orElse: () => throw Exception('Course not found: ${widget.courseId}'),
-    );
+    final course = _course();
 
     final now = TimezoneUtils.getSeoulDateTime();
-    final useUniform = course.useUniformSettings;
-    final uniformTotal =
-        course.uniformTotalReservations ?? course.defaultTotalReservations;
-    final uniformPeriodType = course.uniformPeriodType ?? PeriodType.weeks;
-    final uniformPeriodValue = course.uniformPeriodValue ?? 1;
+    final defaultTotal = course.defaultTotalReservations;
+    final defaultPeriodType = course.defaultPeriodType ?? PeriodType.weeks;
+    final defaultPeriodValue = course.defaultPeriodValue ?? 1;
 
     final Duration duration;
-    switch (uniformPeriodType) {
-      case reservation_models.PeriodType.weeks:
-        duration = Duration(days: uniformPeriodValue * 7);
+    switch (defaultPeriodType) {
+      case models.PeriodType.weeks:
+        duration = Duration(days: defaultPeriodValue * 7);
         break;
-      case reservation_models.PeriodType.days:
-        duration = Duration(days: uniformPeriodValue);
+      case models.PeriodType.days:
+        duration = Duration(days: defaultPeriodValue);
         break;
-      case reservation_models.PeriodType.months:
-        duration = Duration(days: uniformPeriodValue * 30);
+      case models.PeriodType.months:
+        duration = Duration(days: defaultPeriodValue * 30);
         break;
     }
 
-    final totalReservations = useUniform ? uniformTotal : 0;
-    final periodType = useUniform ? uniformPeriodType : PeriodType.weeks;
-    final periodValue = useUniform ? uniformPeriodValue : 1;
-    final validUntil =
-        useUniform ? now.add(duration) : now.add(const Duration(days: 7));
+    final totalReservations = defaultTotal;
+    final periodType = defaultPeriodType;
+    final periodValue = defaultPeriodValue;
+    final validUntil = now.add(duration);
 
     setState(() {
       _currentConfig = CourseEnrollmentConfig(
@@ -217,57 +194,34 @@ class _CourseMemberRegistrationScreenState
     });
   }
 
-  String _normalizePhone(String phoneNumber) {
-    var digits = phoneNumber.replaceAll(RegExp(r'[^\d]'), '');
-    if (digits.startsWith('82')) {
-      digits = '0${digits.substring(2)}';
-    }
-    if (!digits.startsWith('0')) {
-      digits = '0$digits';
-    }
-    return digits;
+  static String _normalizePhone(String phone) {
+    var d = phone.replaceAll(RegExp(r'[^\d]'), '');
+    if (d.startsWith('82')) d = '0${d.substring(2)}';
+    if (!d.startsWith('0')) d = '0$d';
+    return d;
   }
 
-  Future<bool> _isPhoneDuplicateInFirebase(String phoneNumber) async {
-    final normalizedPhone = _normalizePhone(phoneNumber);
-    if (normalizedPhone.length != 11) return false;
-
-    try {
-      final memberProvider = Provider.of<MemberProvider>(
-        context,
-        listen: false,
-      );
-      final firestoreService = FirestoreService();
-      final placeId = widget.placeId;
-
-      // 1. 현재 플레이스의 멤버 목록에서 확인
-      for (final member in memberProvider.members) {
-        if (_normalizePhone(member.phoneNumber) == normalizedPhone) {
-          return true;
-        }
-      }
-
-      // 2. pendingMembers에서 확인
-      final pendingId = '${placeId}_$normalizedPhone';
-      final pendingRef = firestoreService.firestore
-          .collection('pendingMembers')
-          .doc(pendingId);
-      final pendingDoc = await pendingRef.get();
-
-      if (pendingDoc.exists) {
-        final data = pendingDoc.data();
-        final status = data?['status'] as String?;
-        // status가 null이거나 'approved'인 경우 중복으로 간주
-        if (status == null || status == 'approved') {
-          return true;
-        }
-      }
-
-      return false;
-    } catch (e) {
-      debugPrint('❌ [전화번호 중복 체크 오류] $e');
-      return false;
+  static String _formatPhoneInput(String digitsOnly) {
+    if (digitsOnly.isEmpty) return '010';
+    if (digitsOnly.length <= 3) return digitsOnly;
+    if (digitsOnly.length <= 7) {
+      return '${digitsOnly.substring(0, 3)}-${digitsOnly.substring(3)}';
     }
+    if (digitsOnly.length <= 11) {
+      return '${digitsOnly.substring(0, 3)}-${digitsOnly.substring(3, 7)}-${digitsOnly.substring(7)}';
+    }
+    return '${digitsOnly.substring(0, 3)}-${digitsOnly.substring(3, 7)}-${digitsOnly.substring(7, 11)}';
+  }
+
+  /// 전화번호 중복 여부 (MemberProvider.allMembers = members + pendingMembers)
+  Future<bool> _isPhoneDuplicate(String phoneNumber) async {
+    final normalized = _normalizePhone(phoneNumber);
+    if (normalized.length != 11) return false;
+
+    final memberProvider = Provider.of<MemberProvider>(context, listen: false);
+    return memberProvider.allMembers.any(
+      (v) => _normalizePhone(v.phoneNumber) == normalized,
+    );
   }
 
   Future<void> _checkPhoneInFirebase(String phoneNumber) async {
@@ -279,7 +233,7 @@ class _CourseMemberRegistrationScreenState
       _isExistingMember = false;
     });
 
-    final isDuplicate = await _isPhoneDuplicateInFirebase(phoneNumber);
+    final isDuplicate = await _isPhoneDuplicate(phoneNumber);
 
     if (!mounted) return;
 
@@ -296,6 +250,57 @@ class _CourseMemberRegistrationScreenState
         _isExistingMember = false;
       });
     }
+  }
+
+  Widget _buildAddButton({
+    required bool enabled,
+    required VoidCallback onPressed,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+      decoration: const BoxDecoration(color: AppColors.backgroundWhite),
+      child: SizedBox(
+        width: double.infinity,
+        child: ElevatedButton.icon(
+          onPressed: enabled ? onPressed : null,
+          icon: Icon(
+            Icons.add,
+            color: enabled ? Colors.white : AppColors.textSecondary,
+          ),
+          label:
+              _isSaving
+                  ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        AppColors.primaryGreen,
+                      ),
+                    ),
+                  )
+                  : const Text(
+                    '추가',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                  ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor:
+                enabled
+                    ? AppColors.primaryGreen
+                    : AppColors.textSecondary.withValues(alpha: 0.3),
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 18),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+            elevation: 0,
+            disabledBackgroundColor: AppColors.textPrimary.withValues(
+              alpha: 0.1,
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   bool _isConfigValid() {
@@ -318,11 +323,20 @@ class _CourseMemberRegistrationScreenState
           index == 0
               ? CourseMemberRegistrationMode.inputNew
               : CourseMemberRegistrationMode.selectExisting;
-      // 탭 변경 시 선택된 멤버 초기화
       _selectedMemberName = null;
       _selectedMemberPhone = null;
       _selectedMemberUserId = null;
+      if (index == 1) {
+        _currentConfig = null;
+      }
     });
+    if (index == 1) {
+      Provider.of<MemberProvider>(
+        context,
+        listen: false,
+      ).setPlaceId(widget.placeId);
+      _initializeCurrentConfig();
+    }
   }
 
   Future<void> _addAndSaveMember({
@@ -346,10 +360,10 @@ class _CourseMemberRegistrationScreenState
 
     if (!isExistingMemberAdd) {
       // 신규 입력 모드: 중복 체크 필요
-      // 동기 체크: memberProvider.members에서 즉시 확인
+      // 동기 체크: memberProvider.allMembers에서 즉시 확인
       bool isExistingMemberSync = false;
-      for (final member in memberProvider.members) {
-        if (_normalizePhone(member.phoneNumber) == normalizedPhone) {
+      for (final v in memberProvider.allMembers) {
+        if (_normalizePhone(v.phoneNumber) == normalizedPhone) {
           isExistingMemberSync = true;
           break;
         }
@@ -370,7 +384,7 @@ class _CourseMemberRegistrationScreenState
         _isExistingMember = false;
       });
 
-      final isDuplicate = await _isPhoneDuplicateInFirebase(trimmedPhone);
+      final isDuplicate = await _isPhoneDuplicate(trimmedPhone);
 
       if (!mounted) return;
 
@@ -389,22 +403,14 @@ class _CourseMemberRegistrationScreenState
       _isCheckingPhone = false;
       _isExistingMember = false;
     });
+    if (_leaveRequested) return;
 
     try {
       // ⚠️ 중요: 기존 멤버에서 추가하는 경우와 신규 입력하는 경우 구분
       final isExistingMemberAdd = _selectedMemberUserId != null;
 
       if (isExistingMemberAdd) {
-        // 기존 멤버에 코스 추가 (중앙 로직 사용)
-        final placeProvider = Provider.of<PlaceProvider>(
-          context,
-          listen: false,
-        );
-        final placeId = placeProvider.currentPlace?.id ?? widget.placeId;
-        final courseProvider = Provider.of<CourseProvider>(
-          context,
-          listen: false,
-        );
+        final placeId = _placeId();
 
         final courseEnrollments = [
           {
@@ -422,20 +428,19 @@ class _CourseMemberRegistrationScreenState
           placeId: placeId,
           phoneNumber: trimmedPhone,
           courseEnrollments: courseEnrollments,
-          courses: courseProvider.courses,
+          courses: Provider.of<CourseProvider>(context, listen: false).courses,
+          adminDisplayName: _selectedMemberName,
         );
+        if (_leaveRequested) return;
 
         if (!success) {
           throw Exception('코스 등록에 실패했습니다.');
         }
 
-        // MemberProvider 새로고침
-        await memberProvider.loadMembers(placeId);
-
-        if (mounted) {
-          SnackbarUtil.showSuccess(context, '추가되었습니다.');
-          Navigator.of(context).pop();
-        }
+        memberProvider.setPlaceId(placeId);
+        if (!context.mounted) return;
+        SnackbarUtil.showSuccess(context, '추가되었습니다.');
+        Navigator.of(context).pop();
       } else {
         // 신규 멤버 등록 (기존 로직)
         final payload = [
@@ -454,44 +459,32 @@ class _CourseMemberRegistrationScreenState
         ];
 
         await widget.onSave(payload);
+        if (_leaveRequested) return;
 
-        // 멤버 등록 후 리스트 동기화
-        final placeProvider = Provider.of<PlaceProvider>(
-          context,
-          listen: false,
-        );
-        final currentPlaceId = placeProvider.currentPlace?.id ?? widget.placeId;
-        await memberProvider.loadMembers(currentPlaceId);
-
-        // 저장 성공 후 화면 닫기
-        if (mounted) {
-          Navigator.of(context).pop();
-        }
+        memberProvider.setPlaceId(_placeId());
+        if (!context.mounted) return;
+        Navigator.of(context).pop();
       }
     } catch (e) {
-      if (mounted) {
-        // 에러 메시지를 클라이언트 친화적으로 변환
-        String errorMessage = '코스 등록 중 오류가 발생했습니다.';
-        final errorStr = e.toString();
-        if (errorStr.contains('이미 등록되어 있습니다') || errorStr.contains('이미 등록된')) {
-          errorMessage = '이미 등록되어 있습니다.';
-        } else if (errorStr.contains('코스 등록에 실패')) {
-          errorMessage = '코스 등록에 실패했습니다.';
-        } else {
-          errorMessage = '코스 등록 중 오류가 발생했습니다.';
-        }
-        SnackbarUtil.showInfo(context, errorMessage);
-      }
+      if (!context.mounted) return;
+      final errorStr = e.toString();
+      final errorMessage =
+          (errorStr.contains('이미 등록되어 있습니다') || errorStr.contains('이미 등록된'))
+              ? '이미 등록되어 있습니다.'
+              : errorStr.contains('코스 등록에 실패')
+              ? '코스 등록에 실패했습니다.'
+              : '코스 등록 중 오류가 발생했습니다.';
+      SnackbarUtil.showInfo(context, errorMessage);
     } finally {
       if (mounted) {
-        setState(() {
-          _isSaving = false;
-        });
+        setState(() => _isSaving = false);
       }
     }
   }
 
   Future<bool> _onWillPop() async {
+    if (_isSaving) return _handleBackDuringSave();
+
     final hasInput =
         _nameCtrl.text.trim().isNotEmpty ||
         (_phoneCtrl.text.trim().isNotEmpty && _phoneCtrl.text.trim() != '010');
@@ -511,11 +504,24 @@ class _CourseMemberRegistrationScreenState
     return shouldPop ?? false;
   }
 
+  Future<bool> _handleBackDuringSave() async {
+    if (!_isSaving) return false;
+    final leave = await CommonDialog.showSavingLeaveConfirm(
+      context: context,
+      onLeave: () => _leaveRequested = true,
+    );
+    if (leave && mounted) {
+      setState(() => _isSaving = false);
+      return true;
+    }
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
     return PopScope(
       canPop: false,
-      onPopInvoked: (didPop) async {
+      onPopInvokedWithResult: (didPop, result) async {
         if (!didPop) {
           final shouldPop = await _onWillPop();
           if (shouldPop && context.mounted) {
@@ -552,10 +558,7 @@ class _CourseMemberRegistrationScreenState
   }
 
   Widget _buildInputNewMode() {
-    final courseProvider = Provider.of<CourseProvider>(context, listen: false);
-    final course = courseProvider.courses.firstWhere(
-      (c) => c.id == widget.courseId,
-    );
+    final course = _course();
 
     final name = _nameCtrl.text.trim();
     final phone = _phoneCtrl.text.trim();
@@ -624,27 +627,11 @@ class _CourseMemberRegistrationScreenState
                             LengthLimitingTextInputFormatter(13),
                           ],
                           onChanged: (value) {
-                            final digitsOnly = value.replaceAll(
+                            final digits = value.replaceAll(
                               RegExp(r'[^\d]'),
                               '',
                             );
-                            String formatted =
-                                digitsOnly.isEmpty ? '010' : digitsOnly;
-
-                            String result = '';
-                            if (formatted.length <= 3) {
-                              result = formatted;
-                            } else if (formatted.length <= 7) {
-                              result =
-                                  '${formatted.substring(0, 3)}-${formatted.substring(3)}';
-                            } else if (formatted.length <= 11) {
-                              result =
-                                  '${formatted.substring(0, 3)}-${formatted.substring(3, 7)}-${formatted.substring(7)}';
-                            } else {
-                              result =
-                                  '${formatted.substring(0, 3)}-${formatted.substring(3, 7)}-${formatted.substring(7, 11)}';
-                            }
-
+                            final result = _formatPhoneInput(digits);
                             if (_phoneCtrl.text != result) {
                               _phoneCtrl.value = TextEditingValue(
                                 text: result,
@@ -653,10 +640,7 @@ class _CourseMemberRegistrationScreenState
                                 ),
                               );
                             }
-
-                            // 전화번호 입력 시 실시간 중복 체크
-                            final normalizedPhone = _normalizePhone(result);
-                            if (normalizedPhone.length == 11) {
+                            if (_normalizePhone(result).length == 11) {
                               _checkPhoneInFirebase(result);
                             } else {
                               setState(() {
@@ -688,64 +672,16 @@ class _CourseMemberRegistrationScreenState
           ),
         ),
 
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-          decoration: const BoxDecoration(color: AppColors.backgroundWhite),
-          child: SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed:
-                  canAdd
-                      ? () => _addAndSaveMember(name: name, phoneNumber: phone)
-                      : null,
-              icon: Icon(
-                Icons.add,
-                color: canAdd ? Colors.white : AppColors.textSecondary,
-              ),
-              label:
-                  _isSaving
-                      ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            AppColors.primaryGreen,
-                          ),
-                        ),
-                      )
-                      : const Text(
-                        '추가',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor:
-                    canAdd
-                        ? AppColors.primaryGreen
-                        : AppColors.textSecondary.withOpacity(0.3),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 18),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                elevation: 0,
-                disabledBackgroundColor: AppColors.textPrimary.withOpacity(0.1),
-              ),
-            ),
-          ),
+        _buildAddButton(
+          enabled: canAdd,
+          onPressed: () => _addAndSaveMember(name: name, phoneNumber: phone),
         ),
       ],
     );
   }
 
   Widget _buildSelectExistingMode() {
-    final courseProvider = Provider.of<CourseProvider>(context, listen: false);
-    final course = courseProvider.courses.firstWhere(
-      (c) => c.id == widget.courseId,
-    );
+    final course = _course();
 
     // 멤버가 선택되었고 설정이 유효한지 확인
     final hasSelectedMember =
@@ -767,20 +703,7 @@ class _CourseMemberRegistrationScreenState
                 DefaultTapbar(
                   labels: ['신규 입력', '기존 멤버에서 추가'],
                   selectedIndex: _modeIndex,
-                  onTabChanged: (index) {
-                    setState(() {
-                      _mode =
-                          index == 0
-                              ? CourseMemberRegistrationMode.inputNew
-                              : CourseMemberRegistrationMode.selectExisting;
-                      // 탭 변경 시 선택된 멤버 초기화
-                      _selectedMemberName = null;
-                      _selectedMemberPhone = null;
-                      _selectedMemberUserId = null;
-                      _currentConfig = null;
-                    });
-                    _initializeCurrentConfig();
-                  },
+                  onTabChanged: _onTabChanged,
                 ),
                 const SizedBox(height: 24),
 
@@ -810,32 +733,10 @@ class _CourseMemberRegistrationScreenState
 
                       Consumer<MemberProvider>(
                         builder: (context, memberProvider, _) {
-                          // hot reload 이후에도 멤버 로드가 보장되도록 build 시점에서도 트리거
-                          if (memberProvider.members.isEmpty &&
-                              !memberProvider.isLoading &&
-                              _memberLoadRequestedPlaceId != widget.placeId) {
-                            _memberLoadRequestedPlaceId = widget.placeId;
-                            if (kDebugMode) {
-                              debugPrint(
-                                '[CourseMemberRegistrationScreen] trigger loadMembers in build placeId=${widget.placeId}',
-                              );
-                            }
-                            Future.microtask(() async {
-                              try {
-                                await Provider.of<MemberProvider>(
-                                  context,
-                                  listen: false,
-                                ).loadMembers(widget.placeId);
-                              } catch (e) {
-                                debugPrint('멤버 로드 실패(build): $e');
-                              }
-                            });
-                          }
-
                           final q = _searchCtrl.text.trim();
                           if (kDebugMode) {
                             final key =
-                                'q=$q|members=${memberProvider.members.length}|loading=${memberProvider.isLoading}|mode=$_mode';
+                                'q=$q|members=${memberProvider.allMembers.length}|loading=${memberProvider.isLoading}|mode=$_mode';
                             if (_lastMemberSearchLogKey != key) {
                               _lastMemberSearchLogKey = key;
                               debugPrint(
@@ -853,63 +754,23 @@ class _CourseMemberRegistrationScreenState
                                 name.replaceAll(' ', '').contains(nq);
                           }
 
-                          // pendingMembers도 "전체 멤버"로 포함 (AdminMemberScreen과 동일한 방식)
-                          final now = TimezoneUtils.getSeoulDateTime();
-                          final pendingAsUsers =
-                              memberProvider.pendingMembers.map((
-                                PendingMember pm,
-                              ) {
-                                // ⚠️ courseIds 제거: courseEnrollments에서 유도
-                                final courseIds = pm.derivedCourseIds;
-                                final enrollments =
-                                    courseIds.map((courseId) {
-                                      return CourseEnrollment(
-                                        id: 'pending_${pm.id}_$courseId',
-                                        userId: 'pending_${pm.id}',
-                                        courseId: courseId.toString(),
-                                        placeId: pm.placeId,
-                                        enrolledAt: pm.createdAt,
-                                        validFrom: now.subtract(
-                                          const Duration(days: 1),
-                                        ),
-                                        validUntil: now.add(
-                                          const Duration(days: 3650),
-                                        ),
-                                        totalReservations: 1,
-                                        remainingReservations: 1,
-                                      );
-                                    }).toList();
-
-                                return User(
-                                  userId: 'pending_${pm.id}',
-                                  name:
-                                      (pm.name ?? '이름 없음').trim().isEmpty
-                                          ? '이름 없음'
-                                          : (pm.name ?? '이름 없음').trim(),
-                                  phoneNumber: pm.phoneNumber,
-                                  placeIds: [pm.placeId],
-                                  enrollments: enrollments,
-                                  notificationsEnabled: false,
-                                  createdAt: pm.createdAt,
-                                  updatedAt: null,
-                                );
-                              }).toList();
-
-                          final allMembers = <User>[
-                            ...memberProvider.members,
-                            ...pendingAsUsers,
-                          ];
-
-                          final users =
-                              allMembers.where((u) {
-                                if (u.isEnrolledInCourse(widget.courseId))
+                          // 이 코스에 미등록 멤버만 (allMembers = members + pendingMembers)
+                          final candidateMembers =
+                              memberProvider.allMembers.where((v) {
+                                if (v.enrolledCourseIds.contains(
+                                  widget.courseId,
+                                )) {
                                   return false;
-                                return matches(u.name, u.phoneNumber);
+                                }
+                                return matches(
+                                  v.adminDisplayName,
+                                  v.phoneNumber,
+                                );
                               }).toList();
 
                           if (kDebugMode) {
                             debugPrint(
-                              '[CourseMemberRegistrationScreen] filter result q="$q" totalMembers=${allMembers.length} (users=${memberProvider.members.length}, pending=${memberProvider.pendingMembers.length}) result=${users.length}',
+                              '[CourseMemberRegistrationScreen] filter result q="$q" total=${memberProvider.allMembers.length} result=${candidateMembers.length}',
                             );
                           }
 
@@ -941,7 +802,7 @@ class _CourseMemberRegistrationScreenState
                           }
 
                           // 검색어가 있는데 결과가 없으면
-                          if (users.isEmpty) {
+                          if (candidateMembers.isEmpty) {
                             return Center(
                               child: Padding(
                                 padding: const EdgeInsets.all(40),
@@ -958,22 +819,17 @@ class _CourseMemberRegistrationScreenState
                           // 검색어가 있고 결과가 있으면 멤버 리스트 표시
                           return Column(
                             children: [
-                              ...users.map(
-                                (u) => _buildExistingRow(
-                                  name: u.name,
-                                  phone: u.phoneNumber,
-                                  statusLabel:
-                                      MemberUtils.isPendingMember(u.userId)
-                                          ? '대기'
-                                          : null,
+                              ...candidateMembers.map(
+                                (v) => _buildExistingRow(
+                                  name: v.adminDisplayName,
+                                  phone: v.phoneNumber,
+                                  statusLabel: v.isPending ? '대기' : null,
                                   onTap: () {
                                     setState(() {
-                                      _selectedMemberName = u.name;
-                                      _selectedMemberPhone = u.phoneNumber;
-                                      _selectedMemberUserId =
-                                          u.userId; // ⚠️ 중요: userId 저장
+                                      _selectedMemberName = v.adminDisplayName;
+                                      _selectedMemberPhone = v.phoneNumber;
+                                      _selectedMemberUserId = v.userId;
                                     });
-                                    // 설정 초기화
                                     _initializeCurrentConfig();
                                   },
                                 ),
@@ -991,61 +847,14 @@ class _CourseMemberRegistrationScreenState
           ),
         ),
 
-        // 하단 추가 버튼 (멤버가 선택되었을 때만 표시)
         if (hasSelectedMember)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-            decoration: const BoxDecoration(color: AppColors.backgroundWhite),
-            child: SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed:
-                    canAdd
-                        ? () => _addAndSaveMember(
-                          name: _selectedMemberName!,
-                          phoneNumber: _selectedMemberPhone!,
-                        )
-                        : null,
-                icon: Icon(
-                  Icons.add,
-                  color: canAdd ? Colors.white : AppColors.textSecondary,
+          _buildAddButton(
+            enabled: canAdd,
+            onPressed:
+                () => _addAndSaveMember(
+                  name: _selectedMemberName!,
+                  phoneNumber: _selectedMemberPhone!,
                 ),
-                label:
-                    _isSaving
-                        ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              AppColors.primaryGreen,
-                            ),
-                          ),
-                        )
-                        : const Text(
-                          '추가',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor:
-                      canAdd
-                          ? AppColors.primaryGreen
-                          : AppColors.textSecondary.withOpacity(0.3),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 18),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  elevation: 0,
-                  disabledBackgroundColor: AppColors.textPrimary.withOpacity(
-                    0.1,
-                  ),
-                ),
-              ),
-            ),
           ),
       ],
     );
@@ -1094,18 +903,14 @@ class _CourseMemberRegistrationScreenState
                 ],
               ),
             ),
-            Icon(
-              Icons.add_circle,
-              color: AppColors.primaryGreen,
-              size: 32,
-            ),
+            Icon(Icons.add_circle, color: AppColors.primaryGreen, size: 32),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildCurrentCourseConfigCard(reservation_models.Course course) {
+  Widget _buildCurrentCourseConfigCard(models.Course course) {
     if (_currentConfig == null) {
       return const SizedBox.shrink();
     }
@@ -1117,7 +922,7 @@ class _CourseMemberRegistrationScreenState
       decoration: BoxDecoration(
         color: AppColors.backgroundWhite,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.borderLight.withOpacity(0.5)),
+        border: Border.all(color: AppColors.borderLight.withValues(alpha: 0.5)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1221,7 +1026,7 @@ class _CourseMemberRegistrationScreenState
   }
 
   Widget _buildValidPeriodField({
-    required reservation_models.Course course,
+    required models.Course course,
     required CourseEnrollmentConfig config,
     required ValidPeriodMode mode,
     required ValueChanged<ValidPeriodMode> onModeChanged,

@@ -7,8 +7,8 @@ import '../../../providers/place_provider.dart';
 import '../../../services/firestore_service.dart';
 import '../../../theme/app_colors.dart';
 import '../../../utils/text_field_decoration_util.dart';
+import '../../../utils/snackbar_util.dart';
 import '../../../utils/timezone_utils.dart';
-import '../../../widgets/common_dialog.dart';
 import '../../../widgets/valid_period_input_widget.dart';
 import '../../../widgets/reservations_input_widget.dart';
 import '../../../models/course.dart' as reservation_models;
@@ -147,38 +147,33 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
     );
 
     final now = TimezoneUtils.getSeoulDateTime();
-    final useUniform = course.useUniformSettings;
-    final uniformTotal =
-        course.uniformTotalReservations ?? course.defaultTotalReservations;
-    final uniformPeriodType = course.uniformPeriodType ?? PeriodType.weeks;
-    final uniformPeriodValue = course.uniformPeriodValue ?? 1;
+    final defaultTotal = course.defaultTotalReservations;
+    final defaultPeriodType = course.defaultPeriodType ?? PeriodType.weeks;
+    final defaultPeriodValue = course.defaultPeriodValue ?? 1;
 
-    // 유효기간 계산
     final Duration duration;
-    switch (uniformPeriodType) {
+    switch (defaultPeriodType) {
       case reservation_models.PeriodType.weeks:
-        duration = Duration(days: uniformPeriodValue * 7);
+        duration = Duration(days: defaultPeriodValue * 7);
         break;
       case reservation_models.PeriodType.days:
-        duration = Duration(days: uniformPeriodValue);
+        duration = Duration(days: defaultPeriodValue);
         break;
       case reservation_models.PeriodType.months:
-        duration = Duration(days: uniformPeriodValue * 30);
+        duration = Duration(days: defaultPeriodValue * 30);
         break;
     }
 
-    final totalReservations = useUniform ? uniformTotal : 0;
+    final totalReservations = defaultTotal;
 
     setState(() {
       _courseConfigs[course.id] = CourseEnrollmentConfig(
         courseId: course.id,
         totalReservations: totalReservations,
         validFrom: now,
-        validUntil: useUniform
-            ? now.add(duration)
-            : now.add(const Duration(days: 7)),
-        periodType: useUniform ? uniformPeriodType : PeriodType.weeks,
-        periodValue: useUniform ? uniformPeriodValue : 1,
+        validUntil: now.add(duration),
+        periodType: defaultPeriodType,
+        periodValue: defaultPeriodValue,
         validPeriodMode: ValidPeriodMode.period,
       );
       _validPeriodModes[course.id] = ValidPeriodMode.period;
@@ -275,15 +270,17 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
       if (placeId == null) return false;
 
       // 1. 현재 플레이스의 멤버 목록에서 확인
-      for (final member in memberProvider.members) {
-        if (_normalizePhone(member.phoneNumber) == normalizedPhone) {
+      for (final v in memberProvider.allMembers) {
+        if (_normalizePhone(v.phoneNumber) == normalizedPhone) {
           return true;
         }
       }
 
-      // 2. pendingMembers에서 확인
+      // 2. places/{placeId}/pendingMembers에서 확인
       final pendingId = '${placeId}_$normalizedPhone';
       final pendingRef = firestoreService.firestore
+          .collection('places')
+          .doc(placeId)
           .collection('pendingMembers')
           .doc(pendingId);
       final pendingDoc = await pendingRef.get();
@@ -352,15 +349,16 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
     }
 
     // 코스별 등록 설정 데이터 생성
-    final courseEnrollments = _selectedCourseIds.map((courseId) {
-      final config = _courseConfigs[courseId];
-      return {
-        'courseId': courseId,
-        'totalReservations': config?.totalReservations,
-        'validFrom': config?.validFrom?.toIso8601String(),
-        'validUntil': config?.validUntil?.toIso8601String(),
-      };
-    }).toList();
+    final courseEnrollments =
+        _selectedCourseIds.map((courseId) {
+          final config = _courseConfigs[courseId];
+          return {
+            'courseId': courseId,
+            'totalReservations': config?.totalReservations,
+            'validFrom': config?.validFrom?.toIso8601String(),
+            'validUntil': config?.validUntil?.toIso8601String(),
+          };
+        }).toList();
 
     setState(() {
       _memberList.add({
@@ -417,10 +415,11 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
     final placeId = placeProvider.currentPlace?.id;
     if (placeId == null) return;
 
-    final phonesWeAdded = _memberList
-        .map((m) => _normalizePhone(m['phoneNumber'] as String))
-        .toSet()
-        .toList();
+    final phonesWeAdded =
+        _memberList
+            .map((m) => _normalizePhone(m['phoneNumber'] as String))
+            .toSet()
+            .toList();
     if (phonesWeAdded.isEmpty) return;
 
     const maxWait = Duration(seconds: 15);
@@ -429,16 +428,13 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
 
     while (DateTime.now().isBefore(deadline)) {
       if (!mounted) return;
-      final members = memberProvider.members;
-      final pending = memberProvider.pendingMembers;
       final foundPhones = <String>{};
-      for (final m in members) {
-        foundPhones.add(_normalizePhone(m.phoneNumber));
+      for (final v in memberProvider.allMembers) {
+        foundPhones.add(_normalizePhone(v.phoneNumber));
       }
-      for (final p in pending) {
-        foundPhones.add(_normalizePhone(p.phoneNumber));
-      }
-      final allFound = phonesWeAdded.every((phone) => foundPhones.contains(phone));
+      final allFound = phonesWeAdded.every(
+        (phone) => foundPhones.contains(phone),
+      );
       if (allFound) return;
       await Future.delayed(interval);
     }
@@ -468,57 +464,10 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
     }
   }
 
-  /// 입력 내용이 있는지 확인
-  bool _hasInput() {
-    // 리스트에 멤버가 있으면 입력 내용 있음
-    if (_memberList.isNotEmpty) {
-      return true;
-    }
-
-    // 입력 모드에서 이름이나 전화번호가 입력되었거나 코스가 선택되었으면 입력 내용 있음
-    if (_mode == MemberRegistrationMode.input || widget.isEditMode) {
-      final name = _nameCtrl.text.trim();
-      final phoneNumber = _phoneCtrl.text.trim();
-      if (name.isNotEmpty ||
-          (phoneNumber.isNotEmpty && phoneNumber != '010') ||
-          _selectedCourseIds.isNotEmpty) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  Future<bool> _onWillPop() async {
-    // 입력 내용이 있으면 확인 다이얼로그 표시
-    if (_hasInput()) {
-      final shouldPop = await CommonDialog.show(
-        context: context,
-        title: '나가시겠습니까?',
-        message: '입력한 내용이 저장되지 않습니다.',
-        cancelText: '취소',
-        confirmText: '나가기',
-        confirmButtonColor: AppColors.primaryGreen,
-        onCancel: () => Navigator.of(context).pop(false),
-        onConfirm: () => Navigator.of(context).pop(true),
-      );
-      return shouldPop ?? false;
-    }
-    return true;
-  }
-
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: false,
-      onPopInvoked: (didPop) async {
-        if (!didPop) {
-          final shouldPop = await _onWillPop();
-          if (shouldPop && context.mounted) {
-            Navigator.of(context).pop();
-          }
-        }
-      },
+      canPop: true,
       child: Scaffold(
         backgroundColor: AppColors.backgroundWhite,
 
@@ -528,28 +477,20 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
           elevation: 0,
           leading: IconButton(
             icon: Icon(Icons.arrow_back_ios, color: AppColors.textPrimary),
-            onPressed: () async {
-              // 입력 모드일 때
+            onPressed: () {
+              // 입력 모드일 때: 리스트에 멤버가 있으면 리스트로 전환, 없으면 나가기
               if (widget.isEditMode || _mode == MemberRegistrationMode.input) {
-                // 리스트에 멤버가 있으면 리스트 화면으로 전환
                 if (_memberList.isNotEmpty) {
                   setState(() {
                     _mode = MemberRegistrationMode.list;
                   });
                   return;
                 }
-                // 리스트에 멤버가 없으면 바로 나가기 (확인 다이얼로그 없이)
-                if (context.mounted) {
-                  Navigator.of(context).pop();
-                }
+                if (context.mounted) Navigator.of(context).pop();
                 return;
               }
-
-              // 리스트 모드일 때는 확인 다이얼로그 표시 후 나가기
-              final shouldPop = await _onWillPop();
-              if (shouldPop && context.mounted) {
-                Navigator.of(context).pop();
-              }
+              // 리스트 모드일 때도 다이얼로그 없이 그냥 나가기
+              if (context.mounted) Navigator.of(context).pop();
             },
           ),
           centerTitle: false,
@@ -557,8 +498,8 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
             widget.isEditMode
                 ? '멤버 수정'
                 : (_memberList.isEmpty
-                      ? '멤버 등록하기'
-                      : '${_memberList.length}명 추가됨'),
+                    ? '멤버 등록하기'
+                    : '${_memberList.length}명 추가됨'),
             style: TextStyle(
               fontSize: 20,
               fontWeight: FontWeight.bold,
@@ -602,9 +543,10 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
           ],
         ),
         body: SafeArea(
-          child: (widget.isEditMode || _mode == MemberRegistrationMode.input)
-              ? _buildInputMode()
-              : _buildListMode(),
+          child:
+              (widget.isEditMode || _mode == MemberRegistrationMode.input)
+                  ? _buildInputMode()
+                  : _buildListMode(),
         ),
       ),
     );
@@ -616,117 +558,134 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
       children: [
         // 추가된 멤버 리스트
         Expanded(
-          child: _memberList.isEmpty
-              ? Center(
-                  child: Text(
-                    '추가된 멤버가 없습니다',
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: AppColors.textSecondary,
+          child:
+              _memberList.isEmpty
+                  ? Center(
+                    child: Text(
+                      '추가된 멤버가 없습니다',
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: AppColors.textSecondary,
+                      ),
                     ),
-                  ),
-                )
-              : ListView.builder(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 20,
-                  ),
-                  itemCount: _memberList.length,
-                  itemBuilder: (context, index) {
-                    final member = _memberList[index];
-                    // 새로운 구조: courseEnrollments 우선 사용
-                    final courseEnrollments =
-                        member['courseEnrollments'] as List<dynamic>?;
-                    final courseIds = courseEnrollments != null
-                        ? courseEnrollments
-                              .map((e) => e['courseId'] as String)
-                              .toList()
-                        : (member['courseIds'] as Set<String>?)?.toList() ?? [];
-                    return Builder(
-                      builder: (context) {
-                        final courseProvider = Provider.of<CourseProvider>(
-                          context,
-                          listen: false,
-                        );
-                        final selectedCourses = courseProvider.courses
-                            .where((course) => courseIds.contains(course.id))
-                            .toList();
+                  )
+                  : ListView.builder(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 20,
+                    ),
+                    itemCount: _memberList.length,
+                    itemBuilder: (context, index) {
+                      final member = _memberList[index];
+                      // 새로운 구조: courseEnrollments 우선 사용
+                      final courseEnrollments =
+                          member['courseEnrollments'] as List<dynamic>?;
+                      final courseIds =
+                          courseEnrollments != null
+                              ? courseEnrollments
+                                  .map((e) => e['courseId'] as String)
+                                  .toList()
+                              : (member['courseIds'] as Set<String>?)
+                                      ?.toList() ??
+                                  [];
+                      return Builder(
+                        builder: (context) {
+                          final courseProvider = Provider.of<CourseProvider>(
+                            context,
+                            listen: false,
+                          );
+                          final selectedCourses =
+                              courseProvider.courses
+                                  .where(
+                                    (course) => courseIds.contains(course.id),
+                                  )
+                                  .toList();
 
-                        return Container(
-                          margin: const EdgeInsets.only(bottom: 8),
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: AppColors.backgroundLight,
-                            borderRadius: BorderRadius.circular(18),
-                          ),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      member['name'] as String,
-                                      style: TextStyle(
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.w600,
-                                        color: AppColors.textPrimary,
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: AppColors.backgroundLight,
+                              borderRadius: BorderRadius.circular(18),
+                            ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        member['name'] as String,
+                                        style: TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.w600,
+                                          color: AppColors.textPrimary,
+                                        ),
                                       ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      member['phoneNumber'] as String,
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        color: AppColors.textSecondary,
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        member['phoneNumber'] as String,
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          color: AppColors.textSecondary,
+                                        ),
                                       ),
-                                    ),
-                                    if (selectedCourses.isNotEmpty) ...[
-                                      const SizedBox(height: 8),
-                                      Wrap(
-                                        spacing: 6,
-                                        runSpacing: 6,
-                                        children: selectedCourses.map((course) {
-                                          return Container(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 10,
-                                              vertical: 6,
-                                            ),
-                                            decoration: BoxDecoration(
-                                              color: AppColors.backgroundWhite,
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                            ),
-                                            child: Text(
-                                              course.name,
-                                              style: TextStyle(
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.w500,
-                                                color: AppColors.textSecondary,
-                                              ),
-                                            ),
-                                          );
-                                        }).toList(),
-                                      ),
+                                      if (selectedCourses.isNotEmpty) ...[
+                                        const SizedBox(height: 8),
+                                        Wrap(
+                                          spacing: 6,
+                                          runSpacing: 6,
+                                          children:
+                                              selectedCourses.map((course) {
+                                                return Container(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: 10,
+                                                        vertical: 6,
+                                                      ),
+                                                  decoration: BoxDecoration(
+                                                    color:
+                                                        AppColors
+                                                            .backgroundWhite,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          12,
+                                                        ),
+                                                  ),
+                                                  child: Text(
+                                                    course.name,
+                                                    style: TextStyle(
+                                                      fontSize: 14,
+                                                      fontWeight:
+                                                          FontWeight.w500,
+                                                      color:
+                                                          AppColors
+                                                              .textSecondary,
+                                                    ),
+                                                  ),
+                                                );
+                                              }).toList(),
+                                        ),
+                                      ],
                                     ],
-                                  ],
+                                  ),
                                 ),
-                              ),
-                              IconButton(
-                                icon: Icon(
-                                  Icons.close,
-                                  size: 20,
-                                  color: AppColors.textSecondary,
+                                IconButton(
+                                  icon: Icon(
+                                    Icons.close,
+                                    size: 20,
+                                    color: AppColors.textSecondary,
+                                  ),
+                                  onPressed: () => _removeMember(index),
                                 ),
-                                onPressed: () => _removeMember(index),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                    );
-                  },
-                ),
+                              ],
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
         ),
 
         // 하단 버튼 영역 (리스트 모드)
@@ -778,26 +737,27 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
                       ),
                       elevation: 0,
                     ),
-                    child: _isSaving
-                        ? SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(
-                                Colors.white,
+                    child:
+                        _isSaving
+                            ? SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  AppColors.primaryGreen,
+                                ),
+                              ),
+                            )
+                            : Text(
+                              _memberList.length == 1
+                                  ? '저장'
+                                  : '일괄 저장 (${_memberList.length})',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
-                          )
-                        : Text(
-                            _memberList.length == 1
-                                ? '저장'
-                                : '일괄 저장 (${_memberList.length})',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
                   ),
                 ),
               ],
@@ -905,18 +865,17 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
                       fontSize: 18,
                       color: AppColors.textPrimary,
                     ),
-                    decoration:
-                        TextFieldDecorationUtil.defaultDecoration(
-                          hintText: '전화번호를 입력하세요',
-                          hasFocus:
-                              _phoneHasFocus || _phoneCtrl.text.isNotEmpty,
-                          hasError: _phoneErrorText != null,
-                        ).copyWith(
-                          errorText: _phoneErrorText,
-                          labelStyle: _phoneErrorText != null
+                    decoration: TextFieldDecorationUtil.defaultDecoration(
+                      hintText: '전화번호를 입력하세요',
+                      hasFocus: _phoneHasFocus || _phoneCtrl.text.isNotEmpty,
+                      hasError: _phoneErrorText != null,
+                    ).copyWith(
+                      errorText: _phoneErrorText,
+                      labelStyle:
+                          _phoneErrorText != null
                               ? TextFieldDecorationUtil.errorLabelStyle()
                               : TextFieldDecorationUtil.defaultLabelStyle(),
-                        ),
+                    ),
                   ),
                   const SizedBox(height: 24),
 
@@ -960,138 +919,146 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
                             Wrap(
                               spacing: 8,
                               runSpacing: 8,
-                              children: courseProvider.courses.map((course) {
-                                final isSelected = _selectedCourseIds.contains(
-                                  course.id,
-                                );
-                                // restrictedCourseId가 있으면 선택/해제 불가 (항상 선택된 상태)
-                                final isRestricted =
-                                    widget.restrictedCourseId != null &&
-                                    course.id == widget.restrictedCourseId;
+                              children:
+                                  courseProvider.courses.map((course) {
+                                    final isSelected = _selectedCourseIds
+                                        .contains(course.id);
+                                    // restrictedCourseId가 있으면 선택/해제 불가 (항상 선택된 상태)
+                                    final isRestricted =
+                                        widget.restrictedCourseId != null &&
+                                        course.id == widget.restrictedCourseId;
 
-                                return GestureDetector(
-                                  onTap: isRestricted
-                                      ? null // 제한된 코스는 탭 불가
-                                      : () {
-                                          setState(() {
-                                            if (isSelected) {
-                                              _selectedCourseIds.remove(
-                                                course.id,
-                                              );
-                                              _courseConfigs.remove(course.id);
-                                              _validPeriodModes.remove(
-                                                course.id,
-                                              );
-                                            } else {
-                                              _selectedCourseIds.add(course.id);
-                                              // 일괄 적용 모드 확인
-                                              final now =
-                                                  TimezoneUtils.getSeoulDateTime();
-                                              final useUniform =
-                                                  course.useUniformSettings;
-                                              final uniformTotal =
-                                                  course
-                                                      .uniformTotalReservations ??
-                                                  course
-                                                      .defaultTotalReservations;
-                                              final uniformPeriodType =
-                                                  course.uniformPeriodType ??
-                                                  PeriodType.weeks;
-                                              final uniformPeriodValue =
-                                                  course.uniformPeriodValue ??
-                                                  1;
+                                    return GestureDetector(
+                                      onTap:
+                                          isRestricted
+                                              ? null // 제한된 코스는 탭 불가
+                                              : () {
+                                                setState(() {
+                                                  if (isSelected) {
+                                                    _selectedCourseIds.remove(
+                                                      course.id,
+                                                    );
+                                                    _courseConfigs.remove(
+                                                      course.id,
+                                                    );
+                                                    _validPeriodModes.remove(
+                                                      course.id,
+                                                    );
+                                                  } else {
+                                                    _selectedCourseIds.add(
+                                                      course.id,
+                                                    );
+                                                    final now =
+                                                        TimezoneUtils.getSeoulDateTime();
+                                                    final defaultTotal =
+                                                        course
+                                                            .defaultTotalReservations;
+                                                    final defaultPeriodType =
+                                                        course
+                                                            .defaultPeriodType ??
+                                                        PeriodType.weeks;
+                                                    final defaultPeriodValue =
+                                                        course
+                                                            .defaultPeriodValue ??
+                                                        1;
 
-                                              // 유효기간 계산
-                                              final Duration duration;
-                                              switch (uniformPeriodType) {
-                                                case reservation_models
-                                                    .PeriodType
-                                                    .weeks:
-                                                  duration = Duration(
-                                                    days:
-                                                        uniformPeriodValue * 7,
-                                                  );
-                                                  break;
-                                                case reservation_models
-                                                    .PeriodType
-                                                    .days:
-                                                  duration = Duration(
-                                                    days: uniformPeriodValue,
-                                                  );
-                                                  break;
-                                                case reservation_models
-                                                    .PeriodType
-                                                    .months:
-                                                  duration = Duration(
-                                                    days:
-                                                        uniformPeriodValue * 30,
-                                                  );
-                                                  break;
-                                              }
+                                                    Duration duration;
+                                                    switch (defaultPeriodType) {
+                                                      case reservation_models
+                                                          .PeriodType
+                                                          .weeks:
+                                                        duration = Duration(
+                                                          days:
+                                                              defaultPeriodValue *
+                                                              7,
+                                                        );
+                                                        break;
+                                                      case reservation_models
+                                                          .PeriodType
+                                                          .days:
+                                                        duration = Duration(
+                                                          days:
+                                                              defaultPeriodValue,
+                                                        );
+                                                        break;
+                                                      case reservation_models
+                                                          .PeriodType
+                                                          .months:
+                                                        duration = Duration(
+                                                          days:
+                                                              defaultPeriodValue *
+                                                              30,
+                                                        );
+                                                        break;
+                                                    }
 
-                                              _courseConfigs[course
-                                                  .id] = CourseEnrollmentConfig(
-                                                courseId: course.id,
-                                                totalReservations: useUniform
-                                                    ? uniformTotal
-                                                    : 0,
-                                                validFrom: now,
-                                                validUntil: useUniform
-                                                    ? now.add(duration)
-                                                    : now.add(
-                                                        const Duration(days: 7),
-                                                      ),
-                                                periodType: useUniform
-                                                    ? uniformPeriodType
-                                                    : PeriodType.weeks,
-                                                periodValue: useUniform
-                                                    ? uniformPeriodValue
-                                                    : 1,
-                                                validPeriodMode:
-                                                    ValidPeriodMode.period,
-                                              );
-                                              _validPeriodModes[course.id] =
-                                                  ValidPeriodMode.period;
-                                            }
-                                            _courseErrorText = null;
-                                          });
-                                        },
-                                  child: Opacity(
-                                    opacity: isRestricted ? 0.6 : 1.0,
-                                    child: AnimatedContainer(
-                                      duration: const Duration(
-                                        milliseconds: 200,
-                                      ),
-                                      curve: Curves.easeInOut,
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 18,
-                                        vertical: 10,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: isSelected
-                                            ? AppColors.textPrimary
-                                            : AppColors.backgroundWhite,
-                                        borderRadius: BorderRadius.circular(16),
-                                        border: isSelected
-                                            ? null
-                                            : Border.all(
-                                                color: AppColors.borderLight,
-                                                width: 1,
-                                              ),
-                                      ),
-                                      child: Text(
-                                        course.name,
-                                        style: TextStyle(
-                                          fontSize: 16,
-                                          color: isSelected
-                                              ? AppColors.backgroundWhite
-                                              : AppColors.textPrimary,
+                                                    _courseConfigs[course.id] =
+                                                        CourseEnrollmentConfig(
+                                                          courseId: course.id,
+                                                          totalReservations:
+                                                              defaultTotal,
+                                                          validFrom: now,
+                                                          validUntil: now.add(
+                                                            duration,
+                                                          ),
+                                                          periodType:
+                                                              defaultPeriodType,
+                                                          periodValue:
+                                                              defaultPeriodValue,
+                                                          validPeriodMode:
+                                                              ValidPeriodMode
+                                                                  .period,
+                                                        );
+                                                    _validPeriodModes[course
+                                                            .id] =
+                                                        ValidPeriodMode.period;
+                                                  }
+                                                  _courseErrorText = null;
+                                                });
+                                              },
+                                      child: Opacity(
+                                        opacity: isRestricted ? 0.6 : 1.0,
+                                        child: AnimatedContainer(
+                                          duration: const Duration(
+                                            milliseconds: 200,
+                                          ),
+                                          curve: Curves.easeInOut,
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 18,
+                                            vertical: 10,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color:
+                                                isSelected
+                                                    ? AppColors.textPrimary
+                                                    : AppColors.backgroundWhite,
+                                            borderRadius: BorderRadius.circular(
+                                              16,
+                                            ),
+                                            border:
+                                                isSelected
+                                                    ? null
+                                                    : Border.all(
+                                                      color:
+                                                          AppColors.borderLight,
+                                                      width: 1,
+                                                    ),
+                                          ),
+                                          child: Text(
+                                            course.name,
+                                            style: TextStyle(
+                                              fontSize: 16,
+                                              color:
+                                                  isSelected
+                                                      ? AppColors
+                                                          .backgroundWhite
+                                                      : AppColors.textPrimary,
+                                            ),
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                  ),
-                                );
-                              }).toList(),
+                                    );
+                                  }).toList(),
                             ),
                             if (_courseErrorText != null) ...[
                               const SizedBox(height: 8),
@@ -1185,11 +1152,21 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
                   return SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
-                      onPressed: canAdd ? _addMember : null,
-                      icon: Icon(
-                        Icons.add,
-                        color: canAdd ? Colors.white : AppColors.textSecondary,
-                      ),
+                      onPressed:
+                          _isCheckingPhone
+                              ? null
+                              : () {
+                                if (_selectedCourseIds.isEmpty &&
+                                    widget.restrictedCourseId == null) {
+                                  SnackbarUtil.showInfo(
+                                    context,
+                                    '코스를 먼저 선택해주세요.',
+                                  );
+                                  return;
+                                }
+                                if (canAdd) _addMember();
+                              },
+
                       label: Text(
                         '추가',
                         style: TextStyle(
@@ -1198,11 +1175,12 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
                         ),
                       ),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: canAdd
-                            ? AppColors.primaryGreen
-                            : AppColors.textSecondary.withOpacity(0.3),
+                        backgroundColor:
+                            canAdd
+                                ? AppColors.primaryGreen
+                                : AppColors.textSecondary.withOpacity(0.3),
                         foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 18),
+                        padding: const EdgeInsets.symmetric(vertical: 16),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(20),
                         ),
@@ -1231,10 +1209,10 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
       _totalReservationsControllers[controllerKey] = TextEditingController(
         text: initialValue.toString(),
       );
-      _totalReservationsFocusNodes[controllerKey] = FocusNode()
-        ..addListener(() {
-          setState(() {}); // 포커스 상태 변경 시 UI 업데이트
-        });
+      _totalReservationsFocusNodes[controllerKey] =
+          FocusNode()..addListener(() {
+            setState(() {}); // 포커스 상태 변경 시 UI 업데이트
+          });
       _totalReservationsPinFocusNodes[controllerKey] = FocusNode();
     }
     final totalReservationsController =
@@ -1272,14 +1250,6 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                '예약 가능 횟수',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: AppColors.textSecondary,
-                ),
-              ),
               const SizedBox(height: 12),
               ReservationsInputWidget(
                 controller: totalReservationsController,
@@ -1386,9 +1356,8 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
           _validPeriodModes[course.id] = ValidPeriodMode.period;
           _courseConfigs[course.id]?.validPeriodMode = ValidPeriodMode.period;
           _courseConfigs[course.id]?.periodType = type;
-          _courseConfigs[course.id]?.periodValue = type == PeriodType.days
-              ? 7
-              : 1;
+          _courseConfigs[course.id]?.periodValue =
+              type == PeriodType.days ? 7 : 1;
           _updateValidUntil();
         });
       },

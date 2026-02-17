@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../models/course.dart';
 import '../models/course_override.dart';
 import '../services/firestore_service.dart';
-import '../policies/course_policy.dart';
+import '../models/course_policy.dart';
 
 /// 코스 관리 Provider
 ///
@@ -16,6 +16,10 @@ class CourseProvider with ChangeNotifier {
   String? _error;
   String? _placeId;
 
+  /// 코스 목록 실시간 구독 (DB 변경 시 UI 자동 반영)
+  StreamSubscription<List<Course>>? _coursesSubscription;
+  String? _subscribedPlaceId;
+
   // 코스 정책 캐시 (코스 ID -> 정책)
   final Map<String, CoursePolicy> _coursePolicies = {};
 
@@ -27,10 +31,17 @@ class CourseProvider with ChangeNotifier {
   _overrideSubscriptionsByWeek = {};
   final Map<String, List<CourseOverride>> _overridesByWeek = {};
   String? _overridesPlaceId;
+  static const Duration _overrideDebounceDuration = Duration(milliseconds: 150);
+  final Map<String, Timer> _overrideDebounceTimers = {};
+
+  /// (placeId|courseId) 별 주차 오픈 구독 — 화면 중복 구독 제거
+  final Map<String, StreamSubscription<Set<String>>> _bookingWeekOpensSubs = {};
+  final Map<String, Set<String>> _bookingWeekOpensByKey = {};
 
   List<Course> get courses => List.unmodifiable(_courses);
   bool get isLoading => _isLoading;
   String? get error => _error;
+
   /// 현재 로드된 courses가 속한 placeId (loadCourses/saveCourse 호출 시 설정됨)
   /// 화면/탭 전환 중 PlaceProvider와 잠깐 어긋날 수 있어, 코스 관련 조회는 이 값을 우선 사용 권장.
   String? get currentPlaceId => _placeId;
@@ -40,17 +51,119 @@ class CourseProvider with ChangeNotifier {
     return _overridesByWeek[weekStartDate] ?? [];
   }
 
-  /// 코스 정책 가져오기 (캐시에서)
+  /// 저장 중인 override 키 (weekStartDate -> {"date|dayOfWeek|startTime", ...})
+  final Map<String, Set<String>> _savingOverridesByWeek = {};
+
+  /// 비정기 일정 저장 시작 시 호출 (compact_calendar에서 해당 세션 박스에 로딩 스피너 표시)
+  void setSavingOverrides(String weekStartDate, Set<String> keys) {
+    _savingOverridesByWeek[weekStartDate] = Set.from(keys);
+    notifyListeners();
+  }
+
+  /// 비정기 일정 저장 완료 후 호출
+  void clearSavingOverrides(String weekStartDate) {
+    _savingOverridesByWeek.remove(weekStartDate);
+    notifyListeners();
+  }
+
+  /// 해당 세션이 저장 중인지 확인
+  bool isSavingOverride(
+    String weekStartDate,
+    String date,
+    int dayOfWeek,
+    String startTime,
+  ) {
+    final key = '$date|$dayOfWeek|$startTime';
+    return _savingOverridesByWeek[weekStartDate]?.contains(key) ?? false;
+  }
+
+  /// 특정 주의 비정기 일정 강제 새로고침 (저장 후 즉시 반영용)
+  Future<void> refreshOverridesForWeek(
+    String placeId,
+    String weekStartDate,
+  ) async {
+    try {
+      final overrides =
+          await _firestoreService.getCourseOverrides(
+        placeId: placeId,
+        weekStartDate: weekStartDate,
+      );
+      _overridesByWeek[weekStartDate] = overrides;
+      notifyListeners();
+    } catch (_) {
+      // 실패 시 스트림 데이터 유지
+    }
+  }
+
+  /// 비정기 세션 삭제 시 UI 즉시 반영 (스트림 수신 전)
+  void removeOverrideOptimistically(String weekStartDate, String overrideId) {
+    final list = _overridesByWeek[weekStartDate];
+    if (list == null) return;
+    _overridesByWeek[weekStartDate] =
+        list.where((o) => o.id != overrideId).toList();
+    notifyListeners();
+  }
+
+  /// 정기 세션 취소 시 cancel override UI 즉시 반영 (스트림 수신 전)
+  void addOverrideOptimistically(String weekStartDate, CourseOverride override) {
+    final list = List<CourseOverride>.from(
+      _overridesByWeek[weekStartDate] ?? [],
+    );
+    list.removeWhere(
+      (o) =>
+          o.courseId == override.courseId &&
+          o.date == override.date &&
+          o.dayOfWeek == override.dayOfWeek &&
+          o.startTime == override.startTime &&
+          o.isCancelled == true,
+    );
+    list.add(override);
+    _overridesByWeek[weekStartDate] = list;
+    notifyListeners();
+  }
+
+  /// 주차 예약 오픈 구독 (한 placeId+courseId당 1회만 구독, 화면 공유)
+  void subscribeToBookingWeekOpens(String placeId, String courseId) {
+    final key = '$placeId|$courseId';
+    if (_bookingWeekOpensSubs.containsKey(key)) return;
+    _bookingWeekOpensSubs[key] = _firestoreService
+        .streamBookingWeekOpens(placeId: placeId, courseId: courseId)
+        .listen(
+          (opened) {
+            _bookingWeekOpensByKey[key] = opened;
+            notifyListeners();
+          },
+          onError: (_) {
+            _bookingWeekOpensByKey[key] = {};
+            notifyListeners();
+          },
+        );
+  }
+
+  /// 주차 예약 오픈된 weekStartDate 집합 (subscribeToBookingWeekOpens 호출 후 사용)
+  Set<String> getBookingWeekOpens(String placeId, String courseId) {
+    return _bookingWeekOpensByKey['$placeId|$courseId'] ?? {};
+  }
+
+  void _cancelBookingWeekOpensSubscriptions() {
+    for (final sub in _bookingWeekOpensSubs.values) {
+      sub.cancel();
+    }
+    _bookingWeekOpensSubs.clear();
+    _bookingWeekOpensByKey.clear();
+  }
+
+  /// 코스 정책 가져오기 (코스에 embed된 policy 우선, 없으면 캐시)
   CoursePolicy? getCoursePolicy(String courseId) {
+    final course = getCourse(courseId);
+    if (course != null) return course.policy;
     return _coursePolicies[courseId];
   }
 
-  /// 코스 정책 로드 (캐시에 없을 때만)
+  /// 코스 정책 로드 (캐시에 없고 코스 목록에도 없을 때만)
   Future<void> loadCoursePolicy(String courseId, String placeId) async {
-    // 이미 캐시에 있으면 스킵
-    if (_coursePolicies.containsKey(courseId)) {
-      return;
-    }
+    if (getCourse(courseId) != null) return;
+    if (_coursePolicies.containsKey(courseId)) return;
 
     try {
       final policy = await _firestoreService.getCoursePolicy(
@@ -60,60 +173,57 @@ class CourseProvider with ChangeNotifier {
       _coursePolicies[courseId] = policy;
       notifyListeners();
     } catch (_) {
-      // 정책 로드 실패 시 기본값 사용
-      _coursePolicies[courseId] = CoursePolicy.defaultFor(
-        courseId: courseId,
-        placeId: placeId,
-      );
+      _coursePolicies[courseId] = CoursePolicy.defaultValue;
       notifyListeners();
     }
   }
 
-  /// 코스 정책 강제 재로드 (정책 변경 시)
+  /// 코스 정책 강제 재로드 (정책 저장 후 등)
+  /// _coursePolicies 캐시와 _courses 내 해당 코스의 policy를 함께 갱신해
+  /// 코스 상세/캘린더 등이 최신 정책을 반영하도록 함.
   Future<void> reloadCoursePolicy(String courseId, String placeId) async {
+    CoursePolicy policy;
     try {
-      final policy = await _firestoreService.getCoursePolicy(
+      policy = await _firestoreService.getCoursePolicy(
         courseId: courseId,
         placeId: placeId,
       );
-      _coursePolicies[courseId] = policy;
-      notifyListeners();
     } catch (_) {
-      // 정책 로드 실패 시 기본값 사용
-      _coursePolicies[courseId] = CoursePolicy.defaultFor(
-        courseId: courseId,
-        placeId: placeId,
-      );
-      notifyListeners();
+      policy = CoursePolicy.defaultValue;
     }
-  }
-
-  /// 모든 코스 정책 로드 (앱 시작 시)
-  Future<void> loadAllCoursePolicies(String placeId) async {
-    if (_courses.isEmpty) return;
-
-    for (final course in _courses) {
-      if (!_coursePolicies.containsKey(course.id)) {
-        try {
-          final policy = await _firestoreService.getCoursePolicy(
-            courseId: course.id,
-            placeId: placeId,
-          );
-          _coursePolicies[course.id] = policy;
-        } catch (_) {
-          _coursePolicies[course.id] = CoursePolicy.defaultFor(
-            courseId: course.id,
-            placeId: placeId,
-          );
-        }
-      }
+    _coursePolicies[courseId] = policy;
+    final index = _courses.indexWhere((c) => c.id == courseId);
+    if (index != -1) {
+      final old = _courses[index];
+      _courses[index] = Course(
+        id: old.id,
+        placeId: old.placeId,
+        name: old.name,
+        description: old.description,
+        color: old.color,
+        imageUrl: old.imageUrl,
+        defaultTotalReservations: old.defaultTotalReservations,
+        defaultPeriodType: old.defaultPeriodType,
+        defaultPeriodValue: old.defaultPeriodValue,
+        sessions: old.sessions,
+        policy: policy,
+        createdAt: old.createdAt,
+        updatedAt: old.updatedAt,
+      );
     }
     notifyListeners();
   }
 
-  /// 비정기 일정 구독 시작
+  /// 모든 코스 정책 캐시 동기화 (코스에 embed된 policy로 채움)
+  void _syncCoursePoliciesFromCourses() {
+    for (final course in _courses) {
+      _coursePolicies[course.id] = course.policy;
+    }
+  }
+
+  /// 비정기 일정 구독 시작 (최대 10주 구독)
   void subscribeToOverrides(String placeId, List<String> weekStartDates) {
-    final wanted = weekStartDates.take(3).toSet();
+    final wanted = weekStartDates.take(10).toSet();
     if (wanted.isEmpty) return;
 
     // placeId가 바뀌면 기존 구독/캐시를 전부 정리 (서로 다른 place 간 데이터 섞임 방지)
@@ -136,11 +246,19 @@ class CourseProvider with ChangeNotifier {
           .streamCourseOverrides(placeId: placeId, weekStartDate: weekStartDate)
           .listen(
             (overrides) {
-            _overridesByWeek[weekStartDate] = overrides;
-            notifyListeners();
+              _overridesByWeek[weekStartDate] = overrides;
+              _overrideDebounceTimers[weekStartDate]?.cancel();
+              _overrideDebounceTimers[weekStartDate] = Timer(
+                _overrideDebounceDuration,
+                () {
+                  _overrideDebounceTimers.remove(weekStartDate);
+                  notifyListeners();
+                },
+              );
             },
             onError: (_) {
-              // 스트림 실패 시에도 크래시/무한 로딩 방지: 해당 주 데이터만 비움
+              _overrideDebounceTimers[weekStartDate]?.cancel();
+              _overrideDebounceTimers.remove(weekStartDate);
               _overridesByWeek[weekStartDate] = const <CourseOverride>[];
               notifyListeners();
             },
@@ -148,33 +266,49 @@ class CourseProvider with ChangeNotifier {
     }
   }
 
-  /// 코스 목록 로드
-  Future<void> loadCourses(String placeId) async {
+  /// 코스 목록 로드 + 실시간 구독 (동일 placeId 구독 중이면 유지, forceRefresh 시 재구독)
+  /// Firestore 변경 시 _courses가 갱신되어 UI가 자동 반영됨.
+  Future<void> loadCourses(String placeId, {bool forceRefresh = false}) async {
+    if (!forceRefresh && _subscribedPlaceId == placeId) {
+      return;
+    }
+
+    await _coursesSubscription?.cancel();
+    _coursesSubscription = null;
+    _subscribedPlaceId = null;
+
     _placeId = placeId;
     _isLoading = true;
     _error = null;
     notifyListeners();
 
-    try {
-      _courses = await _firestoreService.getCoursesByPlace(placeId);
-      _error = null;
-
-      // 코스 목록 로드 후 모든 코스 정책도 로드
-      await loadAllCoursePolicies(placeId);
-    } catch (e) {
-      _error = e.toString();
-      _courses = [];
-    } finally {
-      _isLoading = false;
-      notifyListeners();
-    }
+    _coursesSubscription = _firestoreService
+        .watchCoursesByPlace(placeId)
+        .listen(
+          (courses) {
+            _courses = courses;
+            _subscribedPlaceId = placeId;
+            _syncCoursePoliciesFromCourses();
+            _isLoading = false;
+            _error = null;
+            notifyListeners();
+          },
+          onError: (e) {
+            _error = e.toString();
+            _courses = [];
+            _subscribedPlaceId = placeId;
+            _isLoading = false;
+            notifyListeners();
+          },
+        );
   }
 
-  /// 코스 실시간 구독
+  /// 코스 실시간 구독 (스트림만 반환, 호출처에서 listen. loadCourses가 구독 담당)
   Stream<List<Course>> watchCourses(String placeId) {
     _placeId = placeId;
     return _firestoreService.watchCoursesByPlace(placeId).map((courses) {
       _courses = courses;
+      _syncCoursePoliciesFromCourses();
       notifyListeners();
       return courses;
     });
@@ -190,12 +324,18 @@ class CourseProvider with ChangeNotifier {
     notifyListeners();
 
     try {
+      final now = DateTime.now();
       final course = Course(
         id: _generateCourseId(),
+        placeId: placeId,
         name: name,
-        description: '', // 기본값: 빈 문자열
+        description: '',
         color: color,
+        defaultTotalReservations: 10,
         sessions: [],
+        policy: CoursePolicy.defaultValue,
+        createdAt: now,
+        updatedAt: now,
       );
 
       await _firestoreService.createCourse(placeId, course);
@@ -272,15 +412,16 @@ class CourseProvider with ChangeNotifier {
   }
 
   /// 코스 삭제
-  Future<void> deleteCourse(
-    String courseId, {
-    bool cascade = false,
-  }) async {
+  Future<void> deleteCourse(String courseId, {bool cascade = false}) async {
     _isLoading = true;
     notifyListeners();
 
     try {
-      await _firestoreService.deleteCourse(_placeId!, courseId, cascade: cascade);
+      await _firestoreService.deleteCourse(
+        _placeId!,
+        courseId,
+        cascade: cascade,
+      );
       _courses = _courses.where((c) => c.id != courseId).toList();
       _error = null;
       notifyListeners();
@@ -304,6 +445,9 @@ class CourseProvider with ChangeNotifier {
 
   /// 데이터 초기화
   void clear() {
+    _coursesSubscription?.cancel();
+    _coursesSubscription = null;
+    _subscribedPlaceId = null;
     _courses = [];
     _isLoading = false;
     _error = null;
@@ -312,10 +456,15 @@ class CourseProvider with ChangeNotifier {
     _cancelAllOverrideSubscriptions();
     _overridesByWeek.clear();
     _overridesPlaceId = null;
+    _cancelBookingWeekOpensSubscriptions();
     notifyListeners();
   }
 
   void _cancelAllOverrideSubscriptions() {
+    for (final timer in _overrideDebounceTimers.values) {
+      timer.cancel();
+    }
+    _overrideDebounceTimers.clear();
     for (final sub in _overrideSubscriptionsByWeek.values) {
       sub.cancel();
     }
@@ -324,7 +473,9 @@ class CourseProvider with ChangeNotifier {
 
   @override
   void dispose() {
+    _coursesSubscription?.cancel();
     _cancelAllOverrideSubscriptions();
+    _cancelBookingWeekOpensSubscriptions();
     super.dispose();
   }
 

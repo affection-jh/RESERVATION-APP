@@ -1,7 +1,7 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import '../../models/place.dart';
-import '../../providers/story_provider.dart' show Story;
+import '../../models/story.dart';
 import '../../theme/app_colors.dart';
 
 class StoryDetailScreen extends StatefulWidget {
@@ -15,33 +15,6 @@ class StoryDetailScreen extends StatefulWidget {
 }
 
 class _StoryDetailScreenState extends State<StoryDetailScreen> {
-  //final Map<int, bool> _downloadingStates = {};
-
-  /*Future<void> _downloadImage(String imageUrl, int index) async {
-    if (_downloadingStates[index] == true) return;
-
-    setState(() => _downloadingStates[index] = true);
-    try {
-      final ok = await _downloadService.saveToGallery(
-        imageUrl: imageUrl,
-        fileName: 'story_${DateTime.now().millisecondsSinceEpoch}_$index',
-      );
-      if (!mounted) return;
-      if (ok) {
-        SnackbarUtil.showSuccess(context, '이미지를 저장했어요');
-      } else {
-        SnackbarUtil.showInfo(context, '이미지 저장에 실패했습니다');
-      }
-    } catch (e) {
-      if (!mounted) return;
-      SnackbarUtil.showInfo(context, '이미지 저장에 실패했습니다');
-    } finally {
-      if (mounted) {
-        setState(() => _downloadingStates[index] = false);
-      }
-    }
-  }*/
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(

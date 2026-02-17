@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
@@ -9,6 +10,7 @@ import '../../../utils/text_field_decoration_util.dart';
 import '../../../services/storage_service.dart';
 import '../../../utils/snackbar_util.dart';
 import '../../../widgets/cached_image_widget.dart';
+import '../../../widgets/common_dialog.dart';
 import '../../../providers/course_provider.dart';
 
 /// 코스 기본 정보 입력 화면 (1단계)
@@ -49,6 +51,7 @@ class _CourseBasicInfoScreenState extends State<CourseBasicInfoScreen> {
   String? _uploadedImageUrl; // 업로드된 이미지 URL
   String? _existingImageUrl; // 기존 코스의 원본 이미지 URL (Storage 삭제용)
   bool _isUploading = false; // 업로드 중 여부
+  Future<String?>? _uploadFuture; // 업로드 중 뒤로갈 때 완료 후 삭제용
   final ImagePicker _imagePicker = ImagePicker();
   String? _nameErrorText; // 코스명 에러 메시지
 
@@ -134,9 +137,55 @@ class _CourseBasicInfoScreenState extends State<CourseBasicInfoScreen> {
     return _nameController.text.trim().isNotEmpty && _nameErrorText == null;
   }
 
-  /// 이미지 업로드
-  Future<void> _uploadImage() async {
-    if (_selectedImage == null) return;
+  /// 초기 상태 대비 변경 여부 (플레이스 등록과 동일: 확인 다이얼로그·이미지 삭제용)
+  bool _hasChanges() {
+    final initialName =
+        widget.savedBasicInfo?.name ?? widget.existingCourse?.name ?? '';
+    final initialDescription =
+        widget.savedBasicInfo?.description ??
+        widget.existingCourse?.description ??
+        '';
+    final initialImageUrl =
+        widget.savedBasicInfo?.imageUrl ?? widget.existingCourse?.imageUrl;
+
+    return _nameController.text.trim() != initialName ||
+        _descriptionController.text.trim() != initialDescription ||
+        _uploadedImageUrl != initialImageUrl ||
+        _selectedImage != null;
+  }
+
+  /// 나갈 때 확인 다이얼로그를 띄워야 하는지
+  /// (폼 변경 있음, 또는 다음 단계 갔다가 돌아온 경우 = 진행 분이 있음)
+  bool _shouldConfirmLeave() {
+    return _hasChanges() || widget.savedBasicInfo != null;
+  }
+
+  /// 갤러리에서 이미지 선택 또는 교체 (기존 업로드 이미지 삭제 포함)
+  Future<void> _pickOrReplaceImage() async {
+    final pickedFile = await _imagePicker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 800,
+      maxHeight: 800,
+      imageQuality: 85,
+    );
+    if (pickedFile == null) return;
+
+    // 교체 시: 아직 저장 안 된 새 업로드만 삭제 (기존 코스 이미지는 저장 시 처리)
+    final oldUrl = _uploadedImageUrl;
+    setState(() {
+      _selectedImage = File(pickedFile.path);
+      _uploadedImageUrl = null;
+    });
+    if (oldUrl != null && oldUrl != _existingImageUrl) {
+      StorageService.deleteImagesInBackground([oldUrl]);
+    }
+    _uploadFuture = _uploadImage();
+    await _uploadFuture;
+  }
+
+  /// 이미지 업로드. 성공 시 URL 반환, 실패 시 null.
+  Future<String?> _uploadImage() async {
+    if (_selectedImage == null) return null;
 
     setState(() {
       _isUploading = true;
@@ -156,21 +205,24 @@ class _CourseBasicInfoScreenState extends State<CourseBasicInfoScreen> {
         try {
           await storageService.deleteImage(_uploadedImageUrl!);
         } catch (e) {
-          // 삭제 실패는 무시 (이미 새 이미지로 교체됨)
+          // 삭제 실패는 무시
         }
       }
 
+      if (!mounted) return imageUrl;
       setState(() {
         _uploadedImageUrl = imageUrl;
         _isUploading = false;
       });
+      return imageUrl;
     } catch (e) {
-      setState(() {
-        _isUploading = false;
-      });
       if (mounted) {
+        setState(() {
+          _isUploading = false;
+        });
         SnackbarUtil.showInfo(context, '이미지 업로드에 실패했습니다: ${e.toString()}');
       }
+      return null;
     }
   }
 
@@ -203,153 +255,217 @@ class _CourseBasicInfoScreenState extends State<CourseBasicInfoScreen> {
     });
   }
 
+  /// 뒤로가기 처리 (변경사항 있으면 확인 다이얼로그, 확인 시 업로드 이미지 백그라운드 삭제 후 이동)
+  Future<void> _handleBack() async {
+    if (_nameFocusNode.hasFocus) _nameFocusNode.unfocus();
+    if (_descriptionFocusNode.hasFocus) _descriptionFocusNode.unfocus();
+
+    if (_shouldConfirmLeave()) {
+      final confirmed = await CommonDialog.show(
+        context: context,
+        title: '변경사항이 있습니다',
+        message: '입력한 내용이 사라집니다.\n나가시겠습니까?',
+        cancelText: '계속하기',
+        confirmText: '나가기',
+        confirmButtonColor: Colors.red,
+      );
+      if (confirmed != true) return;
+
+      // 새로 업로드한 이미지만 삭제 (기존 코스 이미지 URL은 유지)
+      if (_uploadedImageUrl != null && _uploadedImageUrl != _existingImageUrl) {
+        StorageService.deleteImagesInBackground([_uploadedImageUrl!]);
+      } else if (_isUploading && _uploadFuture != null) {
+        _uploadFuture!.then((url) {
+          if (url != null && url.isNotEmpty) {
+            StorageService.deleteImagesInBackground([url]);
+          }
+        });
+      }
+    }
+
+    if (!mounted) return;
+    Navigator.of(context).pop();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.backgroundWhite,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // 메인 콘텐츠
-            Expanded(
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // 헤더
-                    Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 16,
-                      ),
-                      child: Row(
-                        children: [
-                          IconButton(
-                            icon: const Icon(
-                              Icons.arrow_back_ios,
-                              size: 24,
-                              color: AppColors.primaryGreen,
-                            ),
-                            onPressed: () => Navigator.of(context).pop(),
-                            color: AppColors.textPrimary,
-                          ),
-                          const Spacer(),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '코스를 등록해 볼까요?',
-                            style: TextStyle(
-                              fontSize: 24,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textPrimary,
-                            ),
-                          ),
-                          Text(
-                            '코스 정보를 입력해주세요.',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w500,
-                              color: AppColors.textSecondary,
-                            ),
-                          ),
-
-                          const SizedBox(height: 40),
-                          // 코스 이미지 업로드
-                          _buildImageUpload(),
-                          const SizedBox(height: 34),
-                          // 코스명
-                          Text(
-                            '코스명',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textSecondary,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          _buildModernTextField(
-                            controller: _nameController,
-                            focusNode: _nameFocusNode,
-                            hintText: '코스명을 입력해주세요',
-                            errorText: _nameErrorText,
-                          ),
-                          const SizedBox(height: 14),
-                          // 설명
-                          Text(
-                            '설명',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textSecondary,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          _buildModernTextField(
-                            controller: _descriptionController,
-                            focusNode: _descriptionFocusNode,
-                            hintText: '코스에 대한 설명을 입력해주세요',
-                            minLines: 2,
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 60),
-                  ],
-                ),
-              ),
-            ),
-            // 하단 버튼
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed:
-                      (_isFormValid() && !_isUploading)
-                          ? () {
-                            widget.onNext(
-                              CourseBasicInfoData(
-                                name: _nameController.text.trim(),
-                                description: _descriptionController.text.trim(),
-                                imageUrl: _uploadedImageUrl,
+    return PopScope(
+      canPop: !_shouldConfirmLeave(),
+      onPopInvokedWithResult: (bool didPop, dynamic result) {
+        FocusScope.of(context).unfocus();
+        if (didPop) return;
+        _handleBack();
+      },
+      child: Scaffold(
+        backgroundColor: AppColors.backgroundWhite,
+        body: SafeArea(
+          child: Column(
+            children: [
+              // 메인 콘텐츠
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    return SingleChildScrollView(
+                      keyboardDismissBehavior:
+                          ScrollViewKeyboardDismissBehavior.manual,
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          minHeight: constraints.maxHeight,
+                        ),
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // 헤더
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 16,
+                                ),
+                                child: Row(
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(
+                                        Icons.arrow_back_ios,
+                                        size: 24,
+                                        color: AppColors.primaryGreen,
+                                      ),
+                                      onPressed: _handleBack,
+                                      color: AppColors.textPrimary,
+                                    ),
+                                    const Spacer(),
+                                  ],
+                                ),
                               ),
-                            );
-                          }
-                          : null,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor:
-                        (_isFormValid() && !_isUploading)
-                            ? AppColors.primaryGreen
-                            : AppColors.borderLight,
-                    disabledBackgroundColor: AppColors.borderLight,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    elevation: 0,
+                              const SizedBox(height: 20),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 20,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      '코스를 등록해 볼까요?',
+                                      style: TextStyle(
+                                        fontSize: 24,
+                                        fontWeight: FontWeight.w600,
+                                        color: AppColors.textPrimary,
+                                      ),
+                                    ),
+                                    Text(
+                                      '코스 정보를 입력해주세요.',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w500,
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
+
+                                    const SizedBox(height: 40),
+                                    // 코스 이미지 업로드
+                                    _buildImageUpload(),
+                                    const SizedBox(height: 34),
+                                    // 코스명
+                                    Text(
+                                      '코스명',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    _buildModernTextField(
+                                      controller: _nameController,
+                                      focusNode: _nameFocusNode,
+                                      hintText: '코스명을 입력해주세요',
+                                      errorText: _nameErrorText,
+                                    ),
+                                    const SizedBox(height: 14),
+                                    // 설명
+                                    Text(
+                                      '설명',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    _buildModernTextField(
+                                      controller: _descriptionController,
+                                      focusNode: _descriptionFocusNode,
+                                      hintText: '코스에 대한 설명을 입력해주세요',
+                                      minLines: 2,
+                                      maxLines: 2,
+                                      inputFormatters: [
+                                        _MaxLinesInputFormatter(2),
+                                        LengthLimitingTextInputFormatter(
+                                          60,
+                                        ), // 자동 줄바꿈 포함 2줄 이내
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 60),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
                   ),
-                  child: Text(
-                    '다음',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color:
+                ),
+                // 하단 버튼
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 10,
+                ),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed:
+                        (_isFormValid() && !_isUploading)
+                            ? () {
+                              widget.onNext(
+                                CourseBasicInfoData(
+                                  name: _nameController.text.trim(),
+                                  description:
+                                      _descriptionController.text.trim(),
+                                  imageUrl: _uploadedImageUrl,
+                                ),
+                              );
+                            }
+                            : null,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor:
                           (_isFormValid() && !_isUploading)
-                              ? Colors.white
-                              : AppColors.textSecondary,
+                              ? AppColors.primaryGreen
+                              : AppColors.borderLight,
+                      disabledBackgroundColor: AppColors.borderLight,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      elevation: 0,
+                    ),
+                    child: Text(
+                      '다음',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color:
+                            (_isFormValid() && !_isUploading)
+                                ? Colors.white
+                                : AppColors.textSecondary,
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -361,12 +477,14 @@ class _CourseBasicInfoScreenState extends State<CourseBasicInfoScreen> {
     String? hintText,
     String? errorText,
     int? minLines,
+    int? maxLines,
+    List<TextInputFormatter>? inputFormatters,
   }) {
     final hasError = errorText != null && errorText.isNotEmpty;
     return TextField(
       controller: controller,
       focusNode: focusNode,
-      maxLines: null,
+      maxLines: maxLines ?? null,
       minLines: minLines ?? 1,
       decoration: TextFieldDecorationUtil.defaultDecoration(
         hintText: hintText,
@@ -384,6 +502,7 @@ class _CourseBasicInfoScreenState extends State<CourseBasicInfoScreen> {
         color: AppColors.textPrimary,
         fontWeight: FontWeight.w600,
       ),
+      inputFormatters: inputFormatters,
       onChanged: (_) => setState(() {}),
     );
   }
@@ -394,22 +513,7 @@ class _CourseBasicInfoScreenState extends State<CourseBasicInfoScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         GestureDetector(
-          onTap: () async {
-            final pickedFile = await _imagePicker.pickImage(
-              source: ImageSource.gallery,
-              maxWidth: 800,
-              maxHeight: 800,
-              imageQuality: 85,
-            );
-            if (pickedFile != null) {
-              setState(() {
-                _selectedImage = File(pickedFile.path);
-                _uploadedImageUrl = null; // 새 이미지 선택 시 기존 URL 초기화
-              });
-              // 이미지 선택 시 자동 업로드
-              await _uploadImage();
-            }
-          },
+          onTap: _pickOrReplaceImage,
           child: Container(
             width: 150,
             height: 150,
@@ -433,12 +537,18 @@ class _CourseBasicInfoScreenState extends State<CourseBasicInfoScreen> {
     if (_uploadedImageUrl != null) {
       return Stack(
         children: [
-          CourseImageWidget(
-            imageUrl: _uploadedImageUrl,
-            width: 150,
-            height: 150,
-            borderRadius: borderRadius,
-            localImageFile: _selectedImage, // 로컬 이미지를 placeholder로 사용
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _pickOrReplaceImage,
+              child: CourseImageWidget(
+                imageUrl: _uploadedImageUrl,
+                width: 150,
+                height: 150,
+                borderRadius: borderRadius,
+                localImageFile: _selectedImage,
+              ),
+            ),
           ),
           Positioned(
             top: 8,
@@ -495,13 +605,19 @@ class _CourseBasicInfoScreenState extends State<CourseBasicInfoScreen> {
     if (_selectedImage != null) {
       return Stack(
         children: [
-          ClipRRect(
-            borderRadius: borderRadius,
-            child: Image.file(
-              _selectedImage!,
-              width: 150,
-              height: 150,
-              fit: BoxFit.cover,
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _pickOrReplaceImage,
+              child: ClipRRect(
+                borderRadius: borderRadius,
+                child: Image.file(
+                  _selectedImage!,
+                  width: 150,
+                  height: 150,
+                  fit: BoxFit.cover,
+                ),
+              ),
             ),
           ),
           Positioned(
@@ -543,5 +659,24 @@ class _CourseBasicInfoScreenState extends State<CourseBasicInfoScreen> {
         ),
       ],
     );
+  }
+}
+
+/// 최대 줄 수를 제한하는 TextInputFormatter (줄바꿈 입력 방지)
+class _MaxLinesInputFormatter extends TextInputFormatter {
+  final int maxLines;
+
+  _MaxLinesInputFormatter(this.maxLines);
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final newlineCount = '\n'.allMatches(newValue.text).length;
+    if (newlineCount >= maxLines) {
+      return oldValue;
+    }
+    return newValue;
   }
 }

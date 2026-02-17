@@ -3,14 +3,12 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../models/course.dart';
-import '../../models/reservation.dart';
 import '../../models/session_reservation.dart';
 import '../../providers/reservation_provider.dart';
 import '../../providers/enrollment_provider.dart';
 import '../../providers/place_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/course_provider.dart';
-import '../../services/firestore_service.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/common_dialog.dart';
 import '../../utils/snackbar_util.dart';
@@ -22,7 +20,7 @@ class UserReservationManageBottomSheet extends StatefulWidget {
   final Course course;
   final CourseSession session;
   final DateTime date;
-  final Reservation? reservation; // null이면 예약 없음
+  final SessionReservation? reservation; // null이면 예약 없음
   final VoidCallback? onReservationCancelled;
   final VoidCallback? onReservationCreated;
 
@@ -41,7 +39,7 @@ class UserReservationManageBottomSheet extends StatefulWidget {
     required Course course,
     required CourseSession session,
     required DateTime date,
-    Reservation? reservation,
+    SessionReservation? reservation,
     VoidCallback? onReservationCancelled,
     VoidCallback? onReservationCreated,
   }) {
@@ -75,15 +73,11 @@ class UserReservationManageBottomSheet extends StatefulWidget {
 
 class _UserReservationManageBottomSheetState
     extends State<UserReservationManageBottomSheet> {
-  final FirestoreService _firestoreService = FirestoreService();
-  StreamSubscription<SessionReservation?>? _sessionReservationSub;
-  SessionReservation? _sessionReservation;
   bool _isSubmitting = false;
 
   @override
   void initState() {
     super.initState();
-    _subscribeSessionReservation();
     _ensurePolicyLoaded();
   }
 
@@ -101,34 +95,7 @@ class _UserReservationManageBottomSheetState
 
   @override
   void dispose() {
-    _sessionReservationSub?.cancel();
     super.dispose();
-  }
-
-  void _subscribeSessionReservation() {
-    _sessionReservationSub?.cancel();
-
-    _sessionReservationSub = _firestoreService
-        .watchSessionReservation(
-          courseId: widget.course.id,
-          dayOfWeek: widget.session.dayOfWeek,
-          startTime: widget.session.startTime,
-          date: widget.date,
-        )
-        .listen(
-          (sr) {
-            if (!mounted) return;
-            setState(() {
-              _sessionReservation = sr;
-            });
-          },
-          onError: (_) {
-            if (!mounted) return;
-            setState(() {
-              _sessionReservation = null;
-            });
-          },
-        );
   }
 
   // 요일 이름 변환
@@ -198,13 +165,7 @@ class _UserReservationManageBottomSheetState
     final enrollment =
         enrollmentProvider.enrollmentsByCourseId[widget.course.id];
     final remainingReservations = enrollment?.remainingReservations ?? 0;
-
-    // 실시간 남은 자리 계산
-    final totalSeats =
-        _sessionReservation?.capacity ??
-        widget.session.getCapacityForDate(widget.date);
-    final reservedCount = _sessionReservation?.reservedCount ?? 0;
-    final availableSeats = (totalSeats - reservedCount).clamp(0, totalSeats);
+    final totalReservations = enrollment?.totalReservations ?? remainingReservations;
 
     // 취소 가능 여부 체크
     final canCancel =
@@ -322,49 +283,12 @@ class _UserReservationManageBottomSheetState
                         ),
                         const SizedBox(height: 24),
 
-                        // 남은 자리 섹션 (실시간 업데이트)
+                        // 남은 예약 횟수 (n/m, 구독/남은 자리 미표시)
                         Padding(
                           padding: const EdgeInsets.only(left: 4),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                '남은 자리',
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  color: AppColors.textSecondary,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-
-                              const SizedBox(height: 8),
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.baseline,
-                                textBaseline: TextBaseline.alphabetic,
-                                children: [
-                                  Text(
-                                    '${availableSeats} ',
-                                    style: TextStyle(
-                                      fontSize: 44,
-                                      fontWeight: FontWeight.bold,
-                                      color: AppColors.textPrimary,
-                                    ),
-                                  ),
-                                  Text(
-                                    '/ ${totalSeats}',
-                                    style: TextStyle(
-                                      fontSize: 24,
-                                      fontWeight: FontWeight.bold,
-                                      color: AppColors.textLight.withOpacity(
-                                        0.8,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 32),
-
-                              // 나의 남은 횟수 섹션
                               Text(
                                 '남은 예약 횟수',
                                 style: TextStyle(
@@ -374,14 +298,28 @@ class _UserReservationManageBottomSheetState
                                 ),
                               ),
                               const SizedBox(height: 8),
-                              Text(
-                                '${remainingReservations}회',
-                                style: const TextStyle(
-                                  fontSize: 44,
-                                  fontWeight: FontWeight.bold,
-                                  color: AppColors.textPrimary,
-                                  letterSpacing: -1,
-                                ),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.baseline,
+                                textBaseline: TextBaseline.alphabetic,
+                                children: [
+                                  Text(
+                                    '$remainingReservations',
+                                    style: TextStyle(
+                                      fontSize: 44,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppColors.textPrimary,
+                                      letterSpacing: -1,
+                                    ),
+                                  ),
+                                  Text(
+                                    ' / $totalReservations',
+                                    style: TextStyle(
+                                      fontSize: 24,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppColors.textLight.withOpacity(0.8),
+                                    ),
+                                  ),
+                                ],
                               ),
                               const SizedBox(height: 42),
                             ],
@@ -480,8 +418,7 @@ class _UserReservationManageBottomSheetState
                               Expanded(
                                 child: ElevatedButton(
                                   onPressed:
-                                      availableSeats > 0 &&
-                                              remainingReservations > 0
+                                      remainingReservations > 0
                                           ? () async {
                                             if (_isSubmitting) return;
                                             setState(() {
@@ -501,13 +438,14 @@ class _UserReservationManageBottomSheetState
                                           : null,
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor:
-                                        availableSeats > 0 &&
-                                                remainingReservations > 0
+                                        remainingReservations > 0
                                             ? AppColors.textPrimary
                                             : AppColors.textPrimary.withOpacity(
                                               0.3,
                                             ),
                                     foregroundColor: Colors.white,
+                                    disabledForegroundColor:
+                                        AppColors.textSecondary,
                                     padding: const EdgeInsets.symmetric(
                                       vertical: 16,
                                     ),
@@ -590,7 +528,7 @@ class _UserReservationManageBottomSheetState
         context,
         listen: false,
       ).createReservation(
-        Reservation(
+        SessionReservation(
           id: '',
           userId: userId,
           courseId: widget.course.id,
@@ -633,20 +571,27 @@ class _UserReservationManageBottomSheetState
       return;
     }
 
+    // 바텀시트를 먼저 내리고, 닫힌 후 다이얼로그 표시
+    Navigator.of(context).pop();
+    await Future.delayed(const Duration(milliseconds: 150));
+
+    final ctx = navigatorKey.currentContext;
+    if (ctx == null) return;
+
+    final dayName = _getDayName(widget.date.weekday);
     final confirmed = await CommonDialog.show(
-      context: context,
+      context: ctx,
       title: '예약 취소',
-      message: '예약을 취소하시겠습니까?',
+      message:
+          '${dayName}요일 ${widget.date.day}일 ${widget.session.startTime} - ${widget.session.endTime}\n'
+          '예약을 취소하시겠습니까?',
       cancelText: '취소',
       confirmText: '예약 취소',
       confirmButtonColor: Colors.red,
     );
     if (confirmed != true) return;
 
-    final rp = Provider.of<ReservationProvider>(context, listen: false);
-
-    // ✅ 바텀시트를 닫아도 Provider(in-flight) 기반으로 백그라운드에서 계속 처리됨
-    Navigator.of(context).pop();
+    final rp = Provider.of<ReservationProvider>(ctx, listen: false);
 
     try {
       await rp.cancelReservation(reservation);

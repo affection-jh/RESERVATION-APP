@@ -3,7 +3,7 @@ import 'package:provider/provider.dart';
 import '../../theme/app_colors.dart';
 import '../../models/course.dart' as reservation_models;
 import '../../providers/course_provider.dart';
-import 'widgets/admin_shared_widgets.dart';
+import 'widgets/shared_widgets.dart';
 import 'widgets/course_add_flow.dart';
 
 class AdminCourseScreen extends StatefulWidget {

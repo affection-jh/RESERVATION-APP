@@ -62,14 +62,15 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
 
     const db = admin.firestore();
 
-    // overrideId 생성 (없으면 생성)
-    const finalOverrideId = overrideId || `${courseId}_${date}_${startTime}_${isCancelled ? 'cancel' : 'add'}`;
+    // add와 cancel은 별도 문서: add = courseId_date_startTime, cancel = courseId_date_startTime_cancel
+    const baseId = `${courseId}_${date}_${startTime}`;
+    const finalOverrideId = overrideId || (isCancelled ? `${baseId}_cancel` : baseId);
     const overrideRef = db.collection('courseOverrides').doc(finalOverrideId);
 
     if (action === 'delete') {
         // 삭제:
         // - cancel override(정기 취소) 삭제 = 정기 세션 복원 (예약 삭제 X)
-        // - add override(비정기 추가) 삭제 = 세션 자체 삭제 (예약/크레딧/sessionReservations까지 정리)
+        // - add override(비정기 추가) 삭제 = 세션 자체 삭제 (예약/크레딧 정리)
         const existingDoc = await overrideRef.get();
         const existingData = existingDoc.exists ? (existingDoc.data() as any) : null;
         const existingIsCancelled = existingData?.isCancelled === true;
@@ -86,31 +87,13 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
                 return { success: true, overrideId: finalOverrideId };
             }
 
-            // ✅ createReservation은 sessionReservations.isCancelled로 취소 여부를 판단하므로,
-            // cancel override 삭제(복원) 시 sessionReservations의 취소 마커도 함께 해제해야 함.
-            const sessionId = `${courseId}_${effDayOfWeek}_${effStartTime}`;
-            const srRef = db.collection('sessionReservations').doc(`${sessionId}_${effDate}`);
-            await db.runTransaction(async (tx) => {
-                const srDoc = await tx.get(srRef);
-                if (srDoc.exists) {
-                    const reservedCount = Number((srDoc.data() as any)?.reservedCount ?? 0);
-                    // 예약이 0이면 문서 자체를 제거(유령 cancel 마커 방지), 아니면 cancel만 해제
-                    if (reservedCount <= 0) {
-                        tx.delete(srRef);
-                    } else {
-                        tx.update(srRef, {
-                            isCancelled: false,
-                            lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
-                        });
-                    }
-                }
-                tx.delete(overrideRef);
-            });
+            // cancel override 삭제 = 복원. createReservation은 courseOverrides isCancelled로 취소 여부 판단.
+            await overrideRef.delete();
             logFunctionSuccess(functionName, { overrideId: finalOverrideId, action: 'delete', restored: true });
             return { success: true, overrideId: finalOverrideId };
         }
 
-        // add override 삭제: 세션 자체 삭제로 간주 → 해당 세션 예약/크레딧/sessionReservations 정리
+        // add override 삭제: 세션 자체 삭제로 간주 → 해당 세션 예약/크레딧 정리
         if (!effDate || !effStartTime || !effDayOfWeek) {
             throw new functions.https.HttpsError(
                 'invalid-argument',
@@ -118,11 +101,10 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
             );
         }
 
-        // 해당 날짜의 예약 조회
+        // 해당 날짜의 예약 조회 (글로벌 reservations)
         const reservationQuery = db
-            .collection('places')
-            .doc(placeId)
             .collection('reservations')
+            .where('placeId', '==', placeId)
             .where('courseId', '==', courseId)
             .where('dayOfWeek', '==', effDayOfWeek)
             .where('startTime', '==', effStartTime)
@@ -141,11 +123,14 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
             if (!uid) continue;
             userIds.add(uid);
 
+            const reservationEnrollmentId = String(r?.enrollmentId ?? '');
+            if (!reservationEnrollmentId) continue; // 일회성 더미: 환불 대상 제외
+
             // pending 멤버 크레딧 복구 준비
             if (uid.startsWith('pending_')) {
                 const pendingId = uid.replace('pending_', '');
                 if (pendingId) {
-                    pendingRefByPendingId.set(pendingId, db.collection('pendingMembers').doc(pendingId));
+                    pendingRefByPendingId.set(pendingId, db.collection('places').doc(placeId).collection('pendingMembers').doc(pendingId));
                 }
                 continue;
             }
@@ -174,18 +159,14 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
                 pendingDocsByPendingId.set(pendingId, await tx.get(ref));
             }
 
-            // sessionReservations 조회 (비정기 세션도 동일한 sessionId 규칙)
-            const sessionId = `${courseId}_${effDayOfWeek}_${effStartTime}`;
-            const srRef = db.collection('sessionReservations').doc(`${sessionId}_${effDate}`);
-            const srDoc = await tx.get(srRef);
-
-            // 예약 삭제 및 enrollment 복구
+            // 예약 삭제 및 enrollment 복구 (일회성 더미는 삭제만)
             for (const doc of reservationSnapshot.docs) {
                 const r = doc.data() as any;
                 tx.delete(doc.ref);
 
                 const uid = String(r?.userId ?? '');
                 if (!uid) continue;
+                if (String(r?.enrollmentId ?? '') === '') continue; // 일회성 더미: 환불 스킵
 
                 // ✅ enrollment/pending 크레딧 복구(최대 total까지 clamp)
                 if (uid.startsWith('pending_')) {
@@ -213,11 +194,6 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
                         tx.update(enrollmentDoc.ref, { remainingReservations: newRemaining });
                     }
                 }
-            }
-
-            // sessionReservations는 세션 자체가 삭제되므로 문서 제거 (남아있으면 '유령 카운트'가 될 수 있음)
-            if (srDoc.exists) {
-                tx.delete(srRef);
             }
 
             // override 문서 삭제 (세션 자체 삭제)
@@ -259,11 +235,10 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
 
     // 취소인 경우: 기존 예약자 처리 (batchCancelReservations 로직 재활용)
     if (isCancelled) {
-        // 해당 날짜의 예약 조회
+        // 해당 날짜의 예약 조회 (글로벌 reservations)
         const reservationQuery = db
-            .collection('places')
-            .doc(placeId)
             .collection('reservations')
+            .where('placeId', '==', placeId)
             .where('courseId', '==', courseId)
             .where('dayOfWeek', '==', dayOfWeek)
             .where('startTime', '==', startTime)
@@ -282,10 +257,13 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
             if (!uid) continue;
             userIds.add(uid);
 
+            const reservationEnrollmentId = String(r?.enrollmentId ?? '');
+            if (!reservationEnrollmentId) continue; // 일회성 더미 예약: 차감한 적 없으므로 환불 대상에서 제외(ref만 수집 안 함, 삭제는 아래에서 수행)
+
             if (uid.startsWith('pending_')) {
                 const pendingId = uid.replace('pending_', '');
                 if (pendingId) {
-                    pendingRefByPendingId.set(pendingId, db.collection('pendingMembers').doc(pendingId));
+                    pendingRefByPendingId.set(pendingId, db.collection('places').doc(placeId).collection('pendingMembers').doc(pendingId));
                 }
                 continue;
             }
@@ -303,9 +281,8 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
             }
         }
 
-        // 트랜잭션: 예약 취소 + enrollment 복구 + sessionReservations 업데이트
+        // 트랜잭션: 예약 취소 + enrollment 복구 (reservations만 사용)
         await db.runTransaction(async (tx) => {
-            // enrollment 문서 다시 읽기
             const enrollmentDocsByUserId = new Map<string, FirebaseFirestore.DocumentSnapshot>();
             for (const [uid, ref] of enrollmentRefByUserId.entries()) {
                 enrollmentDocsByUserId.set(uid, await tx.get(ref));
@@ -315,18 +292,14 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
                 pendingDocsByPendingId.set(pendingId, await tx.get(ref));
             }
 
-            // sessionReservations 조회
-            const sessionId = `${courseId}_${dayOfWeek}_${startTime}`;
-            const srRef = db.collection('sessionReservations').doc(`${sessionId}_${date}`);
-            const srDoc = await tx.get(srRef);
-
-            // 예약 삭제 및 enrollment 복구
+            // 예약 삭제 및 enrollment 복구 (일회성 더미는 삭제만, 환불 없음)
             for (const doc of reservationSnapshot.docs) {
                 const r = doc.data() as any;
                 tx.delete(doc.ref);
 
                 const uid = String(r?.userId ?? '');
                 if (!uid) continue;
+                if (String(r?.enrollmentId ?? '') === '') continue; // 일회성 더미: 차감한 적 없으므로 환불 스킵
 
                 // ✅ enrollment/pending 크레딧 복구(최대 total까지 clamp)
                 if (uid.startsWith('pending_')) {
@@ -355,33 +328,7 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
                     }
                 }
             }
-
-            // sessionReservations 업데이트
-            // ✅ createReservation은 sessionReservations.isCancelled를 보고 취소를 강제하므로,
-            // sr 문서가 없더라도 "취소 마커"는 반드시 남겨야 함.
-            const currentReservedCount = srDoc.exists ? Number((srDoc.data() as any)?.reservedCount ?? 0) : 0;
-            const nextReservedCount = Math.max(0, currentReservedCount - reservationIds.length);
-            if (srDoc.exists) {
-                tx.update(srRef, {
-                    reservedCount: nextReservedCount,
-                    isCancelled: true,
-                    lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
-                });
-            } else {
-                tx.set(srRef, {
-                    id: `${sessionId}_${date}`,
-                    sessionId,
-                    courseId,
-                    placeId,
-                    dayOfWeek,
-                    startTime,
-                    date,
-                    reservedCount: 0,
-                    isCancelled: true,
-                    lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
-                    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-                });
-            }
+            // 취소 여부는 courseOverride 문서(isCancelled: true)로만 판단.
         });
 
         // 알림 전송 (트랜잭션 외부, sendNotification이 true일 때만)
@@ -410,12 +357,16 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
         }
     }
 
-    // 비정기 일정 저장
+    const sessionIdVal = `${courseId}_${dayOfWeek}_${startTime}`;
+
+    // 비정기 일정 저장 (type: cancel | add)
     const overrideData: any = {
         id: finalOverrideId,
         courseId,
         placeId,
         date,
+        sessionId: sessionIdVal,
+        type: isCancelled ? 'cancel' : 'add',
         dayOfWeek,
         isCancelled,
         weekStartDate,
@@ -438,59 +389,7 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
 
     await overrideRef.set(overrideData, { merge: true });
 
-    // 추가인 경우 알림 전송 (관리자 설정 확인)
-    if (!isCancelled && action === 'create' && sendNotification) {
-        try {
-            // 플레이스 설정에서 비정기 일정 알림 활성화 여부 확인
-            const placeDoc = await db.collection('places').doc(placeId).get();
-            const placeData = placeDoc.data();
-            const notifyOnOverrideAdd = placeData?.notifyOnOverrideAdd ?? true; // 기본값: true
-
-            if (notifyOnOverrideAdd) {
-                // 해당 코스에 등록된 멤버에게만 알림 (validUntil >= 오늘인 등록)
-                const enrollmentsSnapshot = await db
-                    .collection('enrollments')
-                    .where('placeId', '==', placeId)
-                    .where('courseId', '==', courseId)
-                    .get();
-
-                const todayStr = new Date().toISOString().slice(0, 10);
-                const activeEnrollments = enrollmentsSnapshot.docs.filter((doc) => {
-                    const d = doc.data() as any;
-                    const validUntil = d?.validUntil?.toDate?.();
-                    if (!validUntil) return true;
-                    return validUntil.toISOString().slice(0, 10) >= todayStr;
-                });
-
-                const notificationPromises = activeEnrollments.map(async (doc) => {
-                    const enrollment = doc.data();
-                    const userId = enrollment.userId;
-
-                    return createNotification({
-                        userId,
-                        type: 'system',
-                        title: '새 수업 일정이 생성되었습니다',
-                        body: `${formatDateKr(date)} ${startTime} (${capacity}명)`,
-                        placeId,
-                        data: {
-                            courseId,
-                            date,
-                            dayOfWeek,
-                            startTime,
-                            endTime,
-                            capacity,
-                            placeId,
-                        },
-                        isAdmin: false,
-                    });
-                });
-
-                await Promise.allSettled(notificationPromises);
-            }
-        } catch (error) {
-            console.error(`[upsertCourseOverride] Error creating add notifications:`, error);
-        }
-    }
+    // 비정기일정 추가 시 수강생 알림 제거 (요청사항: 알림 보내지 않음)
 
     logFunctionSuccess(functionName, { overrideId: finalOverrideId, action, isCancelled });
     return { success: true, overrideId: finalOverrideId };
@@ -513,18 +412,22 @@ async function createNotification({
     data?: Record<string, any>;
     isAdmin?: boolean;
 }): Promise<void> {
+    if (!userId || userId.startsWith('pending_')) return; // pending은 유저 문서 없음, 알림 생성 스킵
     try {
-        await admin.firestore().collection('notifications').add({
-            userId,
-            type,
-            title,
-            body,
-            placeId: placeId || null,
-            data: data || {},
-            isRead: false,
-            isAdminNotification: isAdmin,
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
+        await admin.firestore()
+            .collection('users')
+            .doc(userId)
+            .collection('notifications')
+            .add({
+                type,
+                title,
+                body,
+                placeId: placeId || null,
+                data: data || {},
+                isRead: false,
+                isAdminNotification: isAdmin,
+                createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
         console.log(`[createNotification] Created notification for user ${userId}, type: ${type}`);
     } catch (error) {
         console.error(`[createNotification] Error creating notification:`, error);

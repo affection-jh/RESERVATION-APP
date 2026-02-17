@@ -56,8 +56,7 @@ class _NotificationSettingsDialogState
       final currentUser = authProvider.currentUser;
 
       if (currentAdmin != null) {
-        // 관리자 정보 업데이트
-        final updatedAdmin = currentAdmin.updateProfile(
+        final updatedAdmin = currentAdmin.copyWith(
           notificationsEnabled: _currentValue,
         );
         await userService.updateAdmin(updatedAdmin);
@@ -67,7 +66,7 @@ class _NotificationSettingsDialogState
       } else if (currentUser != null) {
         // 일반 사용자: UserService에 현재 유저 동기화 후 업데이트 (권한 체크 통과)
         await userService.login(currentUser.userId);
-        final updatedUser = currentUser.updateProfile(
+        final updatedUser = currentUser.copyWith(
           notificationsEnabled: _currentValue,
         );
         await userService.updateUser(updatedUser);

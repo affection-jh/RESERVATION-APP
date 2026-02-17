@@ -1,64 +1,86 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../services/fcm_service.dart';
+import '../services/member_service.dart';
 import '../models/user.dart';
-import '../models/admin_user.dart';
+import '../models/place_member.dart';
 
 /// 인증 상태 Provider
-///
-/// 사용자 및 관리자 인증 상태 관리
+/// User 단일 모델 + places/{placeId}/members 기반 PlaceMember로 관리자/멤버 구분
 class AuthProvider with ChangeNotifier {
   final AuthService _authService = AuthService();
   final FcmService _fcmService = FcmService();
+  final MemberService _memberService = MemberService();
 
   User? _currentUser;
-  AdminUser? _currentAdmin;
-  AdminUser? _linkedAdmin; // 일반 사용자인 경우 연결된 관리자 계정 (같은 전화번호)
-  List<String> _approvedPlaceIds =
-      []; // placeMemberships에서 가져온 승인된 플레이스 ID (스플래시에서 한 번만 로드)
-  List<String> _adminManagedPlaceIds =
-      []; // places.adminId로 가져온 "관리하는" 플레이스 ID (스플래시에서 한 번만 로드)
+  List<PlaceMember> _placeMemberships = [];
+  StreamSubscription<List<PlaceMember>>? _placeMembershipsSubscription;
+  List<String> _approvedPlaceIds = [];
+  User? _linkedAdmin;
+  List<String> _adminManagedPlaceIdsOverride = [];
   bool _isLoading = false;
   String? _error;
   bool _isAuthenticated = false;
-  String? _initializedFcmUserId; // FCM이 초기화된 userId 추적
+  String? _initializedFcmUserId;
 
   User? get currentUser => _currentUser;
-  AdminUser? get currentAdmin => _currentAdmin;
-  AdminUser? get linkedAdmin => _linkedAdmin; // 연결된 관리자 계정
-  List<String> get approvedPlaceIds => _approvedPlaceIds; // 승인된 플레이스 ID 목록
+  List<PlaceMember> get placeMemberships => _placeMemberships;
+  List<String> get placeIdsFromPlaceMemberships =>
+      _placeMemberships.map((m) => m.placeId).whereType<String>().toList();
+  List<String> get managedPlaceIdsFromMemberships =>
+      _placeMemberships
+          .where((m) => m.canManagePlace && m.placeId != null)
+          .map((m) => m.placeId!)
+          .toList();
+
+  /// 관리 플레이스 ID (placeMemberships 기반, linkedAdmin일 땐 override 사용)
   List<String> get adminManagedPlaceIds =>
-      _adminManagedPlaceIds; // 관리하는 플레이스 ID 목록
+      _linkedAdmin != null
+          ? _adminManagedPlaceIdsOverride
+          : managedPlaceIdsFromMemberships;
+  List<String> get approvedPlaceIds => _approvedPlaceIds;
+  User? get linkedAdmin => _linkedAdmin;
   bool get isLoading => _isLoading;
   String? get error => _error;
   bool get isAuthenticated => _isAuthenticated;
+  bool get isManagerMode =>
+      managedPlaceIdsFromMemberships.isNotEmpty || _linkedAdmin != null;
 
-  /// 사용자 로그인
+  /// 관리자 화면용: 매니저 모드일 때만 non-null (currentUser와 동일, 호환용)
+  User? get currentManagerUser => isManagerMode ? _currentUser : null;
+
+  /// 호환용: currentUser와 동일 (AdminProvider 제거 후 AuthProvider 단일 사용)
+  User? get currentAdmin => _currentUser;
+  void setCurrentAdmin(User user) => setCurrentUser(user);
+  void clearAdmin() {
+    /* no-op */
+  }
+  void clearCurrentAdmin() => clearAdmin();
+
+  /// 로그인 (전화번호 + 인증코드). 신규 사용자는 name 필요.
   Future<User?> loginUser({
     required String phoneNumber,
     required String verificationCode,
+    String? name,
   }) async {
     _isLoading = true;
     _error = null;
     notifyListeners();
-
     try {
-      // TODO: Firebase Auth 구현 시 verifyCodeAndSignIn 사용
-      // 현재는 authenticateWithPhone 사용 (하위 호환성)
-      final result = await _authService.authenticateWithPhone(
+      final result = await _authService.verifyCodeAndSignIn(
+        smsCode: verificationCode,
         phoneNumber: phoneNumber,
-        verificationCode: verificationCode,
+        name: name,
       );
       _currentUser = result.user;
-      _currentAdmin = null;
       _isAuthenticated = true;
       _error = null;
       notifyListeners();
-
-      // FCM 초기화 (사용자 로그인 시)
       await _initializeFcm(result.user.userId);
-
+      await loadPlaceMembershipsForCurrentUser();
+      startWatchingPlaceMemberships();
       return result.user;
     } catch (e) {
       _error = e.toString();
@@ -71,121 +93,29 @@ class AuthProvider with ChangeNotifier {
     }
   }
 
-  /// 관리자 로그인
-  Future<AdminUser?> loginAdmin({
-    required String phoneNumber,
-    required String verificationCode,
-    required String pin,
-  }) async {
-    _isLoading = true;
-    _error = null;
-    notifyListeners();
-
-    try {
-      // 관리자 로그인 시 AuthResult.user는 AdminUser를 기반으로 생성된 User
-      // 실제 AdminUser는 별도로 조회 필요
-      final admin = await _authService.findAdminByPhone(phoneNumber);
-      if (admin == null) {
-        throw Exception('관리자 정보를 찾을 수 없습니다.');
-      }
-
-      _currentAdmin = admin;
-      _currentUser = null;
-      _isAuthenticated = true;
-      _error = null;
-      notifyListeners();
-
-      // FCM 초기화 (관리자 로그인 시)
-      await _initializeFcm(admin.userId);
-
-      return admin;
-    } catch (e) {
-      _error = e.toString();
-      _currentAdmin = null;
-      _isAuthenticated = false;
-      notifyListeners();
-      rethrow;
-    } finally {
-      _isLoading = false;
-    }
-  }
-
-  /// 관리자 회원가입
-  Future<AdminUser?> registerAdmin({
-    required String phoneNumber,
-    required String verificationCode,
-    required String name,
-    required String pin,
-  }) async {
-    _isLoading = true;
-    _error = null;
-    notifyListeners();
-
-    try {
-      final admin = await _authService.registerAdmin(
-        phoneNumber: phoneNumber,
-        verificationCode: verificationCode,
-        name: name,
-        pin: pin,
-      );
-      _currentAdmin = admin;
-      _currentUser = null;
-      _isAuthenticated = true;
-      _error = null;
-      notifyListeners();
-
-      // FCM 초기화 (관리자 회원가입 시)
-      await _initializeFcm(admin.userId);
-
-      return admin;
-    } catch (e) {
-      _error = e.toString();
-      _currentAdmin = null;
-      _isAuthenticated = false;
-      notifyListeners();
-      rethrow;
-    } finally {
-      _isLoading = false;
-    }
-  }
-
-  /// 자동 로그인 확인
+  /// 자동 로그인: Firebase Auth 세션 또는 저장된 사용자 기준
   Future<void> checkAutoLogin() async {
     _isLoading = true;
     notifyListeners();
 
     try {
-      // 관리자 자동 로그인 확인
-      final adminResult = await _authService.checkAdminAutoLogin();
-      if (adminResult != null) {
-        _currentAdmin = adminResult.admin;
-        _currentUser = null;
+      final userResult = await _authService.checkUserAutoLogin();
+      if (userResult != null) {
+        _currentUser = userResult.user;
         _isAuthenticated = true;
         _error = null;
         notifyListeners();
-
-        // FCM 초기화는 setCurrentAdmin에서 처리하므로 여기서는 호출하지 않음
-        // (app_startup_screen에서 setCurrentAdmin을 호출하므로 중복 방지)
-
+        await loadPlaceMembershipsForCurrentUser();
+        startWatchingPlaceMemberships();
         return;
       }
 
-      // 사용자 자동 로그인은 Firebase Auth의 authStateChanges()를 통해 처리
-      // 현재는 관리자만 지원
-
-      // TODO: 사용자 자동 로그인 구현 필요
-      // 사용자 자동 로그인은 Firebase Auth의 authStateChanges()를 통해 처리
-      // 현재는 관리자만 지원
-
-      // 자동 로그인 실패
       _currentUser = null;
-      _currentAdmin = null;
       _isAuthenticated = false;
       _error = null;
     } catch (e) {
       _error = e.toString();
       _currentUser = null;
-      _currentAdmin = null;
       _isAuthenticated = false;
     } finally {
       _isLoading = false;
@@ -193,36 +123,27 @@ class AuthProvider with ChangeNotifier {
     }
   }
 
-  /// 로그아웃
   Future<void> logout() async {
     _isLoading = true;
     notifyListeners();
-
     try {
-      if (_currentAdmin != null) {
-        // FCM 토큰 삭제
+      final uid = _currentUser?.userId;
+      if (uid != null) {
         try {
-          await _fcmService.deleteToken(_currentAdmin!.userId);
+          await _fcmService.deleteToken(uid);
         } catch (e) {
           debugPrint('FCM 토큰 삭제 실패: $e');
         }
-        await _authService.logoutAdmin();
-      } else if (_currentUser != null) {
-        // FCM 토큰 삭제
-        try {
-          await _fcmService.deleteToken(_currentUser!.userId);
-        } catch (e) {
-          debugPrint('FCM 토큰 삭제 실패: $e');
-        }
-        // 사용자 로그아웃 처리 (Firebase Auth 세션 정리 및 데이터 삭제)
         await _authService.logout();
       }
       _currentUser = null;
-      _currentAdmin = null;
-      _linkedAdmin = null; // 로그아웃 시 연결된 관리자 계정도 초기화
+      _linkedAdmin = null;
+      _approvedPlaceIds = [];
+      _adminManagedPlaceIdsOverride = [];
+      stopWatchingPlaceMemberships();
       _isAuthenticated = false;
       _error = null;
-      _initializedFcmUserId = null; // 로그아웃 시 초기화된 userId 초기화
+      _initializedFcmUserId = null;
       notifyListeners();
     } catch (e) {
       _error = e.toString();
@@ -232,14 +153,12 @@ class AuthProvider with ChangeNotifier {
     }
   }
 
-  /// 사용자 설정
   void setCurrentUser(User user) {
     final isProfileUpdate = _currentUser?.userId == user.userId;
     _currentUser = user;
     _isAuthenticated = true;
     notifyListeners();
 
-    // FCM 초기화는 로그인/자동 로그인 시에만. 앱 내 프로필만 갱신(알림 ON/OFF 등) 시에는 재시도하지 않음
     if (!isProfileUpdate || _initializedFcmUserId != user.userId) {
       _initializeFcm(user.userId).catchError((e) {
         debugPrint('FCM 초기화 실패: $e');
@@ -247,72 +166,92 @@ class AuthProvider with ChangeNotifier {
     }
   }
 
-  /// 연결된 관리자 계정 설정 (일반 사용자와 같은 전화번호의 관리자)
-  void setLinkedAdmin(AdminUser? admin) {
-    _linkedAdmin = admin;
-    notifyListeners();
-  }
-
-  /// 승인된 플레이스 ID 목록 설정 (스플래시에서 한 번만 호출)
   void setApprovedPlaceIds(List<String> placeIds) {
-    debugPrint(
-      '[AuthProvider.setApprovedPlaceIds] 승인된 플레이스 ID 설정: $placeIds (개수: ${placeIds.length})',
-    );
     _approvedPlaceIds = placeIds;
     notifyListeners();
   }
 
-  /// 관리하는 플레이스 ID 목록 설정 (스플래시에서 한 번만 호출)
-  void setAdminManagedPlaceIds(List<String> placeIds) {
-    _adminManagedPlaceIds = placeIds;
+  void setLinkedAdmin(User? admin) {
+    _linkedAdmin = admin;
+    if (admin == null) _adminManagedPlaceIdsOverride = [];
     notifyListeners();
   }
 
-  /// 관리자 설정
-  void setCurrentAdmin(AdminUser admin) {
-    final isProfileUpdate = _currentAdmin?.userId == admin.userId;
-    _currentAdmin = admin;
-    _isAuthenticated = true;
+  void setAdminManagedPlaceIds(List<String> placeIds) {
+    _adminManagedPlaceIdsOverride = placeIds;
     notifyListeners();
+  }
 
-    // FCM 초기화는 로그인/자동 로그인 시에만. 앱 내 프로필만 갱신(알림 ON/OFF 등) 시에는 재시도하지 않음
-    if (!isProfileUpdate || _initializedFcmUserId != admin.userId) {
-      _initializeFcm(admin.userId).catchError((e) {
-        debugPrint('FCM 초기화 실패: $e');
-      });
+  /// 플레이스 추가 직후 관리 목록에 반영 (PlaceSwitch 관리자 모드에 즉시 노출)
+  void addAdminManagedPlace(String placeId) {
+    if (placeId.isEmpty) return;
+    if (_linkedAdmin != null) {
+      if (!_adminManagedPlaceIdsOverride.contains(placeId)) {
+        _adminManagedPlaceIdsOverride = [..._adminManagedPlaceIdsOverride, placeId];
+        notifyListeners();
+      }
+    } else {
+      // linkedAdmin 없을 때는 placeMemberships 기반 → 재조회로 갱신
+      loadPlaceMembershipsForCurrentUser();
     }
   }
 
-  /// 관리자 모드 해제 (멤버 모드로 전환 시 사용)
-  void clearCurrentAdmin() {
-    if (_currentAdmin == null) return;
-    _currentAdmin = null;
+  Future<void> loadPlaceMembershipsForCurrentUser() async {
+    final uid = _currentUser?.userId;
+    if (uid == null || uid.isEmpty) {
+      _placeMemberships = [];
+      notifyListeners();
+      return;
+    }
+    try {
+      _placeMemberships = await _memberService.getPlaceMembershipsForUser(uid);
+      notifyListeners();
+    } catch (e) {
+      debugPrint('[AuthProvider] loadPlaceMembershipsForCurrentUser 실패: $e');
+      _placeMemberships = [];
+      notifyListeners();
+    }
+  }
+
+  void startWatchingPlaceMemberships() {
+    final uid = _currentUser?.userId;
+    _placeMembershipsSubscription?.cancel();
+    if (uid == null || uid.isEmpty) {
+      _placeMemberships = [];
+      notifyListeners();
+      return;
+    }
+    _placeMembershipsSubscription = _memberService
+        .watchPlaceMembershipsForUser(uid)
+        .listen((list) {
+          _placeMemberships = list;
+          notifyListeners();
+        });
+  }
+
+  void stopWatchingPlaceMemberships() {
+    _placeMembershipsSubscription?.cancel();
+    _placeMembershipsSubscription = null;
+    _placeMemberships = [];
     notifyListeners();
   }
 
-  /// FCM 초기화 (공통 메서드)
-  /// 중복 호출 방지: 같은 userId면 스킵
   Future<void> _initializeFcm(String userId) async {
-    debugPrint('[AuthProvider] _initializeFcm() userId=$userId _initializedFcmUserId=$_initializedFcmUserId');
     if (_initializedFcmUserId == userId) {
-      debugPrint('[AuthProvider] FCM 이미 초기화됨 → 토큰 갱신만 시도');
       await _fcmService.initialize(userId);
       return;
     }
-
     try {
       await _fcmService.initialize(userId);
       await _fcmService.checkInitialMessage();
       _initializedFcmUserId = userId;
-      debugPrint('[AuthProvider] FCM 초기화 완료 _initializedFcmUserId=$userId');
     } catch (e) {
       debugPrint('[AuthProvider] FCM 초기화 실패: $e');
     }
   }
 
-  /// 유저 정보 로드/앱 재개 시 호출. 토큰 없거나 갱신 필요 시 재발급 후 Firestore 저장.
   Future<void> ensureFcmTokenSaved() async {
-    final userId = _currentAdmin?.userId ?? _currentUser?.userId;
+    final userId = _currentUser?.userId;
     if (userId == null) return;
     await _fcmService.ensureTokenForUser(userId);
   }

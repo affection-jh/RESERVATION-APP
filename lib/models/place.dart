@@ -6,9 +6,9 @@ class Place {
   final String name;
   final String adminId; // 어드민 사용자 ID
   final String? description;
-  final String? location; // 주소
   final String? appBarText; // 앱바에 표시될 텍스트
   final String? greetingText; // 홈 화면 인사말
+  final bool hideGreeting; // true면 홈 화면에 환영 메시지 미표시
   final String? imageUrl; // 플레이스 이미지 URL
   final List<Course> courses; // 이 플레이스에서 진행되는 코스들
 
@@ -17,9 +17,9 @@ class Place {
     required this.name,
     required this.adminId,
     this.description,
-    this.location,
     this.appBarText,
     this.greetingText,
+    this.hideGreeting = false,
     this.imageUrl,
     this.courses = const [],
   });
@@ -52,9 +52,9 @@ class Place {
       'name': name,
       'adminId': adminId,
       if (description != null) 'description': description,
-      if (location != null) 'location': location,
       if (appBarText != null) 'appBarText': appBarText,
       if (greetingText != null) 'greetingText': greetingText,
+      'hideGreeting': hideGreeting,
       if (imageUrl != null) 'imageUrl': imageUrl,
       'courses': courses.map((c) => c.toJson()).toList(),
     };
@@ -68,17 +68,22 @@ class Place {
       final coursesData = json['courses'];
       if (coursesData != null) {
         if (coursesData is List) {
-          coursesList = coursesData
-              .map((c) {
-                try {
-                  return Course.fromJson(c as Map<String, dynamic>);
-                } catch (e) {
-                  print('[Place.fromJson] 코스 파싱 실패: $e');
-                  return null;
-                }
-              })
-              .whereType<Course>()
-              .toList();
+          final placeId = json['id'] as String? ?? '';
+          coursesList =
+              coursesData
+                  .map((c) {
+                    try {
+                      return Course.fromJson(
+                        c as Map<String, dynamic>,
+                        placeId: placeId,
+                      );
+                    } catch (e) {
+                      print('[Place.fromJson] 코스 파싱 실패: $e');
+                      return null;
+                    }
+                  })
+                  .whereType<Course>()
+                  .toList();
         } else if (coursesData is Map) {
           // Map인 경우 빈 리스트로 처리 (잘못된 데이터 구조)
           print('[Place.fromJson] courses가 Map 형식입니다. List로 변환할 수 없습니다.');
@@ -93,9 +98,9 @@ class Place {
       name: json['name'] as String,
       adminId: json['adminId'] as String,
       description: json['description'] as String?,
-      location: json['location'] as String?,
       appBarText: json['appBarText'] as String?,
       greetingText: json['greetingText'] as String?,
+      hideGreeting: json['hideGreeting'] as bool? ?? false,
       imageUrl: json['imageUrl'] as String?,
       courses: coursesList,
     );
@@ -107,9 +112,9 @@ class Place {
     String? name,
     String? adminId,
     String? description,
-    String? location,
     String? appBarText,
     String? greetingText,
+    bool? hideGreeting,
     String? imageUrl,
     List<Course>? courses,
   }) {
@@ -118,9 +123,9 @@ class Place {
       name: name ?? this.name,
       adminId: adminId ?? this.adminId,
       description: description ?? this.description,
-      location: location ?? this.location,
       appBarText: appBarText ?? this.appBarText,
       greetingText: greetingText ?? this.greetingText,
+      hideGreeting: hideGreeting ?? this.hideGreeting,
       imageUrl: imageUrl ?? this.imageUrl,
       courses: courses ?? this.courses,
     );

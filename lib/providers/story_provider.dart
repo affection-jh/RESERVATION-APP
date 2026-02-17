@@ -1,66 +1,8 @@
 import 'package:flutter/foundation.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import '../models/story.dart';
 import '../services/firestore_service.dart';
+import '../services/story_firestore_service.dart';
 import '../utils/timezone_utils.dart';
-
-/// 스토리 모델 (Firestore용)
-class Story {
-  final String id;
-  final String placeId;
-  final String title;
-  final String content;
-  final DateTime createdAt;
-  final List<String> imageUrls; // 이미지 URL 리스트
-  final String? backgroundImageUrl; // 배경 이미지 URL (선택사항)
-
-  Story({
-    required this.id,
-    required this.placeId,
-    required this.title,
-    required this.content,
-    required this.createdAt,
-    this.imageUrls = const [],
-    this.backgroundImageUrl,
-  });
-
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'placeId': placeId,
-      'title': title,
-      'content': content,
-      'createdAt': Timestamp.fromDate(createdAt),
-      'imageUrls': imageUrls,
-      'backgroundImageUrl': backgroundImageUrl,
-    };
-  }
-
-  factory Story.fromJson(Map<String, dynamic> json) {
-    // createdAt은 String 또는 Timestamp일 수 있음
-    DateTime createdAt;
-    if (json['createdAt'] is String) {
-      createdAt = DateTime.parse(json['createdAt'] as String);
-    } else if (json['createdAt'] is Timestamp) {
-      createdAt = (json['createdAt'] as Timestamp).toDate();
-    } else {
-      createdAt = DateTime.now();
-    }
-
-    return Story(
-      id: json['id'] as String,
-      placeId: json['placeId'] as String,
-      title: json['title'] as String,
-      content: json['content'] as String,
-      createdAt: createdAt,
-      imageUrls: json['imageUrls'] != null
-          ? List<String>.from(json['imageUrls'] as List)
-          : (json['imageUrl'] != null
-                ? [json['imageUrl'] as String]
-                : []), // 하위 호환성
-      backgroundImageUrl: json['backgroundImageUrl'] as String?,
-    );
-  }
-}
 
 /// 스토리 관리 Provider
 class StoryProvider with ChangeNotifier {
@@ -75,20 +17,13 @@ class StoryProvider with ChangeNotifier {
   String? get error => _error;
 
   void _sortStoriesLatestFirst() {
-    // 최신(createdAt desc) 순으로 정렬하여 UI에서 항상 최신이 먼저 보이게 함
-    _stories.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    _stories = StoryFirestoreService.sortStoriesLatestFirst(_stories);
   }
 
   /// 스토리 목록 로드 (중복 로드 방지)
   Future<void> loadStories(String placeId) async {
-    debugPrint('[StoryProvider.loadStories] 시작 - placeId: $placeId');
-    debugPrint(
-      '[StoryProvider.loadStories] _loadedPlaceId: $_loadedPlaceId, _stories.length: ${_stories.length}',
-    );
-
-    // 이미 같은 플레이스의 데이터를 로드했으면 스킵
-    if (_loadedPlaceId == placeId && _stories.isNotEmpty) {
-      debugPrint('[StoryProvider.loadStories] 이미 로드된 플레이스, 스킵');
+    // 이미 같은 플레이스에 대해 시도했으면 스킵 (성공/실패 무관, 재시도 방지)
+    if (_loadedPlaceId == placeId) {
       return;
     }
 
@@ -97,22 +32,16 @@ class StoryProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      debugPrint(
-        '[StoryProvider.loadStories] FirestoreService.getStoriesByPlace 호출 - placeId: $placeId',
-      );
       _stories = await _firestoreService.getStoriesByPlace(placeId);
       _sortStoriesLatestFirst();
-      debugPrint(
-        '[StoryProvider.loadStories] 로드 완료 - 스토리 개수: ${_stories.length}',
-      );
       _loadedPlaceId = placeId;
       _error = null;
-    } catch (e, stackTrace) {
-      debugPrint('[StoryProvider.loadStories] 에러 발생: $e');
-      debugPrint('[StoryProvider.loadStories] 스택 트레이스: $stackTrace');
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[StoryProvider.loadStories] placeId=$placeId 에러: $e');
+      }
       _error = e.toString();
       _stories = [];
-      // 에러가 발생해도 _loadedPlaceId를 설정하여 무한 재시도 방지
       _loadedPlaceId = placeId;
     } finally {
       _isLoading = false;
@@ -183,12 +112,12 @@ class StoryProvider with ChangeNotifier {
   }
 
   /// 스토리 삭제
-  Future<void> deleteStory(String storyId) async {
+  Future<void> deleteStory(String placeId, String storyId) async {
     _isLoading = true;
     notifyListeners();
 
     try {
-      await _firestoreService.deleteStory(storyId);
+      await _firestoreService.deleteStory(placeId, storyId);
       _stories = _stories.where((s) => s.id != storyId).toList();
       _sortStoriesLatestFirst();
       _error = null;

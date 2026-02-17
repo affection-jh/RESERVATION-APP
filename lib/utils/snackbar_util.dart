@@ -3,27 +3,34 @@ import 'package:flutter/material.dart';
 import 'package:top_snackbar_flutter/top_snack_bar.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../theme/app_colors.dart';
+import 'error_message_util.dart';
 import 'navigator_key.dart';
 
 class SnackbarUtil {
   static OverlayState? _resolveOverlay(BuildContext? context) {
-    // 1) context에서 Overlay 찾기
-    if (context != null) {
-      final overlay = Overlay.maybeOf(context);
-      if (overlay != null) return overlay;
-    }
-    // 2) navigatorKey.currentContext에서 찾기
+    // 1) navigatorKey 기준으로 먼저 시도 (pop 직후/비활성 context에서도 안전)
     final navCtx = navigatorKey.currentContext;
     if (navCtx != null) {
-      final overlay = Overlay.maybeOf(navCtx);
-      if (overlay != null) return overlay;
+      try {
+        final overlay = Overlay.maybeOf(navCtx);
+        if (overlay != null) return overlay;
+      } catch (_) {}
     }
-    // 3) pop 직후 등 context 불안정 시 Navigator의 overlay 직접 사용
-    return navigatorKey.currentState?.overlay;
+    final overlayFromNavigator = navigatorKey.currentState?.overlay;
+    if (overlayFromNavigator != null) return overlayFromNavigator;
+
+    // 2) 전달된 context 사용 (비활성화된 context면 예외 방지)
+    if (context != null) {
+      try {
+        final overlay = Overlay.maybeOf(context);
+        if (overlay != null) return overlay;
+      } catch (_) {}
+    }
+    return null;
   }
 
   static void _fallbackSnackBar(
-    BuildContext context,
+    BuildContext? context,
     String message, {
     bool isError = false,
   }) {
@@ -38,16 +45,21 @@ class SnackbarUtil {
       );
       return;
     }
-    final messenger = ScaffoldMessenger.maybeOf(context);
-    if (messenger == null) return;
-    messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: AppColors.primaryGreen,
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
+    // 비활성 context 대신 navigatorKey context 사용
+    final safeCtx = context ?? navigatorKey.currentContext;
+    if (safeCtx == null) return;
+    try {
+      final messenger = ScaffoldMessenger.maybeOf(safeCtx);
+      if (messenger == null) return;
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: AppColors.primaryGreen,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (_) {}
   }
 
   /// 상단에 성공 스낵바 표시
@@ -90,6 +102,18 @@ class SnackbarUtil {
       reverseAnimationDuration: const Duration(milliseconds: 250),
       curve: Curves.easeOut,
     );
+  }
+
+  /// 서버/네트워크 에러를 한국어로 변환해 정보 스낵바 표시
+  /// (예: "The internet connection appears to be offline" → "인터넷 연결이 끊어졌습니다.")
+  static void showInfoFromError(
+    BuildContext context,
+    dynamic error, {
+    String fallback = '오류가 발생했습니다. 잠시 후 다시 시도해주세요.',
+  }) {
+    final raw = error is String ? error : error.toString();
+    final message = raw.trim().isEmpty ? fallback : ErrorMessageUtil.toUserFriendlyMessage(raw);
+    showInfo(context, message);
   }
 
   /// 상단에 로딩 스낵바 표시 (스피너 + 메시지). 작업이 끝날 때까지 유지됨.

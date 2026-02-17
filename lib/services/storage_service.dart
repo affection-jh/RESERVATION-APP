@@ -69,6 +69,21 @@ class StorageService {
     }
   }
 
+  /// 업로드만 하고 저장하지 않고 나갈 때, Storage에 올린 이미지를 백그라운드에서 삭제.
+  /// UI 블로킹 없이 비동기로 실행하며, 실패해도 무시.
+  static void deleteImagesInBackground(List<String> imageUrls) {
+    if (imageUrls.isEmpty) return;
+    final service = StorageService();
+    for (final url in imageUrls) {
+      if (url.isEmpty) continue;
+      service.deleteImage(url).catchError((Object e, StackTrace st) {
+        // ignore: avoid_print
+        print('[StorageService] deleteImagesInBackground 실패: $e');
+        return Future<void>.value();
+      });
+    }
+  }
+
   /// 이미지 삭제
   ///
   /// [imageUrl] 삭제할 이미지의 다운로드 URL

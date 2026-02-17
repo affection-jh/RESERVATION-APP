@@ -16,6 +16,7 @@ import '../../../widgets/course_color_picker_bottom_sheet.dart';
 import '../../../widgets/common_dialog.dart';
 import '../../../providers/course_provider.dart';
 import '../../../providers/place_provider.dart';
+import 'course_schedule_edit_screen.dart';
 
 /// 코스 정보 수정 화면 (한 페이지)
 class CourseEditScreen extends StatefulWidget {
@@ -36,6 +37,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
   String? _uploadedImageUrl; // 업로드된 이미지 URL
   String? _existingImageUrl; // 기존 코스의 원본 이미지 URL (Storage 삭제용)
   bool _isUploading = false; // 업로드 중 여부
+  Future<String?>? _uploadFuture; // 업로드 중 뒤로갈 때 완료 후 삭제용
   late int _selectedColor; // 선택된 색상
   final ImagePicker _imagePicker = ImagePicker();
   bool _isSaving = false; // 저장 중 여부
@@ -74,14 +76,12 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
     _existingImageUrl = widget.course.imageUrl; // 원본 URL 저장 (삭제용)
     _selectedColor = widget.course.color;
 
-    // 일괄 적용 모드 초기화
-    _useUniformSettings = widget.course.useUniformSettings;
-    _uniformTotalReservations =
-        widget.course.uniformTotalReservations ??
-        widget.course.defaultTotalReservations;
+    // 기본 수업 횟수/유효기간 초기화
+    _useUniformSettings = false;
+    _uniformTotalReservations = widget.course.defaultTotalReservations;
     _uniformPeriodType =
-        widget.course.uniformPeriodType ?? reservation_models.PeriodType.weeks;
-    _uniformPeriodValue = widget.course.uniformPeriodValue ?? 1;
+        widget.course.defaultPeriodType ?? reservation_models.PeriodType.weeks;
+    _uniformPeriodValue = widget.course.defaultPeriodValue ?? 1;
     // 0이면 빈 문자열로 표시 (hintText로 "0" 표시)
     _uniformTotalReservationsController.text =
         _uniformTotalReservations == 0
@@ -186,26 +186,17 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
       return true;
     }
 
-    // 일괄 적용 모드 변경 확인
-    if (_useUniformSettings != widget.course.useUniformSettings) {
+    // 기본 수업 횟수/유효기간 변경 확인
+    if (_uniformTotalReservations != widget.course.defaultTotalReservations) {
       return true;
     }
-
-    // 일괄 적용 설정 변경 확인
-    if (_useUniformSettings) {
-      if (_uniformTotalReservations !=
-          (widget.course.uniformTotalReservations ??
-              widget.course.defaultTotalReservations)) {
-        return true;
-      }
-      if (_uniformPeriodType !=
-          (widget.course.uniformPeriodType ??
-              reservation_models.PeriodType.weeks)) {
-        return true;
-      }
-      if (_uniformPeriodValue != (widget.course.uniformPeriodValue ?? 1)) {
-        return true;
-      }
+    if (_uniformPeriodType !=
+        (widget.course.defaultPeriodType ??
+            reservation_models.PeriodType.weeks)) {
+      return true;
+    }
+    if (_uniformPeriodValue != (widget.course.defaultPeriodValue ?? 1)) {
+      return true;
     }
 
     // 이미지 변경 확인
@@ -229,9 +220,58 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
     return false;
   }
 
-  /// 이미지 업로드
-  Future<void> _uploadImage() async {
-    if (_selectedImage == null) return;
+  Future<void> _handleBack() async {
+    if (!_hasChanges()) {
+      Navigator.of(context).pop();
+      return;
+    }
+    final confirmed = await CommonDialog.show(
+      context: context,
+      title: '변경사항이 있습니다',
+      message: '변경된 내용이 사라집니다.\n나가시겠습니까?',
+      cancelText: '취소',
+      confirmText: '나가기',
+      confirmButtonColor: Colors.red,
+    );
+    if (confirmed != true || !mounted) return;
+    if (_uploadedImageUrl != null &&
+        _uploadedImageUrl != widget.course.imageUrl) {
+      StorageService.deleteImagesInBackground([_uploadedImageUrl!]);
+    } else if (_isUploading && _uploadFuture != null) {
+      _uploadFuture!.then((url) {
+        if (url != null && url.isNotEmpty) {
+          StorageService.deleteImagesInBackground([url]);
+        }
+      });
+    }
+    Navigator.of(context).pop();
+  }
+
+  /// 갤러리에서 이미지 선택 또는 교체
+  Future<void> _pickOrReplaceImage() async {
+    final pickedFile = await _imagePicker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 800,
+      maxHeight: 800,
+      imageQuality: 85,
+    );
+    if (pickedFile == null) return;
+
+    final oldUrl = _uploadedImageUrl;
+    setState(() {
+      _selectedImage = File(pickedFile.path);
+      _uploadedImageUrl = null;
+    });
+    if (oldUrl != null && oldUrl != _existingImageUrl) {
+      StorageService.deleteImagesInBackground([oldUrl]);
+    }
+    _uploadFuture = _uploadImage();
+    await _uploadFuture;
+  }
+
+  /// 이미지 업로드. 성공 시 URL 반환, 실패 시 null.
+  Future<String?> _uploadImage() async {
+    if (_selectedImage == null) return null;
 
     setState(() {
       _isUploading = true;
@@ -251,21 +291,24 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
         try {
           await storageService.deleteImage(_uploadedImageUrl!);
         } catch (e) {
-          // 삭제 실패는 무시 (이미 새 이미지로 교체됨)
+          // 삭제 실패는 무시
         }
       }
 
+      if (!mounted) return imageUrl;
       setState(() {
         _uploadedImageUrl = imageUrl;
         _isUploading = false;
       });
+      return imageUrl;
     } catch (e) {
-      setState(() {
-        _isUploading = false;
-      });
       if (mounted) {
+        setState(() {
+          _isUploading = false;
+        });
         SnackbarUtil.showInfo(context, '이미지 업로드에 실패했습니다: ${e.toString()}');
       }
+      return null;
     }
   }
 
@@ -331,28 +374,29 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
         return;
       }
 
-      // 기존 코스 정보를 업데이트하여 새 Course 객체 생성
-      // 일괄 적용 모드가 켜져 있으면 일괄 적용 수업 횟수를 defaultTotalReservations로 사용
-      // 일괄 적용 모드가 꺼져 있으면 기존 defaultTotalReservations 유지
-      final defaultTotalReservations =
-          _useUniformSettings
-              ? _uniformTotalReservations
-              : widget.course.defaultTotalReservations;
-
       final updatedCourse = reservation_models.Course(
         id: widget.course.id,
+        placeId: widget.course.placeId,
         name: _nameController.text.trim(),
         description: _descriptionController.text.trim(),
         color: _selectedColor,
         imageUrl: _uploadedImageUrl,
-        sessions: widget.course.sessions, // 기존 세션 정보 유지
+        sessions: widget.course.sessions,
         defaultTotalReservations:
-            defaultTotalReservations, // 등록당 수업 횟수 (새로 등록하는 멤버에게만 적용)
-        useUniformSettings: _useUniformSettings,
-        uniformTotalReservations:
-            _useUniformSettings ? _uniformTotalReservations : null,
-        uniformPeriodType: _useUniformSettings ? _uniformPeriodType : null,
-        uniformPeriodValue: _useUniformSettings ? _uniformPeriodValue : null,
+            _useUniformSettings
+                ? _uniformTotalReservations
+                : widget.course.defaultTotalReservations,
+        defaultPeriodType:
+            _useUniformSettings
+                ? _uniformPeriodType
+                : widget.course.defaultPeriodType,
+        defaultPeriodValue:
+            _useUniformSettings
+                ? _uniformPeriodValue
+                : widget.course.defaultPeriodValue,
+        policy: widget.course.policy,
+        createdAt: widget.course.createdAt,
+        updatedAt: DateTime.now(),
       );
 
       // CourseProvider의 updateCourse 사용
@@ -447,13 +491,11 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
       }
 
       // 삭제 완료 - navigatorKey 사용 (사용자가 뒤로가기로 나갔어도 동작)
-      // AdminScreen은 /admin 라우트가 아니라 AppStartupScreen(/)의 _targetScreen으로 표시되므로
-      // popUntil('/admin')은 매칭되지 않아 스택이 비어버림 → 고정 2번 pop (편집+상세)
+      // 상세 화면 제거로 코스 탭 시 바로 편집 화면으로 가므로 1번만 pop
       final navCtx = navigatorKey.currentContext;
       if (navCtx != null) {
         final navigator = Navigator.of(navCtx);
         if (navigator.canPop()) navigator.pop(); // CourseEditScreen
-        if (navigator.canPop()) navigator.pop(); // CourseDetailScreen
         WidgetsBinding.instance.addPostFrameCallback((_) {
           final ctx = navigatorKey.currentContext;
           if (ctx != null) {
@@ -477,199 +519,253 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.backgroundWhite,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // 메인 콘텐츠
-            Expanded(
-              child: GestureDetector(
-                onTap: () {
-                  // 여백을 탭하면 키보드 내리기
-                  FocusScope.of(context).unfocus();
-                },
-                behavior: HitTestBehavior.opaque,
-                child: SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // 헤더
-                      Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 16,
-                        ),
-                        child: Row(
-                          children: [
-                            IconButton(
-                              icon: const Icon(
-                                Icons.arrow_back_ios,
-                                size: 24,
-                                color: AppColors.primaryGreen,
-                              ),
-                              onPressed: () => Navigator.of(context).pop(),
-                              color: AppColors.textPrimary,
-                            ),
-                            Text(
-                              '코스 정보 수정',
-                              style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w600,
+    return PopScope(
+      canPop: !_hasChanges(),
+      onPopInvokedWithResult: (bool didPop, dynamic result) {
+        if (didPop) return;
+        _handleBack();
+      },
+      child: Scaffold(
+        backgroundColor: AppColors.backgroundWhite,
+        body: SafeArea(
+          child: Column(
+            children: [
+              // 메인 콘텐츠
+              Expanded(
+                child: GestureDetector(
+                  onTap: () {
+                    // 여백을 탭하면 키보드 내리기
+                    FocusScope.of(context).unfocus();
+                  },
+                  behavior: HitTestBehavior.opaque,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // 헤더
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 16,
+                          ),
+                          child: Row(
+                            children: [
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.arrow_back_ios,
+                                  size: 24,
+                                  color: AppColors.primaryGreen,
+                                ),
+                                onPressed: _handleBack,
                                 color: AppColors.textPrimary,
                               ),
-                            ),
-                            const SizedBox(height: 40),
-                            const Spacer(),
-                            // 삭제 버튼
-                            GestureDetector(
-                              onTap:
-                                  (_isSaving || _isDeleting)
-                                      ? null
-                                      : _deleteCourse,
-                              child: Opacity(
-                                opacity: (_isSaving || _isDeleting) ? 0.5 : 1.0,
-                                child: Container(
-                                  width: 36,
-                                  height: 36,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
+
+                              const Spacer(),
+                              // 일정 편집 버튼
+                              OutlinedButton(
+                                onPressed:
+                                    (_isSaving || _isDeleting)
+                                        ? null
+                                        : () async {
+                                          final courseProvider =
+                                              Provider.of<CourseProvider>(
+                                                context,
+                                                listen: false,
+                                              );
+                                          final currentCourse =
+                                              courseProvider.getCourse(
+                                                widget.course.id,
+                                              ) ??
+                                              widget.course;
+                                          final result = await Navigator.of(
+                                            context,
+                                          ).push(
+                                            MaterialPageRoute(
+                                              builder:
+                                                  (context) =>
+                                                      CourseScheduleEditScreen(
+                                                        course: currentCourse,
+                                                      ),
+                                            ),
+                                          );
+                                          if (result == true && mounted) {
+                                            setState(() {});
+                                          }
+                                        },
+                                style: OutlinedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 8,
                                   ),
-                                  child: Center(
-                                    child: SvgPicture.asset(
-                                      'assets/icons/delete.svg',
-                                      width: 20,
-                                      height: 20,
-                                      colorFilter: const ColorFilter.mode(
-                                        Colors.red,
-                                        BlendMode.srcIn,
-                                      ),
-                                    ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  side: BorderSide(
+                                    color: AppColors.borderLight,
+                                    width: 1.5,
+                                  ),
+                                ),
+                                child: Text(
+                                  '정기 일정 편집',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: AppColors.textPrimary,
+                                    fontWeight: FontWeight.w600,
                                   ),
                                 ),
                               ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // 코스 이미지 업로드
-                            _buildImageUpload(),
-                            const SizedBox(height: 44),
-                            // 코스명
-                            Text(
-                              '코스명',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w500,
-                                color: AppColors.textSecondary,
+                              const SizedBox(width: 8),
+                              // 코스 삭제 버튼
+                              OutlinedButton(
+                                onPressed:
+                                    (_isSaving || _isDeleting)
+                                        ? null
+                                        : _deleteCourse,
+                                style: OutlinedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 8,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  side: BorderSide(
+                                    color: AppColors.borderLight,
+                                    width: 1.5,
+                                  ),
+                                ),
+                                child: Text(
+                                  '코스 삭제',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: AppColors.textPrimary,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
                               ),
-                            ),
-                            const SizedBox(height: 8),
-                            _buildModernTextField(
-                              controller: _nameController,
-                              focusNode: _nameFocusNode,
-                              hintText: '코스명을 입력해주세요',
-                              errorText: _nameErrorText,
-                            ),
-                            const SizedBox(height: 20),
-                            // 위치/설명
-                            Text(
-                              '위치',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w500,
-                                color: AppColors.textSecondary,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            _buildModernTextField(
-                              controller: _descriptionController,
-                              focusNode: _descriptionFocusNode,
-                              hintText: '위치 또는 설명을 입력해주세요',
-                              minLines: 2,
-                            ),
-                            const SizedBox(height: 24),
-                            // 코스 색상 선택
-                            _buildColorSelection(),
-                            const SizedBox(height: 34),
-                            // 일괄 적용 모드
-                            _buildUniformSettingsField(),
-                            const SizedBox(height: 16),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 60),
-                    ],
+                        const SizedBox(height: 20),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // 코스 이미지 업로드
+                              _buildImageUpload(),
+                              const SizedBox(height: 44),
+                              // 코스명
+                              Text(
+                                '코스명',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w500,
+                                  color: AppColors.textSecondary,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              _buildModernTextField(
+                                controller: _nameController,
+                                focusNode: _nameFocusNode,
+                                hintText: '코스명을 입력해주세요',
+                                errorText: _nameErrorText,
+                              ),
+                              const SizedBox(height: 20),
+                              // 위치/설명
+                              Text(
+                                '설명',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w500,
+                                  color: AppColors.textSecondary,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              _buildModernTextField(
+                                controller: _descriptionController,
+                                focusNode: _descriptionFocusNode,
+                                hintText: '위치 또는 설명을 입력해주세요',
+                                minLines: 2,
+                              ),
+                              const SizedBox(height: 24),
+                              // 코스 색상 선택
+                              _buildColorSelection(),
+                              const SizedBox(height: 34),
+
+                              // 일괄 적용 모드
+                              _buildUniformSettingsField(),
+                              const SizedBox(height: 16),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 60),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
-            // 하단 버튼 (삭제 중일 때는 숨김)
-            if (!_isDeleting)
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 4,
-                ),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed:
-                        (_isFormValid() &&
-                                _hasChanges() &&
-                                !_isSaving &&
-                                !_isUploading)
-                            ? _saveCourse
-                            : null,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor:
+              // 하단 버튼 (삭제 중일 때는 숨김)
+              if (!_isDeleting)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 4,
+                  ),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed:
                           (_isFormValid() &&
                                   _hasChanges() &&
                                   !_isSaving &&
                                   !_isUploading)
-                              ? AppColors.primaryGreen
-                              : AppColors.borderLight,
-                      disabledBackgroundColor: AppColors.borderLight,
-                      padding: const EdgeInsets.symmetric(vertical: 18),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20),
+                              ? _saveCourse
+                              : null,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor:
+                            (_isFormValid() &&
+                                    _hasChanges() &&
+                                    !_isSaving &&
+                                    !_isUploading)
+                                ? AppColors.primaryGreen
+                                : AppColors.borderLight,
+                        disabledBackgroundColor: AppColors.borderLight,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        elevation: 0,
                       ),
-                      elevation: 0,
+                      child:
+                          _isSaving
+                              ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                              : Text(
+                                '저장',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color:
+                                      (_isFormValid() &&
+                                              _hasChanges() &&
+                                              !_isSaving &&
+                                              !_isUploading)
+                                          ? Colors.white
+                                          : AppColors.textSecondary,
+                                ),
+                              ),
                     ),
-                    child:
-                        _isSaving
-                            ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                            : Text(
-                              '저장',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                                color:
-                                    (_isFormValid() &&
-                                            _hasChanges() &&
-                                            !_isSaving &&
-                                            !_isUploading)
-                                        ? Colors.white
-                                        : AppColors.textSecondary,
-                              ),
-                            ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -732,22 +828,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         GestureDetector(
-          onTap: () async {
-            final pickedFile = await _imagePicker.pickImage(
-              source: ImageSource.gallery,
-              maxWidth: 800,
-              maxHeight: 800,
-              imageQuality: 85,
-            );
-            if (pickedFile != null) {
-              setState(() {
-                _selectedImage = File(pickedFile.path);
-                _uploadedImageUrl = null; // 새 이미지 선택 시 기존 URL 초기화
-              });
-              // 이미지 선택 시 자동 업로드
-              await _uploadImage();
-            }
-          },
+          onTap: _pickOrReplaceImage,
           child: Container(
             width: 150,
             height: 150,
@@ -771,12 +852,18 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
     if (_uploadedImageUrl != null) {
       return Stack(
         children: [
-          CourseImageWidget(
-            imageUrl: _uploadedImageUrl,
-            width: 150,
-            height: 150,
-            borderRadius: borderRadius,
-            localImageFile: _selectedImage, // 로컬 이미지를 placeholder로 사용
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _pickOrReplaceImage,
+              child: CourseImageWidget(
+                imageUrl: _uploadedImageUrl,
+                width: 150,
+                height: 150,
+                borderRadius: borderRadius,
+                localImageFile: _selectedImage,
+              ),
+            ),
           ),
           Positioned(
             top: 8,
@@ -833,13 +920,19 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
     if (_selectedImage != null) {
       return Stack(
         children: [
-          ClipRRect(
-            borderRadius: borderRadius,
-            child: Image.file(
-              _selectedImage!,
-              width: 150,
-              height: 150,
-              fit: BoxFit.cover,
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _pickOrReplaceImage,
+              child: ClipRRect(
+                borderRadius: borderRadius,
+                child: Image.file(
+                  _selectedImage!,
+                  width: 150,
+                  height: 150,
+                  fit: BoxFit.cover,
+                ),
+              ),
             ),
           ),
           Positioned(
@@ -955,7 +1048,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '일괄 적용 모드',
+                    '기본 등록값 설정',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
@@ -985,7 +1078,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '일괄 적용 수업 횟수',
+                '수업 횟수',
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w500,
@@ -1089,7 +1182,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          '일괄 적용 유효기간',
+          '유효기간',
           style: TextStyle(
             fontSize: 14,
             fontWeight: FontWeight.w500,

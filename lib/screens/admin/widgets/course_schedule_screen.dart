@@ -1,12 +1,16 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../../theme/app_colors.dart';
 import '../../../models/course.dart' as reservation_models;
+import '../../../models/course_policy.dart';
+import '../../../providers/place_provider.dart';
 import '../utils/admin_utils.dart';
 import 'course_color_selection_screen.dart';
 import 'drag_calendar_editor.dart';
 import 'session_edit_bottom_sheet.dart';
 import '../../../models/session_draft.dart';
+import '../../../utils/calendar_utils.dart';
 import '../../../utils/snackbar_util.dart';
 
 /// 코스 시간표 설정 화면 (3단계)
@@ -699,12 +703,12 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
   // 겹침 체크
   bool _hasOverlap(int dayOfWeek, String startTime, String endTime) {
     final sessions = _daySessions[dayOfWeek] ?? [];
-    final newStart = _parseTimeToMinutes(startTime);
-    final newEnd = _parseTimeToMinutes(endTime);
+    final newStart = CalendarUtils.parseTimeToMinutes(startTime);
+    final newEnd = CalendarUtils.parseTimeToMinutes(endTime);
 
     for (final session in sessions) {
-      final sessionStart = _parseTimeToMinutes(session.startTime);
-      final sessionEnd = _parseTimeToMinutes(session.endTime);
+      final sessionStart = CalendarUtils.parseTimeToMinutes(session.startTime);
+      final sessionEnd = CalendarUtils.parseTimeToMinutes(session.endTime);
 
       // 겹침 체크: 새 세션이 기존 세션과 겹치는지
       if (newStart < sessionEnd && newEnd > sessionStart) {
@@ -716,22 +720,15 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
 
   bool _hasAnyOverlapInDay(List<SessionDraft> sessions) {
     for (int i = 0; i < sessions.length; i++) {
-      final aStart = _parseTimeToMinutes(sessions[i].startTime);
-      final aEnd = _parseTimeToMinutes(sessions[i].endTime);
+      final aStart = CalendarUtils.parseTimeToMinutes(sessions[i].startTime);
+      final aEnd = CalendarUtils.parseTimeToMinutes(sessions[i].endTime);
       for (int j = i + 1; j < sessions.length; j++) {
-        final bStart = _parseTimeToMinutes(sessions[j].startTime);
-        final bEnd = _parseTimeToMinutes(sessions[j].endTime);
+        final bStart = CalendarUtils.parseTimeToMinutes(sessions[j].startTime);
+        final bEnd = CalendarUtils.parseTimeToMinutes(sessions[j].endTime);
         if (aStart < bEnd && aEnd > bStart) return true;
       }
     }
     return false;
-  }
-
-  int _parseTimeToMinutes(String time) {
-    final parts = time.split(':');
-    final hour = int.parse(parts[0]);
-    final minute = int.parse(parts[1]);
-    return hour * 60 + minute;
   }
 
   bool _isFormValid() {
@@ -778,20 +775,32 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
       }
     }
 
+    final placeId = widget.existingCourse?.placeId ??
+        Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id ??
+        '';
+    final now = DateTime.now();
     final course = reservation_models.Course(
       id: widget.existingCourse?.id ?? newId('course'),
+      placeId: placeId,
       name: name,
       description: widget.colorSelectionData.basicInfo.description,
       color: widget.colorSelectionData.selectedColor,
       sessions: courseSessions,
       imageUrl: widget.colorSelectionData.basicInfo.imageUrl,
       defaultTotalReservations:
-          widget.colorSelectionData.defaultTotalReservations,
-      useUniformSettings: widget.colorSelectionData.useUniformSettings,
-      uniformTotalReservations:
-          widget.colorSelectionData.uniformTotalReservations,
-      uniformPeriodType: widget.colorSelectionData.uniformPeriodType,
-      uniformPeriodValue: widget.colorSelectionData.uniformPeriodValue,
+          widget.colorSelectionData.useUniformSettings
+              ? (widget.colorSelectionData.uniformTotalReservations ??
+                  widget.colorSelectionData.defaultTotalReservations)
+              : widget.colorSelectionData.defaultTotalReservations,
+      defaultPeriodType: widget.colorSelectionData.useUniformSettings
+          ? widget.colorSelectionData.uniformPeriodType
+          : null,
+      defaultPeriodValue: widget.colorSelectionData.useUniformSettings
+          ? widget.colorSelectionData.uniformPeriodValue
+          : null,
+      policy: widget.existingCourse?.policy ?? CoursePolicy.defaultValue,
+      createdAt: widget.existingCourse?.createdAt ?? now,
+      updatedAt: now,
     );
 
     // 코스를 바로 저장하지 않고 정책 설정 화면으로 이동

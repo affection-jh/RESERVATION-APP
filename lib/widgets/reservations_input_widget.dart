@@ -51,9 +51,10 @@ class ReservationsInputWidget extends StatelessWidget {
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w500,
-              color: enabled
-                  ? AppColors.textSecondary
-                  : AppColors.textSecondary.withOpacity(0.4),
+              color:
+                  enabled
+                      ? AppColors.textSecondary
+                      : AppColors.textSecondary.withOpacity(0.4),
             ),
           ),
           const SizedBox(height: 12),
@@ -73,9 +74,10 @@ class ReservationsInputWidget extends StatelessWidget {
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w600,
-              color: !enabled
-                  ? AppColors.textSecondary.withOpacity(0.4)
-                  : AppColors.textPrimary,
+              color:
+                  !enabled
+                      ? AppColors.textSecondary.withOpacity(0.4)
+                      : AppColors.textPrimary,
             ),
             decoration: InputDecoration(
               contentPadding: const EdgeInsets.symmetric(
@@ -83,9 +85,10 @@ class ReservationsInputWidget extends StatelessWidget {
                 vertical: 0,
               ),
               filled: true,
-              fillColor: enabled
-                  ? AppColors.backgroundLight
-                  : AppColors.backgroundLight.withOpacity(0.5),
+              fillColor:
+                  enabled
+                      ? AppColors.backgroundLight
+                      : AppColors.backgroundLight.withOpacity(0.5),
               hintText: '0',
               hintStyle: TextStyle(
                 fontSize: 18,

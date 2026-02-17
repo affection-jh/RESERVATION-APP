@@ -1,21 +1,16 @@
-import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:reservation/screens/admin/widgets/admin_shared_widgets.dart'
+import 'package:reservation/screens/admin/widgets/shared_widgets.dart'
     show SectionHeader, ReservationCourseCard;
 import 'package:reservation/screens/admin/widgets/course_add_flow.dart';
-import 'package:reservation/screens/admin/widgets/course_detail_screen.dart';
+import 'package:reservation/screens/admin/widgets/empty_state_card.dart';
+import 'package:reservation/screens/admin/widgets/course_edit_screen.dart';
 import '../../theme/app_colors.dart';
-import '../../services/auth_service.dart';
-import '../../widgets/profile_settings_widget.dart'
-    show UserProfileInfoSection, SettingsItemsBuilder;
-import '../../widgets/notification_settings_dialog.dart';
-import '../../widgets/name_edit_bottom_sheet.dart';
 import '../../widgets/place_switch_widget.dart';
 import '../../providers/place_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/course_provider.dart';
-import '../../utils/snackbar_util.dart';
+import '../../screens/setting_screen.dart';
 import 'widgets/admin_place_edit_screen.dart';
 
 /// 관리자 마이페이지 화면
@@ -27,7 +22,7 @@ class AdminMyPageScreen extends StatefulWidget {
 }
 
 class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
-  // AdminPlaceSelector 제거로 인해 더 이상 필요 없음
+  // PlaceSelector 제거로 인해 더 이상 필요 없음
 
   @override
   Widget build(BuildContext context) {
@@ -48,99 +43,9 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
 
               const SizedBox(height: 24),
 
-              // 관리자 정보 섹션
-              Builder(
-                builder: (context) {
-                  final authProvider = Provider.of<AuthProvider>(context);
-                  final admin = authProvider.currentAdmin;
-                  final isNotificationEnabled =
-                      admin?.notificationsEnabled ?? true;
-
-                  return UserProfileInfoSection(
-                    headerTitle: '관리자 계정',
-                    profileName: admin?.name ?? '관리자',
-                    profilePhoneNumber: admin?.phoneNumber ?? '',
-                    onProfileTap: () {
-                      if (admin == null) return;
-                      NameEditBottomSheet.show(
-                        context: context,
-                        initialName: admin.name,
-                      );
-                    },
-                    profileBottomWidget: const PlaceSwitchWidget(
-                      heroTagSuffix: 'admin_my_page_profile',
-                    ),
-                    settingsItems: SettingsItemsBuilder.buildSettingsItems(
-                      context: context,
-                      isNotificationEnabled: isNotificationEnabled,
-                      onNotificationTap: () async {
-                        final result = await NotificationSettingsDialog.show(
-                          context: context,
-                          initialValue: isNotificationEnabled,
-                        );
-                        if (result == true && context.mounted) {
-                          // 다이얼로그에서 설정이 변경되었으면 화면 새로고침
-                          setState(() {});
-                        }
-                      },
-                      onLogout: () async {
-                        final authService = AuthService();
-                        await authService.logout();
-                      },
-                      onWithdraw: () async {
-                        final authProvider = Provider.of<AuthProvider>(
-                          context,
-                          listen: false,
-                        );
-                        final admin = authProvider.currentAdmin;
-
-                        if (admin == null) {
-                          SnackbarUtil.showInfo(context, '관리자 정보를 찾을 수 없습니다.');
-                          return;
-                        }
-
-                        SnackbarUtil.showLoading(context, '탈퇴중');
-
-                        try {
-                          // 서버 deleteUserAccount 호출 (관리자 소속 플레이스 있으면 탈퇴 불가 검사 포함)
-                          final callable = FirebaseFunctions.instance
-                              .httpsCallable('deleteUserAccount');
-                          await callable.call({'userId': admin.userId});
-
-                          await authProvider.logout();
-
-                          if (context.mounted) {
-                            SnackbarUtil.showSuccess(context, '회원탈퇴가 완료되었습니다.');
-                            Navigator.pushNamedAndRemoveUntil(
-                              context,
-                              '/',
-                              (route) => false,
-                            );
-                          }
-                        } catch (e) {
-                          if (context.mounted) {
-                            String message = '회원탈퇴 중 오류가 발생했습니다.';
-                            if (e is FirebaseFunctionsException &&
-                                (e.message ?? '').trim().isNotEmpty) {
-                              message = e.message!.trim();
-                            } else {
-                              try {
-                                final msg = (e as dynamic).message?.toString();
-                                if (msg != null && msg.trim().isNotEmpty) {
-                                  message = msg.trim();
-                                }
-                              } catch (_) {}
-                            }
-                            SnackbarUtil.showInfo(context, message);
-                          }
-                        }
-                      },
-                    ),
-                    showWithdrawButton: false, // 설정 항목에만 회원탈퇴 표시
-                  );
-                },
-              ),
-              SizedBox(height: 20),
+              // 설정 (위젯 직접 붙임)
+              const SettingScreen(isAdminMode: true, embedded: true),
+              const SizedBox(height: 20),
             ],
           ),
         ),
@@ -165,6 +70,7 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
                 showDescription: true,
                 padding: EdgeInsets.zero,
                 heroTagSuffix: 'admin_my_page',
+                isAdminContext: true,
               ),
             ),
 
@@ -211,30 +117,13 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
       builder: (context, courseProvider, child) {
         final courses = courseProvider.courses;
 
-        if (courses.isEmpty) {
-          return const SizedBox.shrink();
-        }
-
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            SizedBox(height: 22),
+            const SizedBox(height: 22),
             SectionHeader(
               title: '개설한 코스',
-              onIconTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder:
-                        (context) => CourseAddFlow(
-                          onComplete: (course) {
-                            if (context.mounted) {
-                              setState(() {});
-                            }
-                          },
-                        ),
-                  ),
-                );
-              },
+              onIconTap: () => _openCourseAddFlow(context),
               icon: Icon(
                 Icons.add_circle,
                 size: 30,
@@ -246,30 +135,48 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
             const SizedBox(height: 12),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Column(
-                children:
-                    courses.map((course) {
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 6),
-                        child: ReservationCourseCard(
-                          course: course,
-                          onTap: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder:
-                                    (context) =>
-                                        CourseDetailScreen(course: course),
+              child: courses.isEmpty
+                  ? EmptyStateCard(
+                      title: '아직 코스가 없어요',
+                      buttonText: '코스 추가하기',
+                      onPressed: () => _openCourseAddFlow(context),
+                    )
+                  : Column(
+                      children: courses
+                          .map(
+                            (course) => Padding(
+                              padding: const EdgeInsets.only(bottom: 6),
+                              child: ReservationCourseCard(
+                                course: course,
+                                onTap: () {
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (context) =>
+                                          CourseEditScreen(course: course),
+                                    ),
+                                  );
+                                },
                               ),
-                            );
-                          },
-                        ),
-                      );
-                    }).toList(),
-              ),
+                            ),
+                          )
+                          .toList(),
+                    ),
             ),
           ],
         );
       },
+    );
+  }
+
+  void _openCourseAddFlow(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => CourseAddFlow(
+          onComplete: (course) {
+            if (mounted) setState(() {});
+          },
+        ),
+      ),
     );
   }
 }

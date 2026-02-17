@@ -8,12 +8,14 @@ import '../widgets/cached_image_widget.dart' show CachedImageWidget;
 class PlaceImageDetailScreen extends StatelessWidget {
   final String? imageUrl;
   final String placeName;
+  final String? placeDescription;
   final String? heroTag;
 
   const PlaceImageDetailScreen({
     super.key,
     required this.imageUrl,
     required this.placeName,
+    this.placeDescription,
     this.heroTag,
   });
 
@@ -43,83 +45,112 @@ class PlaceImageDetailScreen extends StatelessWidget {
               ),
             ),
           ),
-          // 가운데 이미지 (heroTag가 있을 때만 Hero 사용 → 탭 전환 시 타겟 누락 방지)
-          Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Builder(
-                  builder: (context) {
-                    final imageContent = Material(
-                      color: Colors.transparent,
-                      child: Container(
-                        width: MediaQuery.of(context).size.width * 0.8,
-                        height: MediaQuery.of(context).size.width * 0.8,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(24),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.3),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
-                            ),
-                          ],
-                        ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(24),
-                          child:
-                              imageUrl != null && imageUrl!.isNotEmpty
-                                  ? CachedImageWidget(
-                                    imageUrl: imageUrl!,
-                                    width:
-                                        MediaQuery.of(context).size.width * 0.8,
-                                    height:
-                                        MediaQuery.of(context).size.width * 0.8,
-                                    fit: BoxFit.cover,
-                                    borderRadius: BorderRadius.circular(24),
-                                    placeholderColor: AppColors.textSecondary
-                                        .withOpacity(0.1),
-                                    errorColor: AppColors.textSecondary
-                                        .withOpacity(0.1),
-                                  )
-                                  : Container(
-                                    color: AppColors.textSecondary.withOpacity(
-                                      0.1,
-                                    ),
-                                    child: Icon(
-                                      Icons.image_outlined,
-                                      size: 80,
-                                      color: AppColors.textSecondary.withOpacity(
-                                        0.5,
-                                      ),
-                                    ),
-                                  ),
-                        ),
-                      ),
-                    );
-                    final tag = heroTag?.trim();
-                    if (tag != null && tag.isNotEmpty) {
-                      return Hero(tag: tag, child: imageContent);
-                    }
-                    return imageContent;
-                  },
+          // 이미지 + 이름 + 설명 (세로 중앙 정렬, 넘치면 스크롤)
+          Positioned.fill(
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.only(
+                  top: 56,
+                  left: 16,
+                  right: 16,
+                  bottom: 16,
                 ),
-                const SizedBox(height: 24),
-                // 플레이스 이름
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 32),
-                  child: Text(
-                    placeName,
-                    style: const TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                      letterSpacing: -0.5,
+                child: Center(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Builder(
+                          builder: (context) {
+                            final side = MediaQuery.sizeOf(context).width * 0.3;
+                            final imageContent = Material(
+                              color: Colors.transparent,
+                              child: Container(
+                                width: side,
+                                height: side,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(24),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.3),
+                                      blurRadius: 20,
+                                      offset: const Offset(0, 10),
+                                    ),
+                                  ],
+                                ),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(24),
+                                  child:
+                                      imageUrl != null && imageUrl!.isNotEmpty
+                                          ? CachedImageWidget(
+                                            imageUrl: imageUrl!,
+                                            width: side,
+                                            height: side,
+                                            fit: BoxFit.cover,
+                                            borderRadius: BorderRadius.circular(
+                                              24,
+                                            ),
+                                            placeholderColor: AppColors
+                                                .textSecondary
+                                                .withOpacity(0.1),
+                                            errorColor: AppColors.textSecondary
+                                                .withOpacity(0.1),
+                                          )
+                                          : Container(
+                                            color: AppColors.textSecondary
+                                                .withOpacity(0.1),
+                                            child: Icon(
+                                              Icons.image_outlined,
+                                              size: 80,
+                                              color: AppColors.textSecondary
+                                                  .withOpacity(0.5),
+                                            ),
+                                          ),
+                                ),
+                              ),
+                            );
+                            final tag = heroTag?.trim();
+                            return tag != null && tag.isNotEmpty
+                                ? Hero(tag: tag, child: imageContent)
+                                : imageContent;
+                          },
+                        ),
+                        const SizedBox(height: 24),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: Text(
+                            placeName,
+                            style: const TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                              letterSpacing: -0.5,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                        if (placeDescription != null &&
+                            placeDescription!.trim().isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: Text(
+                              placeDescription!.trim(),
+                              style: TextStyle(
+                                fontSize: 16,
+                                height: 1.45,
+                                color: Colors.white.withOpacity(0.9),
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
-                    textAlign: TextAlign.center,
                   ),
                 ),
-              ],
+              ),
             ),
           ),
         ],

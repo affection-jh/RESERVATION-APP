@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../models/course.dart';
-import '../../../models/reservation.dart';
-import '../../../models/user.dart';
+import '../../../models/session_reservation.dart';
+import '../../../models/member_view.dart';
 import '../../../models/course_enrollment.dart';
-import '../../../models/admin_models.dart';
 import '../../../theme/app_colors.dart';
 import 'bulk_move_reservations_bottom_sheet.dart';
 import '../../../utils/snackbar_util.dart';
@@ -17,12 +16,12 @@ import '../../../utils/timezone_utils.dart';
 import 'enrollment_detail_screen.dart';
 
 /// 예약 관리 간단 바텀시트 (예약 취소, 예약 변경 버튼만)
-class ReservationManageBottomSheet extends StatelessWidget {
+class SessionReservationManageBottomSheet extends StatelessWidget {
   final Course course;
   final CourseSession sourceSession;
   final DateTime sourceDate;
-  final Reservation reservation;
-  final User? user;
+  final SessionReservation reservation;
+  final MemberView? member;
   final VoidCallback? onCancelled;
   final VoidCallback? onMoved;
   final Function(Set<String>)? onMovingStarted;
@@ -32,13 +31,13 @@ class ReservationManageBottomSheet extends StatelessWidget {
   /// 스낵바를 붙일 context (예약 변경 성공/실패 스낵바를 화면에 표시할 때 사용)
   final BuildContext? snackbarContext;
 
-  const ReservationManageBottomSheet({
+  const SessionReservationManageBottomSheet({
     super.key,
     required this.course,
     required this.sourceSession,
     required this.sourceDate,
     required this.reservation,
-    this.user,
+    this.member,
     this.onCancelled,
     this.onMoved,
     this.onMovingStarted,
@@ -52,8 +51,8 @@ class ReservationManageBottomSheet extends StatelessWidget {
     required Course course,
     required CourseSession sourceSession,
     required DateTime sourceDate,
-    required Reservation reservation,
-    User? user,
+    required SessionReservation reservation,
+    MemberView? member,
     VoidCallback? onCancelled,
     VoidCallback? onMoved,
     Function(Set<String>)? onMovingStarted,
@@ -69,12 +68,12 @@ class ReservationManageBottomSheet extends StatelessWidget {
       enableDrag: true,
       useSafeArea: true,
       builder:
-          (modalContext) => ReservationManageBottomSheet(
+          (modalContext) => SessionReservationManageBottomSheet(
             course: course,
             sourceSession: sourceSession,
             sourceDate: sourceDate,
             reservation: reservation,
-            user: user,
+            member: member,
             onCancelled: onCancelled,
             onMoved: onMoved,
             onMovingStarted: onMovingStarted,
@@ -153,45 +152,24 @@ class ReservationManageBottomSheet extends StatelessWidget {
                         listen: false,
                       );
 
-                      // 1) 멤버(User) 확보 (우선 전달된 user 사용, 없으면 Provider에서 조회)
-                      User? targetUser = user;
-                      targetUser ??= memberProvider.getMember(
+                      // 1) 멤버(MemberView) 확보
+                      var memberView = memberProvider.getMemberView(
                         reservation.userId,
                       );
-
-                      // 캐시에 없으면 placeId 기준으로 로드 후 재시도
-                      if (targetUser == null) {
-                        await memberProvider.loadMembers(reservation.placeId);
-                        targetUser = memberProvider.getMember(
+                      if (memberView == null) {
+                        memberProvider.setPlaceId(reservation.placeId);
+                        memberView = memberProvider.getMemberView(
                           reservation.userId,
                         );
                       }
-
-                      if (targetUser == null) {
+                      if (memberView == null) {
                         throw Exception('멤버 정보를 찾을 수 없습니다.');
                       }
+                      final memberViewForEnrollment = memberView;
 
-                      // 2) MemberData 구성 (EnrollmentDetailScreen에 필요한 최소 정보)
-                      final isPending = targetUser.userId.startsWith(
-                        'pending_',
-                      );
-                      final memberData = MemberData(
-                        userId: targetUser.userId,
-                        name: targetUser.name,
-                        phoneNumber: targetUser.phoneNumber,
-                        role: isPending ? '대기중' : '일반',
-                        isActive: !isPending,
-                        pendingExtensionRequests:
-                            targetUser.pendingExtensionRequests.length,
-                        enrolledCourseIds:
-                            targetUser.enrollments
-                                .map((e) => e.courseId)
-                                .toList(),
-                      );
-
-                      // 3) enrollment 조회 (deterministic id)
+                      // 2) enrollment 조회 (deterministic id)
                       final enrollmentId =
-                          '${targetUser.userId}_${reservation.placeId}_${course.id}';
+                          '${memberViewForEnrollment.userId}_${reservation.placeId}_${course.id}';
                       final doc =
                           await FirebaseFirestore.instance
                               .collection('enrollments')
@@ -283,7 +261,7 @@ class ReservationManageBottomSheet extends StatelessWidget {
                         MaterialPageRoute(
                           builder:
                               (context) => EnrollmentDetailScreen(
-                                member: memberData,
+                                member: memberViewForEnrollment,
                                 enrollment: enrollment,
                                 course: course,
                               ),
@@ -367,8 +345,8 @@ class ReservationManageBottomSheet extends StatelessWidget {
                         ),
                         elevation: 0,
                       ),
-                      child: const Text(
-                        '예약 변경시키기',
+                      child: Text(
+                        '예약 변경',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
@@ -418,11 +396,18 @@ class ReservationManageBottomSheet extends StatelessWidget {
     final ctx = navigatorKey.currentContext;
     if (ctx == null) return;
 
-    // 다이얼로그 띄우기
+    // 다이얼로그 띄우기 (과목·요일·시간 표시)
+    final dayNames = ['', '월', '화', '수', '목', '금', '토', '일'];
+    final dayName =
+        sourceDate.weekday >= 1 && sourceDate.weekday <= 7
+            ? dayNames[sourceDate.weekday]
+            : '';
     final confirmed = await CommonDialog.show(
       context: ctx,
       title: '예약 취소',
-      message: '${user?.name ?? reservation.userId}님의 예약을 취소하시겠습니까?',
+      message:
+          '$dayName요일 ${sourceDate.day}일 ${sourceSession.startTime} - ${sourceSession.endTime}\n'
+          '${member?.adminDisplayName ?? reservation.userId}님의 예약을 취소하시겠습니까?',
       cancelText: '취소',
       confirmText: '예약 취소',
       confirmButtonColor: Colors.red,
@@ -442,7 +427,7 @@ class ReservationManageBottomSheet extends StatelessWidget {
     } catch (e) {
       final errorCtx = navigatorKey.currentContext;
       if (errorCtx != null && errorCtx.mounted) {
-        debugPrint('[ReservationManageBottomSheet] 예약 취소 실패: $e');
+        debugPrint('[SessionReservationManageBottomSheet] 예약 취소 실패: $e');
         SnackbarUtil.showInfo(errorCtx, '예약 취소 중 오류가 발생했습니다.');
       }
       rethrow;
@@ -472,7 +457,11 @@ class ReservationManageBottomSheet extends StatelessWidget {
               sourceSession: sourceSession,
               sourceDate: sourceDate,
               reservations: [reservation],
-              user: user,
+              initialWeekOffset:
+                  BulkMoveReservationsBottomSheet.weekOffsetFromDate(
+                    sourceDate,
+                  ),
+              member: member,
               onMoved: () {
                 onMoved?.call();
               },

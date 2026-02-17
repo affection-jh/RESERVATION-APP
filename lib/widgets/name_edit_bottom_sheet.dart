@@ -6,6 +6,7 @@ import 'package:reservation/utils/text_field_decoration_util.dart';
 import '../theme/app_colors.dart';
 import '../utils/snackbar_util.dart';
 import '../providers/auth_provider.dart';
+import '../services/member_service.dart';
 
 /// 이름 변경 바텀시트
 class NameEditBottomSheet extends StatefulWidget {
@@ -89,10 +90,15 @@ class _NameEditBottomSheetState extends State<NameEditBottomSheet> {
       final currentUser = authProvider.currentUser;
 
       if (currentAdmin != null) {
-        // 관리자 정보 업데이트
-        final updatedAdmin = currentAdmin.updateProfile(name: newName);
+        // 관리자: users 컬렉션 + 모든 소속 플레이스 members.adminDisplayName 동기화
+        final updatedAdmin = currentAdmin.copyWith(username: newName);
         final userService = UserService();
         await userService.updateAdmin(updatedAdmin);
+
+        await MemberService().updateMemberDisplayNameInAllPlaces(
+          currentAdmin.userId,
+          newName,
+        );
 
         // AuthProvider 업데이트
         authProvider.setCurrentAdmin(updatedAdmin);
@@ -100,7 +106,7 @@ class _NameEditBottomSheetState extends State<NameEditBottomSheet> {
         // 일반 사용자: UserService에 현재 유저 동기화 후 업데이트 (권한 체크 통과)
         final userService = UserService();
         await userService.login(currentUser.userId);
-        final updatedUser = currentUser.updateProfile(name: newName);
+        final updatedUser = currentUser.copyWith(username: newName);
         await userService.updateUser(updatedUser);
 
         // AuthProvider 업데이트

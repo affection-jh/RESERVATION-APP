@@ -3,13 +3,14 @@ import 'dart:async';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:provider/provider.dart';
 import '../../../models/course.dart';
-import '../../../models/reservation.dart';
 import '../../../models/session_draft.dart';
 import '../../../models/session_reservation.dart';
+import '../../../models/session_reservation_summary.dart';
 import '../../../providers/course_provider.dart';
 import '../../../providers/place_provider.dart';
 import '../../../services/firestore_service.dart';
 import '../../../theme/app_colors.dart';
+import '../../../utils/calendar_utils.dart';
 import '../../../utils/snackbar_util.dart';
 import '../../../utils/timezone_utils.dart';
 import '../../../widgets/common_dialog.dart';
@@ -47,6 +48,7 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
   // 드래그 상태 추적
   bool _isAnyDragging = false;
   bool _isSaving = false; // 저장 중 상태
+  bool _leaveRequested = false; // 저장 중 나가기 요청 (bailout용)
   bool _didInitialJump = false;
   bool _modifyRetryPending = false; // 정원 변경(modify) 에러 시 1회 재시도 플래그
   ScrollController? _calendarScrollController;
@@ -79,7 +81,7 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
   void _subscribeReservedSessionIds() {
     _reservedSessionIdsSub?.cancel();
     _reservedSessionIdsSub = _firestoreService
-        .watchReservedSessionIdsForCourse(widget.course.id)
+        .watchReservedSessionIdsForCourse(widget.course.placeId, widget.course.id)
         .listen(
           (ids) {
             if (!mounted) return;
@@ -148,7 +150,7 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
   // 특정 요일에 "예약이 존재하는 세션 템플릿"이 하나라도 있는지 확인 (주차 무관)
   bool _hasReservationsForDay(int dayOfWeek) {
     for (final s in _daySessions[dayOfWeek] ?? []) {
-      final sessionId = SessionReservation.generateSessionId(
+      final sessionId = SessionReservationSummary.generateSessionId(
         widget.course.id,
         dayOfWeek,
         s.startTime,
@@ -159,6 +161,9 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
   }
 
   Future<bool> _onWillPop() async {
+    if (_isSaving) {
+      return _handleBackDuringSave();
+    }
     if (!_hasChanges()) {
       return true; // 변경사항 없으면 바로 나가기
     }
@@ -173,6 +178,20 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
     );
 
     return confirmed == true;
+  }
+
+  /// 저장 중 뒤로가기 시 "저장 중입니다. 나가시겠습니까?" 다이얼로그
+  Future<bool> _handleBackDuringSave() async {
+    if (!_isSaving) return false;
+    final leave = await CommonDialog.showSavingLeaveConfirm(
+      context: context,
+      onLeave: () => _leaveRequested = true,
+    );
+    if (leave && mounted) {
+      setState(() => _isSaving = false);
+      return true; // caller가 pop 수행
+    }
+    return false;
   }
 
   @override
@@ -561,6 +580,11 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
                                   _isAnyDragging = isDragging;
                                 });
                               },
+                              onScrollBlockRequested: (block) {
+                                setState(() {
+                                  _isAnyDragging = block;
+                                });
+                              },
                             ),
                           );
                         }).toList(),
@@ -580,6 +604,7 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
     required double totalHeight,
     required ScrollController scrollController,
     required Function(bool) onDragStateChanged,
+    required Function(bool) onScrollBlockRequested,
   }) {
     final sessions = _daySessions[dayOfWeek] ?? [];
 
@@ -610,6 +635,7 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
           });
         },
         onDragStateChanged: onDragStateChanged,
+        onScrollBlockRequested: onScrollBlockRequested,
         onDragEnd: (startTime, endTime, day) {
           _showSessionEditBottomSheet(startTime, endTime, day);
         },
@@ -666,8 +692,8 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
               },
               onRegister: (newStartTime, newEndTime, newCapacity, bulkDays) {
                 // 시간 유효성 검증
-                final startMinutes = _parseTimeToMinutes(newStartTime);
-                final endMinutes = _parseTimeToMinutes(newEndTime);
+                final startMinutes = CalendarUtils.parseTimeToMinutes(newStartTime);
+                final endMinutes = CalendarUtils.parseTimeToMinutes(newEndTime);
                 if (startMinutes >= endMinutes) {
                   SnackbarUtil.showInfo(context, '시작 시간이 종료 시간보다 빨라야 해요.');
                   return;
@@ -870,7 +896,7 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
     final startDate = DateTime(now.year, now.month, now.day);
     final endDate = startDate.add(const Duration(days: 28));
 
-    List<Reservation> allReservations = [];
+    List<SessionReservation> allReservations = [];
     try {
       // 모든 날짜의 예약을 조회 (날짜별로 조회)
       for (
@@ -912,7 +938,7 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
     if (allReservations.isEmpty) {
       // 예약이 없다고 판단되면 바로 삭제
       // 하지만 _reservedSessionIds에 있으면 실제로 예약이 있을 수 있으므로 재확인
-      final sessionId = SessionReservation.generateSessionId(
+      final sessionId = SessionReservationSummary.generateSessionId(
         widget.course.id,
         dayOfWeek,
         session.startTime,
@@ -1006,12 +1032,12 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
   }) {
     for (int i = 0; i < sessions.length; i++) {
       if (excludeIndex != null && i == excludeIndex) continue;
-      final aStart = _parseTimeToMinutes(sessions[i].startTime);
-      final aEnd = _parseTimeToMinutes(sessions[i].endTime);
+      final aStart = CalendarUtils.parseTimeToMinutes(sessions[i].startTime);
+      final aEnd = CalendarUtils.parseTimeToMinutes(sessions[i].endTime);
       for (int j = i + 1; j < sessions.length; j++) {
         if (excludeIndex != null && j == excludeIndex) continue;
-        final bStart = _parseTimeToMinutes(sessions[j].startTime);
-        final bEnd = _parseTimeToMinutes(sessions[j].endTime);
+        final bStart = CalendarUtils.parseTimeToMinutes(sessions[j].startTime);
+        final bEnd = CalendarUtils.parseTimeToMinutes(sessions[j].endTime);
         if (aStart < bEnd && aEnd > bStart) {
           // 겹치는 세션 정보 반환
           return {
@@ -1031,12 +1057,12 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
     String endTime,
   ) {
     final sessions = _daySessions[dayOfWeek] ?? [];
-    final newStart = _parseTimeToMinutes(startTime);
-    final newEnd = _parseTimeToMinutes(endTime);
+    final newStart = CalendarUtils.parseTimeToMinutes(startTime);
+    final newEnd = CalendarUtils.parseTimeToMinutes(endTime);
 
     for (final session in sessions) {
-      final sessionStart = _parseTimeToMinutes(session.startTime);
-      final sessionEnd = _parseTimeToMinutes(session.endTime);
+      final sessionStart = CalendarUtils.parseTimeToMinutes(session.startTime);
+      final sessionEnd = CalendarUtils.parseTimeToMinutes(session.endTime);
 
       if (newStart < sessionEnd && newEnd > sessionStart) {
         return {
@@ -1049,13 +1075,6 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
   }
 
   // 시간을 분으로 변환
-  int _parseTimeToMinutes(String time) {
-    final parts = time.split(':');
-    final hour = int.parse(parts[0]);
-    final minute = int.parse(parts[1]);
-    return hour * 60 + minute;
-  }
-
   // 세션 저장
   void _saveSessions() async {
     // 저장 중이면 중복 실행 방지
@@ -1128,8 +1147,8 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
       final dayOfWeek = entry.key;
       for (final draft in entry.value) {
         // 시간 유효성 검증
-        final startMinutes = _parseTimeToMinutes(draft.startTime);
-        final endMinutes = _parseTimeToMinutes(draft.endTime);
+        final startMinutes = CalendarUtils.parseTimeToMinutes(draft.startTime);
+        final endMinutes = CalendarUtils.parseTimeToMinutes(draft.endTime);
         if (startMinutes >= endMinutes) {
           SnackbarUtil.showInfo(
             context,
@@ -1156,24 +1175,26 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
       }
     }
 
-    // 코스 업데이트 (기존 코스의 모든 필드 유지, sessions만 업데이트)
     final updatedCourse = Course(
       id: widget.course.id,
+      placeId: widget.course.placeId,
       name: widget.course.name,
       description: widget.course.description,
       color: widget.course.color,
       imageUrl: widget.course.imageUrl,
       sessions: courseSessions,
       defaultTotalReservations: widget.course.defaultTotalReservations,
-      useUniformSettings: widget.course.useUniformSettings,
-      uniformTotalReservations: widget.course.uniformTotalReservations,
-      uniformPeriodType: widget.course.uniformPeriodType,
-      uniformPeriodValue: widget.course.uniformPeriodValue,
+      defaultPeriodType: widget.course.defaultPeriodType,
+      defaultPeriodValue: widget.course.defaultPeriodValue,
+      policy: widget.course.policy,
+      createdAt: widget.course.createdAt,
+      updatedAt: DateTime.now(),
     );
 
     setState(() {
       _isSaving = true;
     });
+    if (_leaveRequested) return;
 
     try {
       // ✅ 서버 중앙 검증 적용: 예약이 있는 세션 삭제/변경은 서버에서 차단
@@ -1182,9 +1203,11 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
         courseId: updatedCourse.id,
         sessions: updatedCourse.sessions,
       );
+      if (_leaveRequested) return;
 
       // 최신 코스 목록 새로고침
       await courseProvider.loadCourses(currentPlace.id);
+      if (_leaveRequested) return;
 
       if (mounted) {
         _modifyRetryPending = false;
@@ -1261,7 +1284,7 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
           '[CourseScheduleEdit] requiresBulkMove 아님: 일반 에러 표시. code=${e.code}, message=${e.message}',
         );
         if (mounted) {
-          SnackbarUtil.showInfo(context, e.message ?? '저장하지 못했어요.');
+          SnackbarUtil.showInfoFromError(context, e, fallback: '저장하지 못했어요.');
         }
       }
     } catch (e, stackTrace) {

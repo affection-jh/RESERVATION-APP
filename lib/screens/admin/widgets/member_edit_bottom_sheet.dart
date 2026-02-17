@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import '../../../models/admin_models.dart';
+import '../../../models/member_view.dart';
 import '../../../providers/course_provider.dart';
 import '../../../providers/place_provider.dart';
 import '../../../providers/member_provider.dart';
@@ -11,13 +11,13 @@ import '../../../utils/snackbar_util.dart';
 
 /// 멤버 수정 바텀시트
 class MemberEditBottomSheet extends StatefulWidget {
-  final MemberData existing;
+  final MemberView existing;
 
   const MemberEditBottomSheet({super.key, required this.existing});
 
   static Future<void> show(
     BuildContext context, {
-    required MemberData existing,
+    required MemberView existing,
   }) async {
     await showModalBottomSheet<void>(
       context: context,
@@ -45,9 +45,7 @@ class _MemberEditBottomSheetState extends State<MemberEditBottomSheet> {
     super.initState();
     nameCtrl = TextEditingController(text: widget.existing.name);
     phoneCtrl = TextEditingController(text: widget.existing.phoneNumber);
-    selectedCourseIds = Set<String>.from(
-      widget.existing.enrolledCourseIds ?? [],
-    );
+    selectedCourseIds = Set<String>.from(widget.existing.enrolledCourseIds);
   }
 
   @override
@@ -498,7 +496,7 @@ class _MemberEditBottomSheetState extends State<MemberEditBottomSheet> {
       SnackbarUtil.showSuccess(context, '멤버 정보가 업데이트되었습니다.');
 
       // 멤버 목록 새로고침
-      await memberProvider.loadMembers(placeId);
+      memberProvider.setPlaceId(placeId);
     } catch (e) {
       SnackbarUtil.showInfo(context, '멤버 정보 업데이트 중 오류가 발생했습니다: $e');
     }

@@ -274,13 +274,12 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
       return false;
     }
 
-    // 편집 모드가 아닌 경우 (드래그로 새로 추가하는 경우)
-    if (!widget.isEditMode && widget.allDaySessions != null) {
+    if (widget.allDaySessions != null) {
       // 현재 요일을 제외한 다른 선택된 요일들 확인
       final otherSelectedDays =
           widget.selectedDays.where((day) => day != widget.dayOfWeek).toList();
 
-      // 다른 요일들 중 하나라도 해당 시간대에 세션이 있으면 일괄 적용 숨김
+      // 다른 요일들 중 하나라도 이 세션 시간과 겹치는 세션이 있으면 일괄 적용 숨김
       for (final day in otherSelectedDays) {
         final daySessions = widget.allDaySessions![day] ?? [];
         // 해당 시간대와 겹치는 세션이 있는지 확인
@@ -305,11 +304,10 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
         }
       }
 
-      // 다른 요일들에 해당 시간대 세션이 없으면 일괄 적용 가능
+      // 다른 요일들에 겹치는 세션이 없으면 일괄 적용 가능
       return true;
     }
 
-    // 편집 모드이거나 allDaySessions가 없는 경우는 기존 로직 유지
     return widget.selectedDays.length > 1;
   }
 
@@ -539,7 +537,7 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '수용인원',
+                      '수용 인원',
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
@@ -764,7 +762,7 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
                         style: OutlinedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(16),
                           ),
                           side: BorderSide(
                             color:
@@ -794,10 +792,12 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
                         onPressed: _hasChanges() ? _handleRegister : null,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.primaryGreen,
+                          foregroundColor: Colors.white,
                           disabledBackgroundColor: AppColors.borderLight,
+                          disabledForegroundColor: AppColors.textSecondary,
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(16),
                           ),
                           elevation: 0,
                         ),
@@ -806,7 +806,6 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
                           style: const TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
-                            color: Colors.white,
                           ),
                         ),
                       ),

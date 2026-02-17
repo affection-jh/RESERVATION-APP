@@ -71,7 +71,7 @@ class _StoryCardState extends State<StoryCard> {
                     maxHeightDiskCache: 1000,
                     memCacheWidth: 1000,
                     memCacheHeight: 1000,
-                    fadeInDuration: const Duration(milliseconds: 0),
+                    fadeInDuration: const Duration(milliseconds: 150),
                     fadeOutDuration: const Duration(milliseconds: 0),
                     imageBuilder: (context, imageProvider) {
                       if (!_backgroundImageLoaded && mounted) {
@@ -84,12 +84,15 @@ class _StoryCardState extends State<StoryCard> {
                       return Image(
                         image: imageProvider,
                         fit: BoxFit.cover,
+                        gaplessPlayback: true,
                       );
                     },
-                    placeholder: (context, url) =>
-                        Container(color: AppColors.backgroundWhite),
-                    errorWidget: (context, url, error) =>
-                        Container(color: AppColors.backgroundWhite),
+                    placeholder: (context, url) => Container(
+                      color: AppColors.backgroundWhite,
+                    ),
+                    errorWidget: (context, url, error) => Container(
+                      color: AppColors.backgroundWhite,
+                    ),
                   )
                 else
                   Container(color: AppColors.backgroundWhite),
@@ -138,30 +141,59 @@ class _StoryCardState extends State<StoryCard> {
                   bottom: 0,
                   left: 0,
                   right: 0,
-                  child: _showGradient
-                      ? TweenAnimationBuilder<double>(
-                          key: const ValueKey('gradient_fade'),
-                          tween: Tween(begin: 0, end: 1),
-                          duration: const Duration(milliseconds: 200),
-                          curve: Curves.easeOut,
-                          builder: (context, value, child) {
-                            return Opacity(
-                              opacity: value,
-                              child: child,
-                            );
-                          },
-                          child: Container(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                                colors: [
-                                  Colors.transparent,
-                                  Colors.black.withOpacity(0.65),
-                                  Colors.black.withOpacity(0.75),
+                  child:
+                      _showGradient
+                          ? TweenAnimationBuilder<double>(
+                            key: const ValueKey('gradient_fade'),
+                            tween: Tween(begin: 0, end: 1),
+                            duration: const Duration(milliseconds: 200),
+                            curve: Curves.easeOut,
+                            builder: (context, value, child) {
+                              return Opacity(opacity: value, child: child);
+                            },
+                            child: Container(
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
+                                  colors: [
+                                    Colors.transparent,
+                                    Colors.black.withOpacity(0.65),
+                                    Colors.black.withOpacity(0.75),
+                                  ],
+                                ),
+                              ),
+                              padding: const EdgeInsets.all(20),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    widget.title,
+                                    style: const TextStyle(
+                                      fontSize: 22,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.white,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    widget.content,
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      color: Colors.white.withOpacity(0.9),
+                                      height: 1.5,
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
                                 ],
                               ),
                             ),
+                          )
+                          : Container(
                             padding: const EdgeInsets.all(20),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -169,10 +201,10 @@ class _StoryCardState extends State<StoryCard> {
                               children: [
                                 Text(
                                   widget.title,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 28,
                                     fontWeight: FontWeight.bold,
-                                    color: Colors.white,
+                                    color: AppColors.textPrimary,
                                   ),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
@@ -182,7 +214,7 @@ class _StoryCardState extends State<StoryCard> {
                                   widget.content,
                                   style: TextStyle(
                                     fontSize: 16,
-                                    color: Colors.white.withOpacity(0.9),
+                                    color: AppColors.textPrimary,
                                     height: 1.5,
                                   ),
                                   maxLines: 2,
@@ -191,37 +223,6 @@ class _StoryCardState extends State<StoryCard> {
                               ],
                             ),
                           ),
-                        )
-                      : Container(
-                          padding: const EdgeInsets.all(20),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                widget.title,
-                                style: TextStyle(
-                                  fontSize: 28,
-                                  fontWeight: FontWeight.bold,
-                                  color: AppColors.textPrimary,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                widget.content,
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  color: AppColors.textPrimary,
-                                  height: 1.5,
-                                ),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ],
-                          ),
-                        ),
                 ),
               ],
             ),

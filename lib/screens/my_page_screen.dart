@@ -3,26 +3,24 @@ import 'package:provider/provider.dart';
 import '../theme/app_colors.dart';
 import '../widgets/compact_calendar_widget.dart';
 import '../models/course.dart';
-import '../models/reservation.dart';
+import '../models/session_reservation.dart';
+import '../models/course_policy.dart';
 import '../models/course_enrollment.dart';
 import '../widgets/user_reservation_manage_bottom_sheet.dart';
-import '../widgets/enrollment_detail_bottom_sheet.dart';
+import 'enrollment_detail_screen.dart';
 import '../widgets/place_switch_widget.dart';
-import '../widgets/profile_settings_widget.dart'
-    show UserProfileInfoSection, SettingsItemsBuilder;
-import '../widgets/notification_settings_dialog.dart';
-import '../widgets/name_edit_bottom_sheet.dart';
+
 import '../providers/reservation_provider.dart';
 import '../providers/course_provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/place_provider.dart';
 
 import '../providers/enrollment_provider.dart';
-import '../utils/snackbar_util.dart';
+import '../providers/enrollment_timeline_provider.dart';
+import 'setting_screen.dart';
 import '../widgets/cached_image_widget.dart';
 import '../widgets/week_tab_bar.dart';
 import '../utils/timezone_utils.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 
 class MyPageScreen extends StatefulWidget {
   final Map<String, dynamic>? highlightReservation; // 강조할 예약 정보
@@ -35,14 +33,14 @@ class MyPageScreen extends StatefulWidget {
 
 class _MyPageScreenState extends State<MyPageScreen> {
   bool _shouldHighlightReservation = false;
-  Reservation? _highlightedReservation;
+  SessionReservation? _highlightedReservation;
   Course? _highlightedCourse;
   CourseSession? _highlightedSession;
   DateTime? _highlightedDate;
   int _selectedWeekTab = 0;
 
   List<int> _computeAvailableWeekOffsets(
-    List<Reservation> reservations, {
+    List<SessionReservation> reservations, {
     DateTime? extraDateToInclude,
   }) {
     // 현재 주차는 항상 포함 (예약이 없어도)
@@ -71,8 +69,7 @@ class _MyPageScreenState extends State<MyPageScreen> {
       return weekOffsets.toList()..sort();
     }
 
-    // 예약이 있는 주차 추출
-    int maxWeekOffset = 0;
+    // 예약이 있는 주차만 포함 (취소된 주차는 탭에서 제거)
     for (final r in reservations) {
       final d = DateTime(
         r.reservedDate.year,
@@ -82,18 +79,8 @@ class _MyPageScreenState extends State<MyPageScreen> {
       final diffDays = d.difference(thisWeekMonday).inDays;
       final w = (diffDays / 7).floor();
       if (w >= 0) {
-        // 현재 주차 이후의 예약만 포함
         weekOffsets.add(w);
-        if (w > maxWeekOffset) {
-          maxWeekOffset = w;
-        }
       }
-    }
-
-    // 현재 주차부터 가장 먼 예약 주차까지 모든 주차 포함
-    // 예: 예약이 3주 후에만 있으면 [0, 1, 2, 3] 모두 포함
-    for (int i = 0; i <= maxWeekOffset; i++) {
-      weekOffsets.add(i);
     }
 
     final sortedOffsets = weekOffsets.toList()..sort();
@@ -101,7 +88,7 @@ class _MyPageScreenState extends State<MyPageScreen> {
   }
 
   bool _hasReservationsInWeekOffset(
-    List<Reservation> reservations,
+    List<SessionReservation> reservations,
     int weekOffset,
   ) {
     if (reservations.isEmpty) return false;
@@ -197,7 +184,7 @@ class _MyPageScreenState extends State<MyPageScreen> {
     // PlaceProvider에 현재 플레이스가 있는지 확인
     var currentPlace = placeProvider.currentPlace;
 
-    // 플레이스가 없으면 placeMemberships에서 첫 번째 플레이스 로드
+    // 플레이스가 없으면 members 기반 approvedPlaceIds에서 첫 번째 플레이스 로드
     if (currentPlace == null) {
       final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
@@ -320,21 +307,24 @@ class _MyPageScreenState extends State<MyPageScreen> {
     final courseId = reservationInfo['courseId'];
     final dayOfWeek = reservationInfo['dayOfWeek'] as int?;
     final startTime = reservationInfo['startTime'] as String?;
-    final hasFullInfo = courseId != null && dayOfWeek != null && startTime != null;
+    final hasFullInfo =
+        courseId != null && dayOfWeek != null && startTime != null;
 
     if (!hasFullInfo) return; // 주차 설정 완료
 
-    final Reservation? match = userReservations.cast<Reservation?>().firstWhere(
-      (r) =>
-          r != null &&
-          r.courseId == courseId &&
-          r.dayOfWeek == dayOfWeek &&
-          r.startTime == startTime &&
-          r.reservedDate.year == targetDate.year &&
-          r.reservedDate.month == targetDate.month &&
-          r.reservedDate.day == targetDate.day,
-      orElse: () => null,
-    );
+    final SessionReservation? match = userReservations
+        .cast<SessionReservation?>()
+        .firstWhere(
+          (r) =>
+              r != null &&
+              r.courseId == courseId &&
+              r.dayOfWeek == dayOfWeek &&
+              r.startTime == startTime &&
+              r.reservedDate.year == targetDate.year &&
+              r.reservedDate.month == targetDate.month &&
+              r.reservedDate.day == targetDate.day,
+          orElse: () => null,
+        );
 
     if (match == null) {
       Future.delayed(const Duration(milliseconds: 200), () {
@@ -359,7 +349,7 @@ class _MyPageScreenState extends State<MyPageScreen> {
 
   // 사용자가 예약한 코스만 필터링
   List<Course> _getUserCourses(
-    List<Reservation> reservations,
+    List<SessionReservation> reservations,
     List<Course> courses,
   ) {
     final reservedCourseIds = reservations.map((r) => r.courseId).toSet();
@@ -399,7 +389,7 @@ class _MyPageScreenState extends State<MyPageScreen> {
           () =>
               userReservations.isNotEmpty
                   ? userReservations.first
-                  : Reservation(
+                  : SessionReservation(
                     id: '',
                     userId: '',
                     courseId: '',
@@ -418,11 +408,16 @@ class _MyPageScreenState extends State<MyPageScreen> {
               courses.isNotEmpty
                   ? courses.first
                   : Course(
-                    description: '',
                     id: reservation.courseId,
+                    placeId: reservation.placeId,
                     name: '',
+                    description: '',
                     color: 0xFF087044,
+                    defaultTotalReservations: 10,
                     sessions: [],
+                    policy: CoursePolicy.defaultValue,
+                    createdAt: DateTime.now(),
+                    updatedAt: DateTime.now(),
                   ),
     );
 
@@ -527,7 +522,7 @@ class _MyPageScreenState extends State<MyPageScreen> {
       orElse: () {
         final placeId = placeProvider.currentPlace?.id ?? '';
         final userId = authProvider.currentUser?.userId ?? '';
-        return Reservation(
+        return SessionReservation(
           id: '',
           userId: userId,
           courseId: course.id,
@@ -570,8 +565,7 @@ class _MyPageScreenState extends State<MyPageScreen> {
     final courseProvider = Provider.of<CourseProvider>(context);
 
     final userReservations = reservationProvider.reservations;
-    final extraDate =
-        widget.highlightReservation?['reservedDate'] as DateTime?;
+    final extraDate = widget.highlightReservation?['reservedDate'] as DateTime?;
     final availableWeekOffsets = _computeAvailableWeekOffsets(
       userReservations,
       extraDateToInclude: extraDate,
@@ -611,6 +605,7 @@ class _MyPageScreenState extends State<MyPageScreen> {
                 // 메인 콘텐츠
                 Expanded(
                   child: SingleChildScrollView(
+                    physics: const ClampingScrollPhysics(),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -619,7 +614,23 @@ class _MyPageScreenState extends State<MyPageScreen> {
 
                         const SizedBox(height: 34),
 
-                        // 주차 이동 탭 (최소 4주 이후까지)
+                        // 내 예약: 비어 있을 때만 타이틀 표시
+                        if (userReservations.isEmpty)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 24),
+                            child: Text(
+                              '내 예약',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.textPrimary,
+                              ),
+                            ),
+                          ),
+                        if (userReservations.isEmpty)
+                          const SizedBox(height: 12),
+
+                        // 주차 이동 탭 (예약이 있을 때만)
                         if (userReservations.isNotEmpty) ...[
                           WeekTabBar(
                             selectedIndex: _selectedWeekTab,
@@ -627,7 +638,6 @@ class _MyPageScreenState extends State<MyPageScreen> {
                               setState(() {
                                 _selectedWeekTab = index;
                               });
-                              // 탭 변경 시 해당 주차의 비정기 세션 정보 로드
                               _loadOverridesForWeek(
                                 availableWeekOffsets[index],
                               );
@@ -638,24 +648,57 @@ class _MyPageScreenState extends State<MyPageScreen> {
                           const SizedBox(height: 12),
                         ],
 
-                        // 캘린더 위젯 (일정보기 모드) - 카드 스타일
+                        // 캘린더 위젯 (일정보기 모드) - admin_home_screen과 동일 규칙: 카드 스타일·높이
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 12),
                           child: Container(
                             decoration: BoxDecoration(
                               color: AppColors.backgroundWhite,
                               borderRadius: BorderRadius.circular(16),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.05),
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
                             ),
                             clipBehavior: Clip.antiAlias,
                             child: CompactCalendarWidget(
+                              key: ValueKey('mypage_cal_$selectedWeekOffset'),
                               courses: userCourses,
                               usage:
                                   CompactCalendarUsage
                                       .userWeeklyReservationsView,
                               weekOffset: selectedWeekOffset,
-                              // ✅ 선택된 주차에 예약이 없으면 100px로 축소
+                              onSwipeToPrevWeek:
+                                  availableWeekOffsets.length > 1 &&
+                                          _selectedWeekTab > 0
+                                      ? () {
+                                        setState(() => _selectedWeekTab--);
+                                        _loadOverridesForWeek(
+                                          availableWeekOffsets[_selectedWeekTab],
+                                        );
+                                      }
+                                      : null,
+                              onSwipeToNextWeek:
+                                  availableWeekOffsets.length > 1 &&
+                                          _selectedWeekTab <
+                                              availableWeekOffsets.length - 1
+                                      ? () {
+                                        setState(() => _selectedWeekTab++);
+                                        _loadOverridesForWeek(
+                                          availableWeekOffsets[_selectedWeekTab],
+                                        );
+                                      }
+                                      : null,
+                              // admin_home과 동일: 확장 시 500 / 예약 없음 300 / 해당 주 예약 없음(접힌) 100
                               height:
-                                  hasAnyReservationInSelectedWeek ? 500 : 100,
+                                  userReservations.isEmpty
+                                      ? 300
+                                      : (hasAnyReservationInSelectedWeek
+                                          ? 500
+                                          : 100),
                               onSessionTap: _onSessionTap,
                               hideCourseSelector: true, // 일정보기 모드에서는 드롭다운 숨김
                               weeklyViewMode: true, // 일정보기 모드 활성화
@@ -687,146 +730,10 @@ class _MyPageScreenState extends State<MyPageScreen> {
                         // 수강 중인 코스 섹션
                         _buildEnrolledCoursesSection(),
 
-                        const SizedBox(height: 32),
+                        const SizedBox(height: 24),
 
-                        // 마이프로필 섹션
-                        Builder(
-                          builder: (context) {
-                            final authProvider = Provider.of<AuthProvider>(
-                              context,
-                            );
-                            final user = authProvider.currentUser;
-                            final isLoggedIn = user != null;
-                            final isNotificationEnabled =
-                                user?.notificationsEnabled ?? true;
-
-                            return UserProfileInfoSection(
-                              headerTitle: '마이프로필',
-                              profileName:
-                                  isLoggedIn ? (user.name) : '로그인이 필요합니다',
-                              profilePhoneNumber:
-                                  isLoggedIn
-                                      ? (user.phoneNumber)
-                                      : '로그인하고 모든 기능을 이용하세요',
-                              onProfileTap: () {
-                                if (!isLoggedIn) {
-                                  Navigator.of(
-                                    context,
-                                  ).pushNamed('/phone-number');
-                                  return;
-                                }
-                                // ✅ 로그인된 경우 이름 변경 바텀시트 (Firestore users 반영)
-                                NameEditBottomSheet.show(
-                                  context: context,
-                                  initialName: user.name,
-                                );
-                              },
-                              profileBottomWidget: const PlaceSwitchWidget(
-                                heroTagSuffix: 'my_page_profile',
-                                showExitWhenUnregistered: true,
-                              ),
-                              settingsItems: SettingsItemsBuilder.buildSettingsItems(
-                                context: context,
-                                isNotificationEnabled: isNotificationEnabled,
-                                onNotificationTap: () async {
-                                  final result =
-                                      await NotificationSettingsDialog.show(
-                                        context: context,
-                                        initialValue: isNotificationEnabled,
-                                      );
-                                  if (result == true && context.mounted) {
-                                    // 다이얼로그에서 설정이 변경되었으면 화면 새로고침
-                                    setState(() {});
-                                  }
-                                },
-                                // ✅ 로그인 안 된 경우 로그아웃/회원탈퇴 버튼 숨김
-                                onLogout:
-                                    isLoggedIn
-                                        ? () async {
-                                          await authProvider.logout();
-                                        }
-                                        : null, // null이면 로그아웃 항목이 표시되지 않음
-                                onWithdraw:
-                                    isLoggedIn
-                                        ? () async {
-                                          final authProvider =
-                                              Provider.of<AuthProvider>(
-                                                context,
-                                                listen: false,
-                                              );
-                                          final user = authProvider.currentUser;
-
-                                          if (user == null) {
-                                            SnackbarUtil.showInfo(
-                                              context,
-                                              '사용자 정보를 찾을 수 없습니다.',
-                                            );
-                                            return;
-                                          }
-
-                                          SnackbarUtil.showLoading(
-                                            context,
-                                            '탈퇴중',
-                                          );
-
-                                          try {
-                                            final functions =
-                                                FirebaseFunctions.instance;
-                                            final deleteAccountCallable =
-                                                functions.httpsCallable(
-                                                  'deleteUserAccount',
-                                                );
-
-                                            await deleteAccountCallable.call({
-                                              'userId': user.userId,
-                                            });
-
-                                            await authProvider.logout();
-
-                                            if (context.mounted) {
-                                              SnackbarUtil.showSuccess(
-                                                context,
-                                                '회원탈퇴가 완료되었습니다.',
-                                              );
-                                              Navigator.pushNamedAndRemoveUntil(
-                                                context,
-                                                '/',
-                                                (route) => false,
-                                              );
-                                            }
-                                          } catch (e) {
-                                            if (context.mounted) {
-                                              String message =
-                                                  '회원탈퇴 중 오류가 발생했습니다.';
-                                              if (e
-                                                      is FirebaseFunctionsException &&
-                                                  (e.message ?? '')
-                                                      .trim()
-                                                      .isNotEmpty) {
-                                                message = e.message!.trim();
-                                              } else {
-                                                try {
-                                                  final msg =
-                                                      (e as dynamic).message
-                                                          ?.toString();
-                                                  if (msg != null &&
-                                                      msg.trim().isNotEmpty) {
-                                                    message = msg.trim();
-                                                  }
-                                                } catch (_) {}
-                                              }
-                                              SnackbarUtil.showInfo(
-                                                context,
-                                                message,
-                                              );
-                                            }
-                                          }
-                                        }
-                                        : null, // null이면 회원탈퇴 항목이 표시되지 않음
-                              ),
-                            );
-                          },
-                        ),
+                        // 설정 (위젯 직접 붙임)
+                        const SettingScreen(isAdminMode: false, embedded: true),
 
                         const SizedBox(height: 32),
                       ],
@@ -860,9 +767,11 @@ class _MyPageScreenState extends State<MyPageScreen> {
 
     // 유효기간 내 등록 정보만 표시 (남은 횟수 0이어도 "수강 중"은 유지되어야 함)
     // 일회성(1회석) 등록은 수강 중인 코스 목록에 노출하지 않음 (알 수 없는 코스 + 재등록 필요 방지)
+    // 삭제된 코스의 enrollment는 제외 (firstWhere No element 방지)
     final validEnrollments =
         enrollmentProvider.enrollments
             .where((e) => e.isValid && !e.isOneTime)
+            .where((e) => courses.any((c) => c.id == e.courseId))
             .toList()
           ..sort((a, b) => a.validUntil.compareTo(b.validUntil));
 
@@ -875,7 +784,7 @@ class _MyPageScreenState extends State<MyPageScreen> {
           child: Text(
             '수강 중인 코스',
             style: TextStyle(
-              fontSize: 19,
+              fontSize: 20,
               fontWeight: FontWeight.bold,
               color: AppColors.primaryGreen,
             ),
@@ -887,7 +796,7 @@ class _MyPageScreenState extends State<MyPageScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Container(
               width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 60),
               decoration: BoxDecoration(
                 color: AppColors.backgroundWhite,
                 borderRadius: BorderRadius.circular(20),
@@ -895,7 +804,7 @@ class _MyPageScreenState extends State<MyPageScreen> {
               child: Text(
                 '수강 중인 코스가 없어요',
                 style: TextStyle(
-                  fontSize: 14,
+                  fontSize: 16,
                   fontWeight: FontWeight.w500,
                   color: AppColors.textSecondary.withOpacity(0.7),
                 ),
@@ -908,14 +817,6 @@ class _MyPageScreenState extends State<MyPageScreen> {
             // 코스 정보 찾기 (데이터 정합성 보장)
             final course = courses.firstWhere(
               (c) => c.id == enrollment.courseId,
-              orElse:
-                  () => Course(
-                    id: enrollment.courseId,
-                    name: '알 수 없는 코스',
-                    description: '',
-                    color: 0xFF087044,
-                    sessions: [],
-                  ),
             );
             return _buildEnrolledCourseCard(course, enrollment);
           }).toList(),
@@ -935,7 +836,7 @@ class _MyPageScreenState extends State<MyPageScreen> {
         color: Colors.transparent,
         child: InkWell(
           onTap: () {
-            _showEnrollmentDetailBottomSheet(course, enrollment);
+            _showEnrollmentDetailScreen(course, enrollment);
           },
           borderRadius: BorderRadius.circular(16),
           child: Stack(
@@ -1026,27 +927,23 @@ class _MyPageScreenState extends State<MyPageScreen> {
     );
   }
 
-  // 등록 상세 정보 바텀시트 표시
-  void _showEnrollmentDetailBottomSheet(
-    Course course,
-    CourseEnrollment enrollment,
-  ) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withOpacity(0.7),
-      isDismissible: true,
-      enableDrag: true,
-      useSafeArea: true,
-      builder:
-          (context) => EnrollmentDetailBottomSheet(
-            course: course,
-            enrollment: enrollment,
-            onExtensionRequested: () {
-              setState(() {});
-            },
-          ),
+  void _showEnrollmentDetailScreen(Course course, CourseEnrollment enrollment) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder:
+            (context) => ChangeNotifierProvider<EnrollmentTimelineProvider>(
+              create:
+                  (_) =>
+                      EnrollmentTimelineProvider()..watchTimeline(enrollment),
+              child: EnrollmentDetailScreen(
+                course: course,
+                enrollment: enrollment,
+                onExtensionRequested: () {
+                  if (mounted) setState(() {});
+                },
+              ),
+            ),
+      ),
     );
   }
 }

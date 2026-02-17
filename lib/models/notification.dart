@@ -3,8 +3,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 /// 알림 타입
 enum NotificationType {
   reservation, // 예약 관련
-  story, // 스토리
-  promotion, // 프로모션
   system, // 시스템 알림
 }
 

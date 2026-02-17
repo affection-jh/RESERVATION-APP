@@ -2,12 +2,10 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../models/course_enrollment.dart';
 import '../services/enrollment_service.dart';
-import '../services/firestore_service.dart';
 
 /// 유저의 코스 등록/예약 가능(횟수/유효기간) 상태 Provider
 class EnrollmentProvider with ChangeNotifier {
   final EnrollmentService _enrollmentService = EnrollmentService();
-  final FirestoreService _firestoreService = FirestoreService();
 
   List<CourseEnrollment> _enrollments = [];
   bool _isLoading = false;
@@ -49,13 +47,18 @@ class EnrollmentProvider with ChangeNotifier {
     required String userId,
     String? placeId,
   }) async {
-    // 같은 userId/placeId로 이미 구독 중이면 재구독하지 않음
+    // 같은 userId/placeId로 이미 구독 중이면 재구독하지 않음 (이미 데이터 있음)
     if (_subscription != null &&
         _currentUserId == userId &&
         _currentPlaceId == placeId) {
+      debugPrint(
+        '[EnrollmentProvider] loadUserEnrollments 스킵 (이미 구독 중) '
+        'userId=$userId placeId=$placeId 현재 _enrollments=${_enrollments.length}',
+      );
       return;
     }
 
+    debugPrint('[EnrollmentProvider] loadUserEnrollments 시작 userId=$userId placeId=$placeId');
     await _subscription?.cancel();
     _subscription = null;
     _currentUserId = userId;
@@ -66,26 +69,44 @@ class EnrollmentProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      _subscription = _enrollmentService
-          .watchUserEnrollments(
-            userId,
-            placeId: placeId, // 서버 사이드 필터링
-          )
-          .listen(
-            (items) {
-              // 서버에서 이미 필터링된 enrollments 사용
-              _enrollments = items;
-              _isLoading = false;
-              _error = null;
-              notifyListeners();
-            },
-            onError: (e) {
-              _enrollments = [];
-              _isLoading = false;
-              _error = e.toString();
-              notifyListeners();
-            },
+      final stream = _enrollmentService.watchUserEnrollments(
+        userId,
+        placeId: placeId,
+      );
+      final firstDone = Completer<void>();
+      var emitCount = 0;
+      _subscription = stream.listen(
+        (items) {
+          emitCount++;
+          _enrollments = items;
+          _isLoading = false;
+          _error = null;
+          debugPrint(
+            '[EnrollmentProvider] emit #$emitCount userId=$userId placeId=$placeId '
+            'enrollments=${items.length} (remaining: ${items.map((e) => e.remainingReservations).join(",")})',
           );
+          // 첫 emit에서 바로 완료 (등록 없을 때 빈 리스트 1회만 오면 타임아웃 방지)
+          if (!firstDone.isCompleted) {
+            firstDone.complete();
+            debugPrint('[EnrollmentProvider] firstDone.complete() emitCount=$emitCount');
+          }
+          notifyListeners();
+        },
+        onError: (e) {
+          _enrollments = [];
+          _isLoading = false;
+          _error = e.toString();
+          debugPrint('[EnrollmentProvider] stream onError: $e');
+          if (!firstDone.isCompleted) firstDone.complete();
+          notifyListeners();
+        },
+      );
+      await firstDone.future.timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          if (!firstDone.isCompleted) firstDone.complete();
+        },
+      );
     } catch (e) {
       _enrollments = [];
       _isLoading = false;
@@ -117,7 +138,7 @@ class EnrollmentProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      await _firestoreService.cancelEnrollment(
+      await _enrollmentService.cancelEnrollment(
         placeId: placeId,
         userId: userId,
         courseId: courseId,

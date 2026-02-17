@@ -2,24 +2,31 @@ import 'package:flutter/material.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:provider/provider.dart';
 import '../models/course.dart';
-import '../models/reservation.dart';
+import '../models/session_reservation.dart';
 import '../providers/enrollment_provider.dart';
 import '../theme/app_colors.dart';
+import '../utils/error_message_util.dart';
+import '../utils/navigator_key.dart';
 import '../utils/snackbar_util.dart';
+import '../widgets/common_dialog.dart';
 
-class ReservationBottomSheet extends StatefulWidget {
+class SessionReservationBottomSheet extends StatefulWidget {
   final String activityName;
   final String date;
   final String startTime;
   final String endTime;
   final int availableSeats;
   final int totalSeats;
-  final int remainingReservations;
+  final int remainingSessionReservations;
   final Course? course; // 코스 정보 (유효기간 조회용)
-  final Future<Reservation> Function()? onConfirm;
+  final Future<SessionReservation> Function()? onConfirm;
   final VoidCallback? onCancel;
 
-  const ReservationBottomSheet({
+  /// 관리자 강제 추가: 마감 임박/정원초과 시 force로 재시도 가능
+  final bool canForceAdd;
+  final Future<SessionReservation> Function()? onForceConfirm;
+
+  const SessionReservationBottomSheet({
     super.key,
     required this.activityName,
     required this.date,
@@ -27,13 +34,15 @@ class ReservationBottomSheet extends StatefulWidget {
     required this.endTime,
     required this.availableSeats,
     required this.totalSeats,
-    this.remainingReservations = 0,
+    this.remainingSessionReservations = 0,
     this.course,
     this.onConfirm,
     this.onCancel,
+    this.canForceAdd = false,
+    this.onForceConfirm,
   });
 
-  static Future<Reservation?> show({
+  static Future<SessionReservation?> show({
     required BuildContext context,
     required String activityName,
     required String date,
@@ -41,12 +50,14 @@ class ReservationBottomSheet extends StatefulWidget {
     required String endTime,
     required int availableSeats,
     required int totalSeats,
-    int remainingReservations = 0,
+    int remainingSessionReservations = 0,
     Course? course,
-    Future<Reservation> Function()? onConfirm,
+    Future<SessionReservation> Function()? onConfirm,
     VoidCallback? onCancel,
+    bool canForceAdd = false,
+    Future<SessionReservation> Function()? onForceConfirm,
   }) {
-    return showModalBottomSheet<Reservation?>(
+    return showModalBottomSheet<SessionReservation?>(
       context: context,
       isScrollControlled: true,
       // ✅ 스와이프(내려서 닫기) / 바깥 탭 닫기 지원
@@ -58,59 +69,63 @@ class ReservationBottomSheet extends StatefulWidget {
       barrierColor: Colors.black.withOpacity(0.7),
       useSafeArea: true,
       builder:
-          (context) => ReservationBottomSheet(
+          (context) => SessionReservationBottomSheet(
             activityName: activityName,
             date: date,
             startTime: startTime,
             endTime: endTime,
             availableSeats: availableSeats,
             totalSeats: totalSeats,
-            remainingReservations: remainingReservations,
+            remainingSessionReservations: remainingSessionReservations,
             course: course,
             onConfirm: onConfirm,
             onCancel: onCancel,
+            canForceAdd: canForceAdd,
+            onForceConfirm: onForceConfirm,
           ),
     );
   }
 
   @override
-  State<ReservationBottomSheet> createState() => _ReservationBottomSheetState();
+  State<SessionReservationBottomSheet> createState() =>
+      _SessionReservationBottomSheetState();
 }
 
-class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
+class _SessionReservationBottomSheetState
+    extends State<SessionReservationBottomSheet> {
   bool _isSubmitting = false;
 
   Future<void> _handleConfirm() async {
     if (_isSubmitting) {
-      debugPrint('[ReservationBottomSheet] 이미 예약 처리 중입니다.');
+      debugPrint('[SessionReservationBottomSheet] 이미 예약 처리 중입니다.');
       return;
     }
-    if (widget.remainingReservations <= 0) {
+    if (widget.remainingSessionReservations <= 0) {
       debugPrint(
-        '[ReservationBottomSheet] 남은 횟수가 없습니다: ${widget.remainingReservations}',
+        '[SessionReservationBottomSheet] 남은 횟수가 없습니다: ${widget.remainingSessionReservations}',
       );
       return;
     }
     if (widget.onConfirm == null) {
-      debugPrint('[ReservationBottomSheet] onConfirm 콜백이 없습니다.');
+      debugPrint('[SessionReservationBottomSheet] onConfirm 콜백이 없습니다.');
       return;
     }
 
-    debugPrint('[ReservationBottomSheet] 예약 시작');
-    debugPrint('[ReservationBottomSheet] 활동명: ${widget.activityName}');
-    debugPrint('[ReservationBottomSheet] 날짜: ${widget.date}');
+    debugPrint('[SessionReservationBottomSheet] 예약 시작');
+    debugPrint('[SessionReservationBottomSheet] 활동명: ${widget.activityName}');
+    debugPrint('[SessionReservationBottomSheet] 날짜: ${widget.date}');
     debugPrint(
-      '[ReservationBottomSheet] 시간: ${widget.startTime} - ${widget.endTime}',
+      '[SessionReservationBottomSheet] 시간: ${widget.startTime} - ${widget.endTime}',
     );
     debugPrint(
-      '[ReservationBottomSheet] 남은 자리: ${widget.availableSeats} / ${widget.totalSeats}',
+      '[SessionReservationBottomSheet] 남은 자리: ${widget.availableSeats} / ${widget.totalSeats}',
     );
     debugPrint(
-      '[ReservationBottomSheet] 내 남은 횟수: ${widget.remainingReservations}',
+      '[SessionReservationBottomSheet] 내 남은 횟수: ${widget.remainingSessionReservations}',
     );
     if (widget.course != null) {
-      debugPrint('[ReservationBottomSheet] 코스 ID: ${widget.course!.id}');
-      debugPrint('[ReservationBottomSheet] 코스명: ${widget.course!.name}');
+      debugPrint('[SessionReservationBottomSheet] 코스 ID: ${widget.course!.id}');
+      debugPrint('[SessionReservationBottomSheet] 코스명: ${widget.course!.name}');
     }
 
     setState(() {
@@ -118,38 +133,86 @@ class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
     });
 
     try {
-      debugPrint('[ReservationBottomSheet] onConfirm 콜백 호출 시작');
+      debugPrint('[SessionReservationBottomSheet] onConfirm 콜백 호출 시작');
       final created = await widget.onConfirm!.call();
-      debugPrint('[ReservationBottomSheet] 예약 생성 성공: ${created.id}');
+      debugPrint('[SessionReservationBottomSheet] 예약 생성 성공: ${created.id}');
       if (!mounted) {
-        debugPrint('[ReservationBottomSheet] 위젯이 unmount되었습니다.');
+        debugPrint('[SessionReservationBottomSheet] 위젯이 unmount되었습니다.');
         return;
       }
-      Navigator.of(context).pop<Reservation>(created);
+      Navigator.of(context).pop<SessionReservation>(created);
     } catch (e, stackTrace) {
-      debugPrint('[ReservationBottomSheet] 예약 생성 실패');
-      debugPrint('[ReservationBottomSheet] 에러 타입: ${e.runtimeType}');
-      debugPrint('[ReservationBottomSheet] 에러 메시지: $e');
-      debugPrint('[ReservationBottomSheet] 스택 트레이스: $stackTrace');
+      debugPrint('[SessionReservationBottomSheet] 예약 생성 실패');
+      debugPrint('[SessionReservationBottomSheet] 에러 타입: ${e.runtimeType}');
+      debugPrint('[SessionReservationBottomSheet] 에러 메시지: $e');
+      debugPrint('[SessionReservationBottomSheet] 스택 트레이스: $stackTrace');
+
+      final errorMessage = _getErrorMessage(e);
       if (!mounted) {
-        debugPrint('[ReservationBottomSheet] 위젯이 unmount되었습니다 (에러 후).');
+        final safeCtx = navigatorKey.currentContext;
+        if (safeCtx != null) {
+          SnackbarUtil.showInfo(safeCtx, errorMessage);
+        }
+        debugPrint('[SessionReservationBottomSheet] 위젯이 unmount되었습니다 (에러 후).');
         return;
       }
       setState(() {
         _isSubmitting = false;
       });
-      // 애플 스타일의 에러 메시지 표시
-      final errorMessage = _getErrorMessage(e);
-      debugPrint('[ReservationBottomSheet] 사용자에게 표시할 에러 메시지: $errorMessage');
+      final isForceable =
+          widget.canForceAdd &&
+          widget.onForceConfirm != null &&
+          _isForceableError(e, errorMessage);
+
+      if (isForceable) {
+        final confirmed = await CommonDialog.show(
+          context: context,
+          title: '관리자 강제 추가',
+          message:
+              '예약이 마감되었습니다.\n'
+              '관리자 권한으로 강제 추가하시겠습니까?',
+          cancelText: '취소',
+          confirmText: '강제 추가',
+        );
+        if (confirmed == true && mounted && widget.onForceConfirm != null) {
+          setState(() {
+            _isSubmitting = true;
+          });
+          try {
+            final created = await widget.onForceConfirm!();
+            if (!mounted) return;
+            Navigator.of(context).pop<SessionReservation>(created);
+          } catch (e2) {
+            if (!mounted) return;
+            setState(() {
+              _isSubmitting = false;
+            });
+            SnackbarUtil.showInfo(context, _getErrorMessage(e2));
+          }
+          return;
+        }
+      }
+
       SnackbarUtil.showInfo(context, errorMessage);
     }
+  }
+
+  bool _isForceableError(dynamic error, String message) {
+    if (error is FirebaseFunctionsException &&
+        (error.code == 'failed-precondition' ||
+            error.code == 'resource-exhausted')) {
+      return message.contains('세션 시작') ||
+          message.contains('예약 가능한 인원이 없습니다') ||
+          message.contains('아직 예약 오픈 전');
+    }
+    return false;
   }
 
   String _getErrorMessage(dynamic error) {
     // Firebase Functions 예외는 code로 1차 분기 (가장 정확함)
     if (error is FirebaseFunctionsException) {
       final code = error.code.toLowerCase();
-      // 서버(createReservation)에서 이미 예약된 세션이면 already-exists로 내려옴
+      // 서버(createSessionReservation)에서 이미 예약된 세션이면 already-exists로 내려옴
       if (code == 'already-exists') {
         return '이미 예약된 세션입니다';
       }
@@ -157,37 +220,17 @@ class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
         return '예약 권한이 없습니다';
       }
       if (code == 'failed-precondition') {
-        // 서버에서 정책/마감/크레딧 등의 사유로 막는 경우가 많음
-        // message를 그대로 노출하면 가장 빠르게 원인 파악 가능
         final msg = (error.message ?? '').trim();
-        if (msg.isNotEmpty) return msg;
+        if (msg.isNotEmpty) return ErrorMessageUtil.toUserFriendlyMessage(msg);
       }
-      // 기타: message가 있으면 그대로 사용 (디버깅에 도움)
       final msg = (error.message ?? '').trim();
-      if (msg.isNotEmpty) return msg;
+      if (msg.isNotEmpty) return ErrorMessageUtil.toUserFriendlyMessage(msg);
     }
 
-    final errorString = error.toString().toLowerCase();
-    if (errorString.contains('network') || errorString.contains('connection')) {
-      return '네트워크 연결을 확인해주세요';
-    }
-    if (errorString.contains('timeout')) {
-      return '요청 시간이 초과되었습니다';
-    }
-    if (errorString.contains('already-exists') ||
-        errorString.contains('이미 예약된 세션')) {
-      return '이미 예약된 세션입니다';
-    }
-    if (errorString.contains('permission') || errorString.contains('권한')) {
-      return '예약 권한이 없습니다';
-    }
-    if (errorString.contains('full') || errorString.contains('자리')) {
-      return '예약 가능한 자리가 없습니다';
-    }
-    if (errorString.contains('expired') || errorString.contains('만료')) {
-      return '예약 가능한 횟수가 없습니다';
-    }
-    return '예약 중 오류가 발생했습니다';
+    final friendly = ErrorMessageUtil.toUserFriendlyMessage(error.toString());
+    return friendly == '오류가 발생했습니다. 잠시 후 다시 시도해주세요.'
+        ? '예약 중 오류가 발생했습니다'
+        : friendly;
   }
 
   @override
@@ -233,7 +276,7 @@ class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       // 예약 상세 정보
-                      _buildReservationDetails(context),
+                      _buildSessionReservationDetails(context),
 
                       const SizedBox(height: 32),
 
@@ -272,7 +315,7 @@ class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
   }
 
   // 예약 상세 정보 위젯
-  Widget _buildReservationDetails(BuildContext context) {
+  Widget _buildSessionReservationDetails(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -389,7 +432,7 @@ class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
       return const SizedBox.shrink();
     }
 
-    final actualRemainingReservations = enrollment.remainingReservations;
+    final actualRemainingSessionReservations = enrollment.remainingReservations;
 
     // 유효기간 포맷팅
     String formatDate(DateTime date) {
@@ -397,10 +440,9 @@ class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
     }
 
     // 예약 후 남은 횟수 계산
-    final afterReservationCount = (actualRemainingReservations - 1).clamp(
-      0,
-      actualRemainingReservations,
-    );
+    final afterSessionReservationCount = (actualRemainingSessionReservations -
+            1)
+        .clamp(0, actualRemainingSessionReservations);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -416,7 +458,7 @@ class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
           textBaseline: TextBaseline.alphabetic,
           children: [
             Text(
-              '$actualRemainingReservations회',
+              '$actualRemainingSessionReservations회',
               style: TextStyle(
                 fontSize: 44,
                 fontWeight: FontWeight.bold,
@@ -424,7 +466,7 @@ class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
                 letterSpacing: -1,
               ),
             ),
-            if (actualRemainingReservations > 0) ...[
+            if (actualRemainingSessionReservations > 0) ...[
               const SizedBox(width: 12),
               Icon(
                 Icons.arrow_forward_ios,
@@ -433,7 +475,7 @@ class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
               ),
               const SizedBox(width: 4),
               Text(
-                '${afterReservationCount}회',
+                '${afterSessionReservationCount}회',
                 style: TextStyle(
                   fontSize: 24,
                   fontWeight: FontWeight.w600,
@@ -506,7 +548,8 @@ class _ReservationBottomSheetState extends State<ReservationBottomSheet> {
 
   // 액션 버튼 위젯
   Widget _buildActionButtons(BuildContext context) {
-    final canReserve = widget.remainingReservations > 0 && !_isSubmitting;
+    final canReserve =
+        widget.remainingSessionReservations > 0 && !_isSubmitting;
 
     return Row(
       children: [

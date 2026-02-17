@@ -1,77 +1,34 @@
 import * as admin from 'firebase-admin';
 
 type Tx = FirebaseFirestore.Transaction;
+const COLLECTION = 'reservationSummary';
 
-export function sessionIdOf(courseId: string, dayOfWeek: number, startTime: string): string {
-    return `${courseId}_${dayOfWeek}_${startTime}`;
-}
-
-export function sessionReservationDocId(sessionId: string, dateString: string): string {
+function docId(sessionId: string, dateString: string): string {
     return `${sessionId}_${dateString}`;
 }
 
-export async function decrementSessionReservedCountIfExists(
-    tx: Tx,
-    db: FirebaseFirestore.Firestore,
-    courseId: string,
-    dayOfWeek: number,
-    startTime: string,
-    reservedDateString: string,
-): Promise<void> {
-    try {
-        const sid = sessionIdOf(courseId, dayOfWeek, startTime);
-        const srRef = db.collection('sessionReservations').doc(sessionReservationDocId(sid, reservedDateString));
-        const srDoc = await tx.get(srRef);
-        if (!srDoc.exists) {
-            console.log(`[decrementSessionReservedCount] SessionReservation not found. sessionId=${sid}, date=${reservedDateString}`);
-            return;
-        }
-        const current = Number((srDoc.data() as any)?.reservedCount ?? 0);
-        const newCount = Math.max(0, current - 1);
-        console.log(`[decrementSessionReservedCount] Decrementing. sessionId=${sid}, date=${reservedDateString}, count=${current} -> ${newCount}`);
-        tx.update(srRef, {
-            reservedCount: newCount,
-            lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
-        });
-    } catch (error) {
-        console.error(`[decrementSessionReservedCount] Error:`, error);
-        throw error; // 트랜잭션 내부에서 발생한 에러는 그대로 throw하여 트랜잭션 실패 처리
-    }
-}
-
-export async function incrementSessionReservedCountUpsert(
+/** 예약 생성 시: reservedCount +1 (없으면 생성). 트랜잭션 규칙 준수: readsBeforeWrites가 있으면 get 생략(호출 측에서 쓰기 전에 읽어 둔 스냅샷 전달) */
+export async function incrementReservedCount(
     tx: Tx,
     db: FirebaseFirestore.Firestore,
     params: {
         sessionId: string;
-        srRef: FirebaseFirestore.DocumentReference;
-        srDoc: FirebaseFirestore.DocumentSnapshot;
         courseId: string;
         placeId: string;
         dayOfWeek: number;
         startTime: string;
         reservedDateString: string;
         capacity: number;
-        currentReservedCount: number;
     },
+    readsBeforeWrites?: FirebaseFirestore.DocumentSnapshot,
 ): Promise<void> {
-    const {
-        sessionId,
-        srRef,
-        srDoc,
-        courseId,
-        placeId,
-        dayOfWeek,
-        startTime,
-        reservedDateString,
-        capacity,
-        currentReservedCount,
-    } = params;
+    const { sessionId, courseId, placeId, dayOfWeek, startTime, reservedDateString, capacity } = params;
+    const ref = db.collection(COLLECTION).doc(docId(sessionId, reservedDateString));
+    const snap: FirebaseFirestore.DocumentSnapshot = readsBeforeWrites ?? await tx.get(ref);
 
-    const srDocId = sessionReservationDocId(sessionId, reservedDateString);
-    if (!srDoc.exists) {
-        tx.set(srRef, {
-            id: srDocId,
+    if (!snap.exists) {
+        tx.set(ref, {
+            id: docId(sessionId, reservedDateString),
             sessionId,
             courseId,
             placeId,
@@ -84,46 +41,140 @@ export async function incrementSessionReservedCountUpsert(
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
         });
     } else {
-        tx.update(srRef, {
-            reservedCount: currentReservedCount + 1,
+        tx.update(ref, {
+            reservedCount: admin.firestore.FieldValue.increment(1),
             lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
         });
     }
 }
 
-export async function restoreEnrollmentCreditsForCancelledReservations(
+/** 배치 예약 생성 시: reservedCount +delta (한 번에 N명 반영). readsBeforeWrites 있으면 get 생략 */
+export async function incrementReservedCountBy(
     tx: Tx,
     db: FirebaseFirestore.Firestore,
-    userId: string,
-    courseId: string,
-    count: number,
+    params: {
+        sessionId: string;
+        courseId: string;
+        placeId: string;
+        dayOfWeek: number;
+        startTime: string;
+        reservedDateString: string;
+        capacity: number;
+    },
+    delta: number,
+    readsBeforeWrites?: FirebaseFirestore.DocumentSnapshot,
 ): Promise<void> {
-    if (count <= 0) {
-        console.log(`[restoreEnrollmentCredits] count <= 0, skipping. userId=${userId}, courseId=${courseId}, count=${count}`);
-        return;
-    }
-    try {
-        const enrollmentQuery = db
-            .collection('enrollments')
-            .where('userId', '==', userId)
-            .where('courseId', '==', courseId)
-            .limit(1);
-        const enrollmentSnap = await tx.get(enrollmentQuery as any);
-        if (enrollmentSnap.empty) {
-            console.warn(`[restoreEnrollmentCredits] Enrollment not found. userId=${userId}, courseId=${courseId}`);
-            return;
-        }
-        const enrollmentDoc = enrollmentSnap.docs[0];
-        const enrollmentData = enrollmentDoc.data() as any;
-        const remaining = Number((enrollmentData?.remainingReservations ?? 0) as any);
-        const total = Number((enrollmentData?.totalReservations ?? 0) as any);
-        const newRemaining = Math.min(total, remaining + count);
-        console.log(`[restoreEnrollmentCredits] Restoring credits. userId=${userId}, courseId=${courseId}, remaining=${remaining} -> ${newRemaining}, total=${total}, count=${count}`);
-        tx.update(enrollmentDoc.ref, { remainingReservations: newRemaining });
-    } catch (error) {
-        console.error(`[restoreEnrollmentCredits] Error:`, error);
-        throw error; // 트랜잭션 내부에서 발생한 에러는 그대로 throw하여 트랜잭션 실패 처리
+    if (delta <= 0) return;
+    const { sessionId, courseId, placeId, dayOfWeek, startTime, reservedDateString, capacity } = params;
+    const ref = db.collection(COLLECTION).doc(docId(sessionId, reservedDateString));
+    const snap: FirebaseFirestore.DocumentSnapshot = readsBeforeWrites ?? await tx.get(ref);
+
+    if (!snap.exists) {
+        tx.set(ref, {
+            id: docId(sessionId, reservedDateString),
+            sessionId,
+            courseId,
+            placeId,
+            dayOfWeek,
+            startTime,
+            date: reservedDateString,
+            capacity,
+            reservedCount: delta,
+            lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+    } else {
+        tx.update(ref, {
+            reservedCount: admin.firestore.FieldValue.increment(delta),
+            lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+        });
     }
 }
 
+/** 배치 예약 이동/취소 시: reservedCount -delta (0 이하면 문서 삭제). readsBeforeWrites 있으면 get 생략 */
+export async function decrementReservedCountBy(
+    tx: Tx,
+    db: FirebaseFirestore.Firestore,
+    params: {
+        sessionId: string;
+        reservedDateString: string;
+    },
+    delta: number,
+    readsBeforeWrites?: FirebaseFirestore.DocumentSnapshot,
+): Promise<void> {
+    if (delta <= 0) return;
+    const { sessionId, reservedDateString } = params;
+    const ref = db.collection(COLLECTION).doc(docId(sessionId, reservedDateString));
+    const snap: FirebaseFirestore.DocumentSnapshot = readsBeforeWrites ?? await tx.get(ref);
 
+    if (!snap.exists) return;
+    const data = snap.data() as any;
+    const current = Number(data?.reservedCount ?? 0);
+    if (current <= delta) {
+        tx.delete(ref);
+    } else {
+        tx.update(ref, {
+            reservedCount: admin.firestore.FieldValue.increment(-delta),
+            lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+        });
+    }
+}
+
+/** 예약 취소/삭제 시: reservedCount -1 (0이면 문서 삭제). readsBeforeWrites 있으면 get 생략 */
+export async function decrementReservedCount(
+    tx: Tx,
+    db: FirebaseFirestore.Firestore,
+    params: {
+        sessionId: string;
+        reservedDateString: string;
+    },
+    readsBeforeWrites?: FirebaseFirestore.DocumentSnapshot,
+): Promise<void> {
+    const { sessionId, reservedDateString } = params;
+    const ref = db.collection(COLLECTION).doc(docId(sessionId, reservedDateString));
+    const snap: FirebaseFirestore.DocumentSnapshot = readsBeforeWrites ?? await tx.get(ref);
+
+    if (!snap.exists) {
+        // 이미 없으면 무시 (데이터 정합성 방어)
+        return;
+    }
+    const data = snap.data() as any;
+    const current = Number(data?.reservedCount ?? 0);
+    if (current <= 1) {
+        tx.delete(ref);
+    } else {
+        tx.update(ref, {
+            reservedCount: admin.firestore.FieldValue.increment(-1),
+            lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+        });
+    }
+}
+
+/** 코스 삭제 시: 해당 courseId의 reservationSummary 문서 일괄 삭제 */
+export async function deleteSummariesForCourse(
+    db: FirebaseFirestore.Firestore,
+    placeId: string,
+    courseId: string,
+    batchSize = 400,
+): Promise<number> {
+    const q = db.collection(COLLECTION).where('placeId', '==', placeId).where('courseId', '==', courseId);
+    return deleteByQuery(db, q, batchSize);
+}
+
+async function deleteByQuery(
+    db: FirebaseFirestore.Firestore,
+    query: FirebaseFirestore.Query,
+    batchSize: number,
+): Promise<number> {
+    let deleted = 0;
+    while (true) {
+        const snap = await query.limit(batchSize).get();
+        if (snap.empty) break;
+        const batch = db.batch();
+        snap.docs.forEach((d) => batch.delete(d.ref));
+        await batch.commit();
+        deleted += snap.size;
+        if (snap.size < batchSize) break;
+    }
+    return deleted;
+}

@@ -1,8 +1,8 @@
-import '../models/reservation.dart';
+import '../models/session_reservation.dart';
 import 'timezone_utils.dart';
 
 /// 예약 관련 유틸리티 함수들
-class ReservationUtils {
+class SessionReservationUtils {
   // 시간 문자열을 분 단위로 변환
   static int parseTimeToMinutes(String time) {
     final parts = time.split(':');
@@ -17,7 +17,7 @@ class ReservationUtils {
   /// - 과거 날짜: 취소 불가
   /// - 오늘 날짜: 세션 시작 1시간 전까지 취소 가능
   /// - 미래 날짜: 취소 가능
-  static bool isCancellationAvailable(Reservation reservation) {
+  static bool isCancellationAvailable(SessionReservation reservation) {
     final now = TimezoneUtils.getSeoulDateTime();
     final today = DateTime(now.year, now.month, now.day);
     final reservationDate = DateTime(
@@ -61,7 +61,7 @@ class ReservationUtils {
   /// - 과거 날짜: 예약 불가
   /// - 오늘 날짜: 세션 시작 1시간 전까지 예약 가능
   /// - 미래 날짜: 예약 가능 (자리가 있으면)
-  static bool isReservationAvailable({
+  static bool isSessionReservationAvailable({
     required int dayOfWeek,
     required String startTime,
     required DateTime date,

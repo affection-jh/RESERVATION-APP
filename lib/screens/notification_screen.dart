@@ -12,9 +12,6 @@ import '../providers/course_provider.dart';
 import '../providers/enrollment_provider.dart';
 import '../providers/place_provider.dart';
 import '../screens/admin/widgets/enrollment_detail_screen.dart';
-import '../models/admin_models.dart';
-import '../screens/story/story_detail_screen.dart';
-import '../providers/story_provider.dart';
 import '../widgets/common_dialog.dart';
 
 /// 알림 스크린
@@ -46,7 +43,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
       listen: false,
     );
     final user = authProvider.currentUser;
-    final admin = authProvider.currentAdmin;
+    final admin = authProvider.currentManagerUser;
     final currentPlace = placeProvider.currentPlace;
 
     if (user != null || admin != null) {
@@ -57,6 +54,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
         userId,
         isAdmin: isAdmin,
         placeId: placeId,
+        forceRefresh: true,
       );
     }
   }
@@ -67,174 +65,80 @@ class _NotificationScreenState extends State<NotificationScreen> {
     super.dispose();
   }
 
+  /// 알림 타입 의미: reservation=예약 완료/취소/변경, system=연장 요청·새 수업 일정 등
   Future<void> _handleNotificationTap(
     AppNotification notification,
     NotificationProvider provider,
   ) async {
-    // 읽지 않은 알림이면 읽음 처리
-    if (!notification.isRead) {
-      provider.markAsRead(notification.id);
-    }
+    if (!notification.isRead) provider.markAsRead(notification.id);
 
-    // 알림 데이터 확인
     final data = notification.data;
     if (data == null) return;
 
-    // 연장 요청 알림인지 확인 (enrollmentId, userId, courseId, placeId가 모두 있는 경우)
     final enrollmentId = data['enrollmentId'] as String?;
     final userId = data['userId'] as String?;
     final courseId = data['courseId'] as String?;
     final placeId = data['placeId'] as String?;
-    final reservationId = data['reservationId'] as String?;
+    final dateStr =
+        data['date'] as String? ?? data['reservedDateString'] as String?;
+    final dayOfWeek = _parseInt(data['dayOfWeek']);
+    final startTime = data['startTime'] as String?;
 
-    // 알림 타입별 처리
     switch (notification.type) {
       case NotificationType.system:
-        // 연장 요청 알림인 경우 enrollment 상세 화면으로 이동
         if (enrollmentId != null &&
             userId != null &&
             courseId != null &&
             placeId != null) {
-          try {
-            final initialTabIndex = 1;
-            await _navigateToEnrollmentDetail(
-              enrollmentId: enrollmentId,
-              userId: userId,
-              courseId: courseId,
-              placeId: placeId,
-              initialTabIndex: initialTabIndex,
-            );
-          } catch (e) {
-            debugPrint('[NotificationScreen] enrollment 상세 화면 이동 오류: $e');
-          }
+          await _navigateToEnrollmentDetail(
+            enrollmentId: enrollmentId,
+            userId: userId,
+            courseId: courseId,
+            placeId: placeId,
+            initialTabIndex: 1,
+          ).catchError(
+            (e) => debugPrint('[NotificationScreen] enrollment 이동 오류: $e'),
+          );
         } else if (courseId != null && placeId != null) {
-          // 새 수업 일정 알림 → 예약 화면으로 이동 + 해당 주차·세션 표시
-          try {
-            final dateStr = data['date'] as String?;
-            final dayOfWeekRaw = data['dayOfWeek'];
-            final dayOfWeek = dayOfWeekRaw is int
-                ? dayOfWeekRaw
-                : (dayOfWeekRaw != null ? int.tryParse('$dayOfWeekRaw') : null);
-            final startTime = data['startTime'] as String?;
-            await _navigateToReservationWithHighlight(
-              courseId: courseId,
-              placeId: placeId,
-              date: dateStr,
-              dayOfWeek: dayOfWeek,
-              startTime: startTime,
-            );
-          } catch (e) {
-            debugPrint(
-                '[NotificationScreen] 예약 화면(새 수업 일정) 이동 오류: $e');
-          }
+          await _navigateToReservationWithHighlight(
+            courseId: courseId,
+            placeId: placeId,
+            date: dateStr,
+            dayOfWeek: dayOfWeek,
+            startTime: startTime,
+          );
         }
         break;
-
-      case NotificationType.story:
-        // 스토리 알림인 경우 스토리 상세 화면으로 이동
-        final storyId = data['storyId'] as String?;
-        final storyPlaceId = data['placeId'] as String?;
-        if (storyId != null && storyPlaceId != null) {
-          try {
-            await _navigateToStoryDetail(
-              storyId: storyId,
-              placeId: storyPlaceId,
-            );
-          } catch (e) {
-            debugPrint('[NotificationScreen] 스토리 상세 화면 이동 오류: $e');
-          }
-        }
-        break;
-
-      case NotificationType.promotion:
-        // 프로모션 알림인 경우 홈 화면으로 이동
-        final promotionPlaceId = data['placeId'] as String?;
-        if (promotionPlaceId != null) {
-          try {
-            await _navigateToHome();
-          } catch (e) {
-            debugPrint('[NotificationScreen] 홈 화면 이동 오류: $e');
-          }
-        }
-        break;
-
       case NotificationType.reservation:
-        // 예약 취소 알림은 탭해도 화면 이동 없음. 예약 완료/변경만 마이페이지로 이동
         if (notification.title.contains('취소')) break;
-
-        // 예약 완료/변경 알림 → 마이페이지(예약 목록)로 이동 + 해당 주차 설정
-        if (courseId != null || placeId != null || reservationId != null) {
-          try {
-            final dateStr =
-                data['date'] as String? ?? data['reservedDateString'] as String?;
-            DateTime? reservedDate;
-            if (dateStr != null && dateStr.isNotEmpty) {
-              reservedDate = DateTime.tryParse(dateStr);
-            }
-            final dayOfWeekRaw = data['dayOfWeek'];
-            final dayOfWeek = dayOfWeekRaw is int
-                ? dayOfWeekRaw
-                : (dayOfWeekRaw != null ? int.tryParse('$dayOfWeekRaw') : null);
-            final startTime = data['startTime'] as String?;
-
-            Map<String, dynamic>? highlightReservation;
-            if (reservedDate != null) {
-              highlightReservation = {
-                'reservedDate': reservedDate,
-                'courseId': courseId,
-                'dayOfWeek': dayOfWeek,
-                'startTime': startTime,
-                'shouldShowBottomSheet': false,
-              };
-            }
-            await _navigateToMyPage(highlightReservation: highlightReservation);
-          } catch (e) {
-            debugPrint('[NotificationScreen] 마이페이지 이동 오류: $e');
-          }
-        }
+        if (courseId == null &&
+            placeId == null &&
+            data['reservationId'] == null)
+          break;
+        final reservedDate =
+            dateStr != null && dateStr.isNotEmpty
+                ? DateTime.tryParse(dateStr)
+                : null;
+        await _navigateToMyPage(
+          highlightReservation:
+              reservedDate != null
+                  ? {
+                    'reservedDate': reservedDate,
+                    'courseId': courseId,
+                    'dayOfWeek': dayOfWeek,
+                    'startTime': startTime,
+                    'shouldShowBottomSheet': false,
+                  }
+                  : null,
+        );
         break;
     }
   }
 
-  /// 스토리 상세 화면으로 이동
-  Future<void> _navigateToStoryDetail({
-    required String storyId,
-    required String placeId,
-  }) async {
-    try {
-      final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
-      final storyProvider = Provider.of<StoryProvider>(context, listen: false);
-
-      // 현재 플레이스 확인
-      final currentPlace = placeProvider.currentPlace;
-      if (currentPlace?.id != placeId) {
-        debugPrint(
-          '[NotificationScreen] 플레이스 불일치: current=${currentPlace?.id}, required=$placeId',
-        );
-        return;
-      }
-
-      // 스토리 목록 로드
-      await storyProvider.loadStories(placeId);
-      final story = storyProvider.stories.firstWhere(
-        (s) => s.id == storyId,
-        orElse: () => throw Exception('Story not found'),
-      );
-
-      // StoryDetailScreen으로 이동
-      if (mounted) {
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder:
-                (context) =>
-                    StoryDetailScreen(story: story, place: currentPlace),
-          ),
-        );
-      }
-    } catch (e) {
-      debugPrint('[NotificationScreen] 스토리 상세 화면 이동 오류: $e');
-      rethrow;
-    }
+  static int? _parseInt(dynamic v) {
+    if (v == null) return null;
+    if (v is int) return v;
+    return int.tryParse('$v');
   }
 
   /// 예약 화면으로 이동 + 해당 주차·세션 강조 (새 수업 일정 알림용)
@@ -273,19 +177,9 @@ class _NotificationScreenState extends State<NotificationScreen> {
         (route) => false,
         arguments: {
           'initialIndex': 2, // 마이페이지 탭
-          if (highlightReservation != null) 'highlightReservation': highlightReservation,
+          if (highlightReservation != null)
+            'highlightReservation': highlightReservation,
         },
-      );
-    }
-  }
-
-  /// 홈 화면으로 이동
-  Future<void> _navigateToHome() async {
-    if (mounted) {
-      Navigator.of(context).pushNamedAndRemoveUntil(
-        '/main',
-        (route) => false,
-        arguments: {'initialIndex': 0}, // 홈 탭
       );
     }
   }
@@ -324,8 +218,8 @@ class _NotificationScreenState extends State<NotificationScreen> {
       }
 
       // 멤버 조회
-      await memberProvider.loadMembers(placeId);
-      final member = memberProvider.getMember(userId);
+      memberProvider.setPlaceId(placeId);
+      final member = memberProvider.getMemberView(userId);
       if (member == null) {
         debugPrint('[NotificationScreen] 멤버를 찾을 수 없습니다: $userId');
         return;
@@ -348,24 +242,13 @@ class _NotificationScreenState extends State<NotificationScreen> {
         orElse: () => throw Exception('Enrollment not found'),
       );
 
-      // MemberData 생성
-      final memberData = MemberData(
-        userId: member.userId,
-        name: member.name,
-        phoneNumber: member.phoneNumber,
-        role: 'user', // 관리자 여부는 adminUsers 등 별도 소스에서 조회
-        isActive: true,
-        pendingExtensionRequests: member.pendingExtensionRequests.length,
-        enrolledCourseIds: member.enrollments.map((e) => e.courseId).toList(),
-      );
-
       // EnrollmentDetailScreen으로 이동 (연장 탭으로)
       if (mounted) {
         await Navigator.of(context).push(
           MaterialPageRoute(
             builder:
                 (context) => EnrollmentDetailScreen(
-                  member: memberData,
+                  member: member,
                   enrollment: enrollment,
                   course: course,
                 ),
@@ -494,97 +377,58 @@ class _NotificationScreenState extends State<NotificationScreen> {
     String? error,
     NotificationProvider provider,
   ) {
-    // Provider에서 이미 플레이스와 역할로 필터링되었으므로 중복 필터링 제거
-    final filteredNotifications = notifications;
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final hasUser = authProvider.currentUser != null;
 
-    if (isLoading && filteredNotifications.isEmpty) {
-      return _buildShimmerLoading();
-    }
-
-    // 오류가 발생해도 자세한 오류 메시지는 표시하지 않고 빈 화면으로 처리
-    if (filteredNotifications.isEmpty || authProvider.currentUser == null) {
+    if (isLoading && notifications.isEmpty) return _buildShimmerLoading();
+    if (notifications.isEmpty || !hasUser) {
       return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              '알림이 없습니다',
-              style: TextStyle(
-                fontSize: 16,
-                color: AppColors.textSecondary.withOpacity(0.6),
-              ),
-            ),
-          ],
+        child: Text(
+          '알림이 없습니다',
+          style: TextStyle(
+            fontSize: 16,
+            color: AppColors.textSecondary.withOpacity(0.6),
+          ),
         ),
       );
     }
 
-    // 날짜별로 그룹화 (동적)
     final todayStart = TimezoneUtils.getSeoulToday();
     final weekStart = todayStart.subtract(const Duration(days: 7));
     final monthStart = todayStart.subtract(const Duration(days: 30));
 
-    // 오늘 알림
-    final todayNotifications =
-        filteredNotifications
-            .where((n) => n.createdAt.isAfter(todayStart))
-            .toList();
-
-    // 이번 주 알림 (오늘 제외)
-    final weekNotifications =
-        filteredNotifications
-            .where(
-              (n) =>
-                  n.createdAt.isAfter(weekStart) &&
-                  !n.createdAt.isAfter(todayStart),
-            )
-            .toList();
-
-    // 이번 달 알림 (이번 주 제외)
-    final monthNotifications =
-        filteredNotifications
-            .where(
-              (n) =>
-                  n.createdAt.isAfter(monthStart) &&
-                  !n.createdAt.isAfter(weekStart),
-            )
-            .toList();
-
-    // 그 이전 알림
-    final earlierNotifications =
-        filteredNotifications
-            .where((n) => !n.createdAt.isAfter(monthStart))
-            .toList();
+    final sections = <String, List<AppNotification>>{
+      '오늘':
+          notifications.where((n) => n.createdAt.isAfter(todayStart)).toList(),
+      '이번 주':
+          notifications
+              .where(
+                (n) =>
+                    n.createdAt.isAfter(weekStart) &&
+                    !n.createdAt.isAfter(todayStart),
+              )
+              .toList(),
+      '최근 30일':
+          notifications
+              .where(
+                (n) =>
+                    n.createdAt.isAfter(monthStart) &&
+                    !n.createdAt.isAfter(weekStart),
+              )
+              .toList(),
+      '그 이전':
+          notifications.where((n) => !n.createdAt.isAfter(monthStart)).toList(),
+    };
 
     return ListView(
       controller: _scrollController,
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
-        if (todayNotifications.isNotEmpty) ...[
-          _buildSectionHeader('오늘'),
-          ...todayNotifications.map(
-            (notification) => _buildNotificationItem(notification, provider),
-          ),
-        ],
-        if (weekNotifications.isNotEmpty) ...[
-          _buildSectionHeader('이번 주'),
-          ...weekNotifications.map(
-            (notification) => _buildNotificationItem(notification, provider),
-          ),
-        ],
-        if (monthNotifications.isNotEmpty) ...[
-          _buildSectionHeader('최근 30일'),
-          ...monthNotifications.map(
-            (notification) => _buildNotificationItem(notification, provider),
-          ),
-        ],
-        if (earlierNotifications.isNotEmpty) ...[
-          _buildSectionHeader('그 이전'),
-          ...earlierNotifications.map(
-            (notification) => _buildNotificationItem(notification, provider),
-          ),
-        ],
+        for (final entry in sections.entries)
+          if (entry.value.isNotEmpty) ...[
+            _buildSectionHeader(entry.key),
+            ...entry.value.map((n) => _buildNotificationItem(n, provider)),
+          ],
       ],
     );
   }
@@ -774,23 +618,11 @@ class _NotificationTile extends StatelessWidget {
 
   const _NotificationTile({required this.notification, required this.onTap});
 
-  IconData _getNotificationIcon() {
-    switch (notification.type) {
-      case NotificationType.reservation:
-        return Icons.calendar_today_outlined; // reservation은 SVG 사용
-      case NotificationType.story:
-        return Icons.article_outlined;
-      case NotificationType.promotion:
-        return Icons.local_offer_outlined;
-      case NotificationType.system:
-        return Icons.info_outline;
-    }
-  }
-
   Widget _buildNotificationIcon() {
-    final color = notification.isRead
-        ? AppColors.textSecondary.withOpacity(0.6)
-        : Colors.white;
+    final color =
+        notification.isRead
+            ? AppColors.textSecondary.withOpacity(0.6)
+            : Colors.white;
     if (notification.type == NotificationType.reservation) {
       return SvgPicture.asset(
         'assets/icons/calendar-icon.svg',
@@ -799,7 +631,7 @@ class _NotificationTile extends StatelessWidget {
         colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
       );
     }
-    return Icon(_getNotificationIcon(), size: 28, color: color);
+    return Icon(Icons.info_outline, size: 28, color: color);
   }
 
   @override

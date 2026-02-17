@@ -6,11 +6,10 @@ import 'admin/admin_home_screen.dart';
 import 'admin/admin_member_screen.dart';
 import 'admin/admin_my_page_screen.dart';
 import '../providers/auth_provider.dart';
-import '../providers/admin_provider.dart';
 import '../providers/place_provider.dart';
 import '../providers/course_provider.dart';
 import '../providers/story_provider.dart';
-import '../providers/member_provider.dart';
+import '../services/auth_service.dart';
 
 class AdminScreen extends StatefulWidget {
   const AdminScreen({super.key});
@@ -43,36 +42,40 @@ class _AdminScreenState extends State<AdminScreen> {
     if (_isInitialDataLoaded) return;
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final adminProvider = Provider.of<AdminProvider>(context, listen: false);
     final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
     final courseProvider = Provider.of<CourseProvider>(context, listen: false);
     final storyProvider = Provider.of<StoryProvider>(context, listen: false);
-    final memberProvider = Provider.of<MemberProvider>(context, listen: false);
 
-    // 관리자인 경우에만 데이터 로드
     if (authProvider.currentAdmin == null) return;
 
     try {
-      // 관리자 정보 로드
-      await adminProvider.loadAdmin(authProvider.currentAdmin!.userId);
+      await authProvider.loadPlaceMembershipsForCurrentUser();
+      final placeIds = authProvider.adminManagedPlaceIds;
+      if (placeIds.isEmpty) return;
 
-      final admin = adminProvider.currentAdmin;
-      if (admin == null || admin.placeIds.isEmpty) return;
+      // PlaceSwitch 전환 시 이미 설정된 currentPlace 우선 (마지막 접속으로 롤백 방지)
+      final existingPlace = placeProvider.currentPlace;
+      String placeId;
+      if (existingPlace != null && placeIds.contains(existingPlace.id)) {
+        placeId = existingPlace.id;
+      } else {
+        final lastPlaceId = await AuthService().getLastAccessedPlaceId();
+        placeId = authProvider.currentAdmin?.currentPlaceId ??
+            lastPlaceId ??
+            placeIds.first;
+      }
 
-      // 마지막 접속 플레이스 또는 첫 번째 플레이스 선택
-      final placeId = admin.lastAccessedPlaceId ?? admin.placeIds.first;
-
-      // 플레이스 로드
+      // 플레이스 로드 (이미 있으면 loadPlace가 동일 ID로 처리)
       await placeProvider.loadPlace(placeId);
 
       final currentPlace = placeProvider.currentPlace;
       if (currentPlace == null) return;
 
+      // MemberProvider 구독은 AdminMemberScreen 등 멤버 목록 필요한 화면에서만 시작 (비용 절감)
       // 모든 데이터를 병렬로 로드
       await Future.wait([
         courseProvider.loadCourses(currentPlace.id),
         storyProvider.loadStories(currentPlace.id),
-        memberProvider.loadMembers(currentPlace.id),
       ]);
 
       _isInitialDataLoaded = true;

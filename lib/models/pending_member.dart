@@ -1,109 +1,101 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-/// 관리자가 미리 등록한 멤버 모델
+import 'place_member.dart';
+
+/// 초대 토큰 (가입/수락 전 임시 상태)
 ///
-/// 사용자가 로그인 시 전화번호로 자동 매칭되어 플레이스 멤버십 생성
+/// places/{placeId}/pendingMembers/{inviteId}
+/// - 계약·멤버 아님. 초대만 저장.
+/// - totalReservations, validFrom, enrollments, 상태 히스토리 없음.
+/// - adminDisplayName: 관리자가 지정한 표시 이름 (UI용, 가입 시 member로 이관)
 class PendingMember {
+  /// 문서 ID (inviteId). 보통 placeId_phoneNumber
   final String id;
   final String placeId;
   final String phoneNumber;
-  final String? name; // 선택적 (관리자가 입력한 이름)
-  final String createdBy; // 관리자 ID
+  final String invitedBy;
+  final PlaceMemberRole role;
+  /// subManager일 때만 사용. manager/member는 []
+  final List<String> allowedCourseIds;
+  /// courseEnrollments 배열의 courseId 목록 (멤버 등록 시 등장, allowedCourseIds와 병합하여 수강 리스트 표시)
+  final List<String> courseIdsFromEnrollments;
+  /// 관리자 지정 표시 이름 (가입 시 member로 이관)
+  final String? adminDisplayName;
   final DateTime createdAt;
-  final bool autoApprove; // 자동 승인 여부
-  final List<String>?
-  courseIds; // 초대된 코스 ID 목록 (deprecated: courseEnrollments에서 유도)
-  final List<Map<String, dynamic>>? courseEnrollments; // 코스별 등록 정보
-
-  /// courseEnrollments에서 courseIds를 추출 (courseIds 필드가 없거나 비어있을 때 사용)
-  List<String> get derivedCourseIds {
-    if (courseEnrollments == null || courseEnrollments!.isEmpty) {
-      return courseIds ?? [];
-    }
-    return courseEnrollments!
-        .map((e) => e['courseId']?.toString())
-        .whereType<String>()
-        .where((e) => e.isNotEmpty)
-        .toList();
-  }
 
   PendingMember({
     required this.id,
     required this.placeId,
     required this.phoneNumber,
-    this.name,
-    required this.createdBy,
+    required this.invitedBy,
+    required this.role,
+    this.allowedCourseIds = const [],
+    this.courseIdsFromEnrollments = const [],
+    this.adminDisplayName,
     required this.createdAt,
-    this.autoApprove = true,
-    this.courseIds,
-    this.courseEnrollments,
   });
 
-  /// 복사본 생성
+  /// 초대된 코스 ID (subManager: allowedCourseIds, 그 외: [])
+  List<String> get derivedCourseIds => allowedCourseIds;
+
+  /// 수강 리스트 표시용: allowedCourseIds ∪ courseEnrollments의 courseId
+  List<String> get effectiveCourseIds {
+    final set = <String>{...allowedCourseIds, ...courseIdsFromEnrollments};
+    return set.toList();
+  }
+
   PendingMember copyWith({
     String? id,
     String? placeId,
     String? phoneNumber,
-    String? name,
-    String? createdBy,
+    String? invitedBy,
+    PlaceMemberRole? role,
+    List<String>? allowedCourseIds,
+    List<String>? courseIdsFromEnrollments,
+    String? adminDisplayName,
     DateTime? createdAt,
-    bool? autoApprove,
-    List<String>? courseIds,
-    List<Map<String, dynamic>>? courseEnrollments,
   }) {
     return PendingMember(
       id: id ?? this.id,
       placeId: placeId ?? this.placeId,
       phoneNumber: phoneNumber ?? this.phoneNumber,
-      name: name ?? this.name,
-      createdBy: createdBy ?? this.createdBy,
+      invitedBy: invitedBy ?? this.invitedBy,
+      role: role ?? this.role,
+      allowedCourseIds: allowedCourseIds ?? this.allowedCourseIds,
+      courseIdsFromEnrollments: courseIdsFromEnrollments ?? this.courseIdsFromEnrollments,
+      adminDisplayName: adminDisplayName ?? this.adminDisplayName,
       createdAt: createdAt ?? this.createdAt,
-      autoApprove: autoApprove ?? this.autoApprove,
-      courseIds: courseIds ?? this.courseIds,
-      courseEnrollments: courseEnrollments ?? this.courseEnrollments,
     );
   }
 
-  /// JSON 변환
   Map<String, dynamic> toJson() {
     return {
-      'id': id,
-      'placeId': placeId,
       'phoneNumber': phoneNumber,
-      'name': name,
-      'createdBy': createdBy,
+      'invitedBy': invitedBy,
+      'role': role.name,
+      'allowedCourseIds': allowedCourseIds,
+      'adminDisplayName': adminDisplayName,
       'createdAt': createdAt.toIso8601String(),
-      'autoApprove': autoApprove,
-      'courseIds': courseIds,
-      'courseEnrollments': courseEnrollments,
     };
   }
 
-  /// JSON에서 생성
-  factory PendingMember.fromJson(Map<String, dynamic> json) {
-    // courseEnrollments 필드 처리
-    final courseEnrollmentsData = json['courseEnrollments'];
-    List<Map<String, dynamic>>? courseEnrollments;
-    if (courseEnrollmentsData != null) {
-      if (courseEnrollmentsData is List) {
-        courseEnrollments = courseEnrollmentsData
-            .map((e) => Map<String, dynamic>.from(e as Map))
-            .toList();
-      } else if (courseEnrollmentsData is Map) {
-        // Map 형태로 저장된 경우 (인덱스가 키인 경우) List로 변환
-        courseEnrollments = courseEnrollmentsData.values
-            .map((e) => Map<String, dynamic>.from(e as Map))
-            .toList();
-      }
+  static PlaceMemberRole _roleFromJson(dynamic v) {
+    if (v == null) return PlaceMemberRole.member;
+    final s = v.toString();
+    switch (s) {
+      case 'manager':
+        return PlaceMemberRole.manager;
+      case 'subManager':
+        return PlaceMemberRole.subManager;
+      default:
+        return PlaceMemberRole.member;
     }
+  }
 
-    // courseIds 처리
-    final courseIdsData = json['courseIds'];
-    final courseIds = courseIdsData != null
-        ? (courseIdsData as List<dynamic>).map((e) => e.toString()).toList()
-        : null;
+  factory PendingMember.fromJson(Map<String, dynamic> json, {String? docId, String? placeId}) {
+    final id = docId ?? json['id'] as String? ?? '';
+    final pId = placeId ?? json['placeId'] as String? ?? '';
 
-    // createdAt 필드 처리 (Timestamp 또는 String)
     DateTime createdAt;
     final createdAtData = json['createdAt'];
     if (createdAtData is Timestamp) {
@@ -111,35 +103,49 @@ class PendingMember {
     } else if (createdAtData is String) {
       createdAt = DateTime.parse(createdAtData);
     } else {
-      throw Exception('Invalid createdAt format: ${createdAtData.runtimeType}');
+      createdAt = DateTime.now();
     }
 
+    final rawIds = json['allowedCourseIds'];
+    final allowedCourseIds = rawIds is List
+        ? rawIds.map((e) => e.toString()).where((e) => e.isNotEmpty).toList()
+        : <String>[];
+
+    final rawEnrollments = json['courseEnrollments'];
+    final courseIdsFromEnrollments = rawEnrollments is List
+        ? (rawEnrollments)
+            .map((e) => (e is Map ? e['courseId'] : e)?.toString())
+            .whereType<String>()
+            .where((s) => s.isNotEmpty)
+            .toList()
+        : <String>[];
+
+    final rawAdmin = (json['adminDisplayName'] as String?)?.trim();
+    final adminDisplayName = rawAdmin != null && rawAdmin.isNotEmpty ? rawAdmin : null;
+
     return PendingMember(
-      id: json['id'] as String? ?? '',
-      placeId: json['placeId'] as String? ?? '',
+      id: id,
+      placeId: pId,
       phoneNumber: json['phoneNumber'] as String? ?? '',
-      name: json['name'] as String?,
-      createdBy: json['createdBy'] as String? ?? '',
+      invitedBy: json['invitedBy'] as String? ?? '',
+      role: _roleFromJson(json['role']),
+      allowedCourseIds: allowedCourseIds,
+      courseIdsFromEnrollments: courseIdsFromEnrollments,
+      adminDisplayName: adminDisplayName,
       createdAt: createdAt,
-      autoApprove: json['autoApprove'] as bool? ?? true,
-      courseIds: courseIds,
-      courseEnrollments: courseEnrollments,
     );
   }
 
   @override
-  String toString() {
-    return 'PendingMember(placeId: $placeId, phoneNumber: $phoneNumber, autoApprove: $autoApprove)';
-  }
+  String toString() =>
+      'PendingMember(placeId: $placeId, phoneNumber: $phoneNumber, role: ${role.name})';
 
   @override
   bool operator ==(Object other) {
     if (identical(this, other)) return true;
-    return other is PendingMember &&
-        other.placeId == placeId &&
-        other.phoneNumber == phoneNumber;
+    return other is PendingMember && other.id == id && other.placeId == placeId;
   }
 
   @override
-  int get hashCode => placeId.hashCode ^ phoneNumber.hashCode;
+  int get hashCode => Object.hash(id, placeId);
 }

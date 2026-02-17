@@ -11,8 +11,6 @@ import 'screens/verification_code_screen.dart';
 import 'screens/name_input_screen.dart';
 import 'screens/place_waiting_screen.dart';
 import 'screens/notification_screen.dart';
-import 'screens/admin/admin_pin_register_screen.dart';
-import 'screens/admin/admin_pin_input_screen.dart';
 import 'screens/app_startup_screen.dart';
 import 'screens/webview_screen.dart';
 import 'theme/app_colors.dart';
@@ -23,9 +21,9 @@ import 'providers/reservation_provider.dart';
 import 'providers/member_provider.dart';
 import 'providers/story_provider.dart';
 import 'providers/notification_provider.dart';
-import 'providers/admin_provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/enrollment_provider.dart';
+import 'providers/reservation_summary_provider.dart';
 import 'services/fcm_service.dart';
 import 'utils/navigator_key.dart';
 import 'widgets/reservation_feedback_listener.dart';
@@ -87,27 +85,28 @@ class _AppLifecycleNotifierState extends State<_AppLifecycleNotifier>
     if (!mounted) return;
     try {
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
-      final notificationProvider =
-          Provider.of<NotificationProvider>(context, listen: false);
+      final notificationProvider = Provider.of<NotificationProvider>(
+        context,
+        listen: false,
+      );
       final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
       final placeId = placeProvider.currentPlace?.id;
       final admin = authProvider.currentAdmin;
       final user = authProvider.currentUser;
 
       // 유저 정보 기준으로 FCM 토큰 없으면 재발급 후 저장
-      authProvider.ensureFcmTokenSaved().catchError((e) =>
-          debugPrint('[AppLifecycle] FCM 토큰 저장 실패: $e'));
+      authProvider.ensureFcmTokenSaved().catchError(
+        (e) => debugPrint('[AppLifecycle] FCM 토큰 저장 실패: $e'),
+      );
 
       if (admin != null) {
         notificationProvider
             .loadNotifications(admin.userId, isAdmin: true, placeId: placeId)
-            .catchError((e) =>
-                debugPrint('[AppLifecycle] 관리자 알림 재로드 실패: $e'));
+            .catchError((e) => debugPrint('[AppLifecycle] 관리자 알림 재로드 실패: $e'));
       } else if (user != null) {
         notificationProvider
             .loadNotifications(user.userId, isAdmin: false, placeId: placeId)
-            .catchError((e) =>
-                debugPrint('[AppLifecycle] 사용자 알림 재로드 실패: $e'));
+            .catchError((e) => debugPrint('[AppLifecycle] 사용자 알림 재로드 실패: $e'));
       }
     } catch (e) {
       debugPrint('[AppLifecycle] 알림 재로드 오류: $e');
@@ -131,132 +130,124 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => ReservationProvider()),
         ChangeNotifierProvider(create: (_) => EnrollmentProvider()),
         ChangeNotifierProvider(create: (_) => MemberProvider()),
+        ChangeNotifierProvider(create: (_) => ReservationSummaryProvider()),
         ChangeNotifierProvider(create: (_) => StoryProvider()),
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
-        ChangeNotifierProvider(create: (_) => AdminProvider()),
       ],
       child: _AppLifecycleNotifier(
         child: MaterialApp(
-        navigatorKey: navigatorKey,
-        title: '기차 예약',
-        builder: (context, child) {
-          return MediaQuery(
-            data: MediaQuery.of(
-              context,
-            ).copyWith(textScaler: TextScaler.linear(1.0)),
-            child: child!,
-          );
-        },
-        theme: ThemeData(
-          useMaterial3: true,
-          colorScheme: ColorScheme.light(
-            primary: AppColors.primaryGreen,
-            secondary: AppColors.secondaryBrown,
-            surface: AppColors.backgroundWhite,
-            background: AppColors.backgroundLight,
-            onPrimary: Colors.white,
-            onSecondary: Colors.white,
-            onSurface: AppColors.textPrimary,
-            onBackground: AppColors.textPrimary,
-            onError: Colors.white,
-          ),
-          scaffoldBackgroundColor: AppColors.backgroundLight,
-          appBarTheme: AppBarTheme(
-            backgroundColor: AppColors.backgroundWhite,
-            foregroundColor: AppColors.textPrimary,
-            elevation: 0,
-            iconTheme: const IconThemeData(color: AppColors.textPrimary),
-          ),
-        ),
-        initialRoute: '/',
-        routes: {
-          '/': (context) => const AppStartupScreen(),
-          '/phone-number': (context) {
-            return PhoneNumberInputScreen();
+          navigatorKey: navigatorKey,
+          title: '기차 예약',
+          builder: (context, child) {
+            return MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: TextScaler.linear(1.0)),
+              child: child!,
+            );
           },
-          '/verification-code': (context) {
-            final args = ModalRoute.of(context)?.settings.arguments;
-            if (args is Map<String, dynamic>) {
-              return VerificationCodeScreen(
-                phoneNumber: args['phoneNumber'] ?? '',
-                isPlaceRegistrationFlow:
-                    args['isPlaceRegistrationFlow'] ?? false,
+          theme: ThemeData(
+            useMaterial3: true,
+            colorScheme: ColorScheme.light(
+              primary: AppColors.primaryGreen,
+              secondary: AppColors.secondaryBrown,
+              surface: AppColors.backgroundWhite,
+              background: AppColors.backgroundLight,
+              onPrimary: Colors.white,
+              onSecondary: Colors.white,
+              onSurface: AppColors.textPrimary,
+              onBackground: AppColors.textPrimary,
+              onError: Colors.white,
+            ),
+            scaffoldBackgroundColor: AppColors.backgroundLight,
+            appBarTheme: AppBarTheme(
+              backgroundColor: AppColors.backgroundWhite,
+              foregroundColor: AppColors.textPrimary,
+              elevation: 0,
+              iconTheme: const IconThemeData(color: AppColors.textPrimary),
+            ),
+          ),
+          initialRoute: '/',
+          routes: {
+            '/': (context) => const AppStartupScreen(),
+            '/phone-number': (context) {
+              return PhoneNumberInputScreen();
+            },
+            '/verification-code': (context) {
+              final args = ModalRoute.of(context)?.settings.arguments;
+              if (args is Map<String, dynamic>) {
+                return VerificationCodeScreen(
+                  phoneNumber: args['phoneNumber'] ?? '',
+                  isPlaceRegistrationFlow:
+                      args['isPlaceRegistrationFlow'] ?? false,
+                );
+              } else if (args is String) {
+                return VerificationCodeScreen(phoneNumber: args);
+              } else {
+                return VerificationCodeScreen(phoneNumber: '');
+              }
+            },
+            '/name-input': (context) {
+              final args =
+                  ModalRoute.of(context)?.settings.arguments
+                      as Map<String, dynamic>?;
+              return NameInputScreen(
+                phoneNumber: args?['phoneNumber'] ?? '',
+                smsCode: args?['smsCode'] ?? '',
               );
-            } else if (args is String) {
-              return VerificationCodeScreen(phoneNumber: args);
-            } else {
-              return VerificationCodeScreen(phoneNumber: '');
-            }
-          },
-          '/name-input': (context) {
-            final args =
-                ModalRoute.of(context)?.settings.arguments
-                    as Map<String, dynamic>?;
-            return NameInputScreen(
-              phoneNumber: args?['phoneNumber'] ?? '',
-              smsCode: args?['smsCode'] ?? '',
-            );
-          },
-          '/place-waiting': (context) {
-            final args = ModalRoute.of(context)?.settings.arguments;
-            final phoneNumber = args is String ? args : '';
-            return PlaceWaitingScreen(phoneNumber: phoneNumber);
-          },
-          '/main': (context) {
-            // arguments로 초기 탭 인덱스 또는 예약 정보 받기
-            final args = ModalRoute.of(context)?.settings.arguments;
-            int initialIndex = 0;
-            Map<String, dynamic>? highlightReservation;
-            Map<String, dynamic>? highlightNewSession;
+            },
+            '/place-waiting': (context) {
+              final args = ModalRoute.of(context)?.settings.arguments;
+              String phoneNumber = '';
+              bool skipAutoEnter = false;
+              if (args is Map) {
+                phoneNumber = (args['phoneNumber'] as String?) ?? '';
+                skipAutoEnter = args['skipAutoEnter'] == true;
+              } else if (args is String) {
+                phoneNumber = args;
+              }
+              return PlaceWaitingScreen(
+                phoneNumber: phoneNumber,
+                skipAutoEnter: skipAutoEnter,
+              );
+            },
+            '/main': (context) {
+              // arguments로 초기 탭 인덱스 또는 예약 정보 받기
+              final args = ModalRoute.of(context)?.settings.arguments;
+              int initialIndex = 0;
+              Map<String, dynamic>? highlightReservation;
+              Map<String, dynamic>? highlightNewSession;
 
-            if (args is int) {
-              initialIndex = args;
-            } else if (args is Map<String, dynamic>) {
-              initialIndex = args['initialIndex'] as int? ?? 0;
-              highlightReservation =
-                  args['highlightReservation'] as Map<String, dynamic>?;
-              highlightNewSession =
-                  args['highlightNewSession'] as Map<String, dynamic>?;
-            }
+              if (args is int) {
+                initialIndex = args;
+              } else if (args is Map<String, dynamic>) {
+                initialIndex = args['initialIndex'] as int? ?? 0;
+                highlightReservation =
+                    args['highlightReservation'] as Map<String, dynamic>?;
+                highlightNewSession =
+                    args['highlightNewSession'] as Map<String, dynamic>?;
+              }
 
-            return MainScreen(
-              initialIndex: initialIndex,
-              highlightReservation: highlightReservation,
-              highlightNewSession: highlightNewSession,
-            );
+              return MainScreen(
+                initialIndex: initialIndex,
+                highlightReservation: highlightReservation,
+                highlightNewSession: highlightNewSession,
+              );
+            },
+            '/admin': (context) => const AdminScreen(),
+            '/notifications': (context) => const NotificationScreen(),
+            '/webview': (context) {
+              final args =
+                  ModalRoute.of(context)?.settings.arguments
+                      as Map<String, dynamic>?;
+              return WebViewScreen(
+                url: args?['url'] ?? '',
+                title: args?['title'] ?? '웹페이지',
+              );
+            },
           },
-          '/admin-register': (context) {
-            final args =
-                ModalRoute.of(context)?.settings.arguments
-                    as Map<String, dynamic>?;
-            return AdminPinRegisterScreen(
-              phoneNumber: args?['phoneNumber'] ?? '',
-              verificationCode: args?['verificationCode'] ?? '',
-            );
-          },
-          '/admin-pin-input': (context) {
-            final args =
-                ModalRoute.of(context)?.settings.arguments
-                    as Map<String, dynamic>?;
-            return AdminPinInputScreen(
-              phoneNumber: args?['phoneNumber'] ?? '',
-              verificationCode: args?['verificationCode'] ?? '',
-            );
-          },
-          '/admin': (context) => const AdminScreen(),
-          '/notifications': (context) => const NotificationScreen(),
-          '/webview': (context) {
-            final args =
-                ModalRoute.of(context)?.settings.arguments
-                    as Map<String, dynamic>?;
-            return WebViewScreen(
-              url: args?['url'] ?? '',
-              title: args?['title'] ?? '웹페이지',
-            );
-          },
-        },
+        ),
       ),
-    ),
     );
   }
 }
@@ -264,7 +255,8 @@ class MyApp extends StatelessWidget {
 class MainScreen extends StatefulWidget {
   final int initialIndex; // 초기 탭 인덱스
   final Map<String, dynamic>? highlightReservation; // 강조할 예약 정보
-  final Map<String, dynamic>? highlightNewSession; // 새 수업 일정 알림 → 예약 화면에서 해당 세션 표시
+  final Map<String, dynamic>?
+  highlightNewSession; // 새 수업 일정 알림 → 예약 화면에서 해당 세션 표시
 
   const MainScreen({
     super.key,
@@ -407,10 +399,10 @@ class _MainScreenState extends State<MainScreen> {
                   }
                 },
               ), // 1: 예약
-            // 2: 마이페이지
-            //
-            // ⚠️ 바텀 네비로 마이페이지에 "그냥 들어왔을 때"는 하이라이트 애니메이션을 촉발하지 않는다.
-            // 하이라이트는 명시적으로 전달된 경우에만 1회 실행되고 소비된다.
+              // 2: 마이페이지
+              //
+              // ⚠️ 바텀 네비로 마이페이지에 "그냥 들어왔을 때"는 하이라이트 애니메이션을 촉발하지 않는다.
+              // 하이라이트는 명시적으로 전달된 경우에만 1회 실행되고 소비된다.
               MyPageScreen(
                 highlightReservation:
                     _currentIndex == 2 ? _pendingHighlightReservation : null,

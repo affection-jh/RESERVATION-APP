@@ -34,10 +34,12 @@ class _SplashScreenState extends State<SplashScreen>
     );
 
     // 회색에서 검정색으로 부드럽게 전환
-    _colorAnimation = ColorTween(begin: Colors.grey[400], end: Colors.black)
-        .animate(
-          CurvedAnimation(parent: _colorController, curve: Curves.easeInOut),
-        );
+    _colorAnimation = ColorTween(
+      begin: Colors.grey[400],
+      end: Colors.black,
+    ).animate(
+      CurvedAnimation(parent: _colorController, curve: Curves.easeInOut),
+    );
 
     // 쉬머 효과 후 색상 전환 시작
     _shimmerController.forward().then((_) {
