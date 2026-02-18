@@ -23,6 +23,7 @@ import '../../services/firestore_service.dart';
 import '../../utils/week_range_calculator.dart';
 import '../../utils/local_storage_util.dart';
 import '../../utils/timezone_utils.dart';
+import '../../utils/reservation_policy_engine.dart';
 import '../../models/course_policy.dart';
 
 class AdminHomeScreen extends StatefulWidget {
@@ -205,7 +206,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
     final daysFromMonday = now.weekday - 1;
     final thisWeekMonday = now.subtract(Duration(days: daysFromMonday));
 
-    // 미리 열린 주차의 weekOffset 계산
+    // 미리 열린 주차의 weekOffset 계산 (관리자가 "미리 예약 열기"로 연 주)
     final openedOffsets = <int>{};
     for (final weekStartDateStr in openedWeekStartDates) {
       try {
@@ -225,24 +226,39 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
       }
     }
 
-    // 정책 기반 주차 + 미리 열린 주차 합치기
-    final allOffsets = <int>{...baseOffsets, ...openedOffsets};
-    final sortedOffsets = allOffsets.toList()..sort();
-
-    // 최소 1개, 최대 8개로 제한
-    final maxWeekOffset =
-        sortedOffsets.isNotEmpty
-            ? sortedOffsets.reduce((a, b) => a > b ? a : b)
-            : 0;
-    final maxWeeks = (maxWeekOffset + 1).clamp(1, 8);
-    final finalOffsets =
-        List.generate(
-          maxWeeks,
-          (i) => i,
-        ).where((i) => sortedOffsets.contains(i)).toList();
-    if (finalOffsets.isEmpty) {
-      finalOffsets.addAll([0, 1, 2]);
+    // 정책상 "지금 시점에 실제로 열린" 주차만 탭에 표시 (잠긴 주차 제거)
+    // - 미리 열린 주차(bookingWeekOpens)는 항상 포함
+    // - weeklyRelease: 해당 주의 오픈 시각(release)이 지났을 때만 포함
+    // - rollingWindow: baseOffsets 그대로 사용
+    final actuallyOpenedOffsets = <int>{};
+    if (policy.openStrategy.type == BookingOpenStrategyType.weeklyRelease) {
+      for (final offset in baseOffsets) {
+        if (openedOffsets.contains(offset)) {
+          actuallyOpenedOffsets.add(offset);
+          continue;
+        }
+        final weekMonday = thisWeekMonday.add(Duration(days: 7 * offset));
+        final eligibility = ReservationPolicyEngine.evaluateReservation(
+          now: now,
+          policy: policy,
+          sessionDate: weekMonday,
+          startTime: '09:00',
+          capacity: 1,
+          reservedCount: 0,
+          enrollmentCanReserve: true,
+        );
+        if (eligibility.reason != ReservationLockReason.notOpenedYet) {
+          actuallyOpenedOffsets.add(offset);
+        }
+      }
+    } else {
+      actuallyOpenedOffsets.addAll(baseOffsets);
     }
+    actuallyOpenedOffsets.addAll(openedOffsets);
+
+    final sortedOffsets = actuallyOpenedOffsets.toList()..sort();
+    final finalOffsets =
+        sortedOffsets.isEmpty ? <int>[0] : sortedOffsets;
 
     if (mounted) {
       setState(() {
@@ -333,12 +349,20 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
                       });
                     },
                     availableWeekOffsets: _availableWeekOffsets,
-                    trailing: Consumer<CourseProvider>(
-                      builder: (context, courseProvider, _) {
+                    trailing: Consumer2<CourseProvider, AuthProvider>(
+                      builder: (context, courseProvider, authProvider, _) {
+                        final placeId = Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
+                        final isSubManager = placeId != null && authProvider.isSubManagerForPlace(placeId);
+                        final placeMember = placeId != null ? authProvider.getPlaceMemberForPlace(placeId) : null;
+                        final manageableIds = placeMember?.manageableCourseIds ?? [];
+                        final hasManageableCourses = isSubManager
+                            ? courseProvider.courses.any((c) => manageableIds.contains(c.id))
+                            : true;
+                        if (isSubManager && !hasManageableCourses) return const SizedBox.shrink();
                         final isEmpty = courseProvider.courses.isEmpty;
                         return IconButton(
                           icon:
-                              isEmpty
+                              isEmpty && !isSubManager
                                   ? Icon(
                                     Icons.add_circle,
                                     color: AppColors.primaryGreen,
@@ -357,7 +381,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
                                     ),
                                   ),
                           onPressed: () {
-                            if (isEmpty) {
+                            if (isEmpty && !isSubManager) {
                               _showCourseAddFlow(context);
                             } else {
                               _showWeeklyOverrideSchedule(context);
@@ -449,19 +473,26 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
     );
   }
 
-  // 캘린더 섹션
+  // 캘린더 섹션 (부매니저: 관리 코스만 노출)
   Widget _buildCalendarSection() {
-    // Consumer를 사용하여 CourseProvider 변경 시에만 리빌드
-    return Consumer<CourseProvider>(
-      builder: (context, courseProvider, child) {
-        // 코스가 없을 때: 스토리 카드와 동일한 CTA (둥근 모서리 + 가로 마진)
-        if (courseProvider.courses.isEmpty) {
+    return Consumer3<CourseProvider, PlaceProvider, AuthProvider>(
+      builder: (context, courseProvider, placeProvider, authProvider, child) {
+        final placeId = placeProvider.currentPlace?.id;
+        final isSubManager = placeId != null && authProvider.isSubManagerForPlace(placeId);
+        final placeMember = placeId != null ? authProvider.getPlaceMemberForPlace(placeId) : null;
+        final coursesForCalendar = isSubManager && placeMember != null
+            ? courseProvider.courses
+                .where((c) => placeMember.manageableCourseIds.contains(c.id))
+                .toList()
+            : courseProvider.courses;
+
+        if (coursesForCalendar.isEmpty) {
           return Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: EmptyStateCard(
-              title: '아직 코스가 없어요',
-              buttonText: '코스 추가하기',
-              onPressed: () => _showCourseAddFlow(context),
+              title: isSubManager ? '관리 중인 코스가 없어요' : '아직 코스가 없어요',
+              buttonText: isSubManager ? null : '코스 추가하기',
+              onPressed: isSubManager ? null : () => _showCourseAddFlow(context),
             ),
           );
         }
@@ -483,7 +514,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
             clipBehavior: Clip.antiAlias,
             child: CompactCalendarWidget(
               key: _calendarKey,
-              courses: courseProvider.courses,
+              courses: coursesForCalendar,
               usage: CompactCalendarUsage.adminNavigate,
               weekOffset: _selectedWeekTab,
               availableWeekOffsets: _availableWeekOffsets,
@@ -502,12 +533,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
                       }
                       : null,
               onSessionTap: (course, session, date) {
-                final placeId =
-                    Provider.of<PlaceProvider>(
-                      context,
-                      listen: false,
-                    ).currentPlace?.id;
-                if (placeId == null) return;
+                final pid = placeProvider.currentPlace?.id;
+                if (pid == null) return;
                 Navigator.of(context).push(
                   MaterialPageRoute(
                     builder:
@@ -515,28 +542,22 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
                           course: course,
                           session: session,
                           date: date,
-                          placeId: placeId,
+                          placeId: pid,
                         ),
                   ),
                 );
               },
-              onAddCourseTap: () => _showCourseAddFlow(context),
+              onAddCourseTap: isSubManager ? null : () => _showCourseAddFlow(context),
               onCourseSelected: (Course? course) {
-                // ⚠️ CompactCalendarWidget가 빌드 중에 이 콜백을 동기 호출할 수 있음.
-                // 빌드 중 setState/구독 갱신을 피하기 위해 프레임 이후로 미룸.
-                final placeId =
-                    Provider.of<PlaceProvider>(
-                      context,
-                      listen: false,
-                    ).currentPlace?.id;
+                final pid = placeProvider.currentPlace?.id;
                 WidgetsBinding.instance.addPostFrameCallback((_) async {
                   if (!mounted) return;
                   setState(() {
                     _selectedCourse = course;
                   });
-                  if (placeId != null) {
-                    await _calculateWeekOffsetsForCourse(course, placeId);
-                    _subscribeBookingWeekOpens(course, placeId);
+                  if (pid != null) {
+                    await _calculateWeekOffsetsForCourse(course, pid);
+                    _subscribeBookingWeekOpens(course, pid);
                   }
                 });
               },
@@ -660,14 +681,24 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
     );
   }
 
-  // 비정기 일정 편집 화면 표시
+  // 비정기 일정 편집 화면 표시 (부매니저: 관리 코스만 전달)
   Future<void> _showWeeklyOverrideSchedule(BuildContext context) async {
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+    final placeId = placeProvider.currentPlace?.id;
+    final isSubManager = placeId != null && authProvider.isSubManagerForPlace(placeId);
+    final placeMember = placeId != null ? authProvider.getPlaceMemberForPlace(placeId) : null;
+    final allowedCourseIds = isSubManager && placeMember != null
+        ? placeMember.manageableCourseIds
+        : null;
+
     final result = await Navigator.of(context).push(
       MaterialPageRoute(
         builder:
             (context) => WeeklyOverrideScheduleScreen(
               weekOffset: _selectedWeekTab,
-              selectedCourseId: _selectedCourse?.id, // 선택된 코스만
+              selectedCourseId: _selectedCourse?.id,
+              allowedCourseIds: allowedCourseIds,
             ),
       ),
     );

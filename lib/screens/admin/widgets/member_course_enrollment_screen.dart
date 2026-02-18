@@ -249,7 +249,11 @@ class _MemberCourseEnrollmentScreenState
       }
     } catch (e) {
       if (mounted) {
-        SnackbarUtil.showInfoFromError(context, e, fallback: '코스 등록 중 오류가 발생했습니다.');
+        SnackbarUtil.showInfoFromError(
+          context,
+          e,
+          fallback: '코스 등록 중 오류가 발생했습니다.',
+        );
       }
     } finally {
       if (mounted) {
@@ -372,9 +376,24 @@ class _MemberCourseEnrollmentScreenState
           ),
         ),
         body: SafeArea(
-          child: Consumer<CourseProvider>(
-            builder: (context, courseProvider, _) {
-              final allCourses = courseProvider.courses;
+          child: Consumer3<CourseProvider, PlaceProvider, AuthProvider>(
+            builder: (context, courseProvider, placeProvider, authProvider, _) {
+              final placeId = placeProvider.currentPlace?.id;
+              final isSubManager =
+                  placeId != null && authProvider.isSubManagerForPlace(placeId);
+              final placeMember =
+                  placeId != null
+                      ? authProvider.getPlaceMemberForPlace(placeId)
+                      : null;
+              final allCourses =
+                  isSubManager && placeMember != null
+                      ? courseProvider.courses
+                          .where(
+                            (c) =>
+                                placeMember.manageableCourseIds.contains(c.id),
+                          )
+                          .toList()
+                      : courseProvider.courses;
               final excludeSet =
                   widget.excludeCourseIds != null &&
                           widget.excludeCourseIds!.isNotEmpty

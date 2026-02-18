@@ -24,6 +24,7 @@ import '../../../utils/date_range_picker_util.dart';
 import '../../../utils/format_utils.dart';
 import 'enrollment_detail_screen.dart';
 import 'member_course_enrollment_screen.dart';
+import 'course_edit_screen.dart';
 import 'dart:async';
 
 class MemberDetailBottomSheet extends StatefulWidget {
@@ -398,6 +399,13 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                             ),
                           )
                         else ...[
+                          // 코스매니저일 때: 관리중인 코스 섹션 (탭 시 코스 편집 화면으로)
+                          if (widget.member.isSubManager &&
+                              widget.member.manageableCourseIds.isNotEmpty)
+                            _buildManagedCoursesSection(),
+                          if (widget.member.isSubManager &&
+                              widget.member.manageableCourseIds.isNotEmpty)
+                            const SizedBox(height: 6),
                           // 등록된 코스 목록
                           _buildEnrollmentsSection(),
                         ],
@@ -621,17 +629,21 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
   }
 
   /// 일반 멤버만 플레이스에서 제거 가능. 매니저·부매니저·플레이스 소유자는 제거 불가.
+  /// 멤버 제거 실행은 매니저만 가능 (부매니저는 버튼 숨김).
   bool _canRemoveFromPlace(BuildContext context) {
     if (!widget.member.isMember) return false;
     final place =
         Provider.of<PlaceProvider>(context, listen: false).currentPlace;
     if (place == null) return false;
-    return place.adminId != widget.member.userId;
+    if (place.adminId == widget.member.userId) return false;
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    if (authProvider.isSubManagerForPlace(place.id)) return false;
+    return true;
   }
 
   Future<void> _handleDeleteMember() async {
     if (!_canRemoveFromPlace(context)) {
-      SnackbarUtil.showInfo(context, '매니저·부매니저·소유자는 제거할 수 없어요.');
+      SnackbarUtil.showInfo(context, '매니저·코스매니저·소유자는 제거할 수 없어요.');
       return;
     }
     final rootNavigator = Navigator.of(context, rootNavigator: true);
@@ -639,6 +651,13 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
 
     // 바텀시트 먼저 닫기
     Navigator.of(context).pop();
+
+    // 카드에 로딩 표시 (다이얼로그 전에 호출해 삭제 확인 중에도 카드에 스피너 노출)
+    final memberProvider = Provider.of<MemberProvider>(
+      rootContext,
+      listen: false,
+    );
+    memberProvider.startDeletingMember(widget.member.userId);
 
     // 다이얼로그 띄우기
     final shouldDelete = await CommonDialog.show(
@@ -650,8 +669,9 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
       confirmButtonColor: Colors.red,
     );
 
-    // 취소 시 바텀시트 다시 열기 (롤백)
+    // 취소 시 로딩 해제 후 바텀시트 다시 열기
     if (shouldDelete != true) {
+      memberProvider.finishDeletingMember(widget.member.userId);
       MemberDetailBottomSheet.show(context: rootContext, member: widget.member);
       return;
     }
@@ -663,7 +683,7 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     );
     final placeId = placeProvider.currentPlace?.id;
     if (placeId == null) {
-      // 바텀시트 다시 열기
+      memberProvider.finishDeletingMember(widget.member.userId);
       MemberDetailBottomSheet.show(context: rootContext, member: widget.member);
       return;
     }
@@ -676,11 +696,6 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     final adminUserId = authProvider.currentUser?.userId;
 
     try {
-      // ✅ 로딩 오버레이는 제거하고, 멤버 카드에서 "삭제중" 오버레이로 표시한다.
-      final memberProvider = Provider.of<MemberProvider>(
-        rootContext,
-        listen: false,
-      );
       await memberProvider.removeMemberFromPlace(
         placeId: placeId,
         userId: widget.member.userId,
@@ -753,6 +768,92 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     }
 
     return false;
+  }
+
+  /// 코스매니저일 때만 표시: 관리중인 코스 셀들. 탭 시 코스 편집 화면으로 이동.
+  Widget _buildManagedCoursesSection() {
+    final courseProvider = Provider.of<CourseProvider>(context, listen: false);
+    final managedCourses =
+        widget.member.manageableCourseIds
+            .map(
+              (id) =>
+                  courseProvider.courses.where((c) => c.id == id).firstOrNull,
+            )
+            .whereType<Course>()
+            .toList();
+    if (managedCourses.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          padding: EdgeInsets.zero,
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            crossAxisSpacing: 8,
+            mainAxisSpacing: 8,
+            childAspectRatio: 1.15,
+          ),
+          itemCount: managedCourses.length,
+          itemBuilder: (context, index) {
+            final course = managedCourses[index];
+            return GestureDetector(
+              onTap: () {
+                Navigator.of(context).pop();
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (context) => CourseEditScreen(course: course),
+                  ),
+                );
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: Color(course.color),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Text(
+                        '코스매니저',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.backgroundLight,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Text(
+                        course.name,
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.backgroundWhite,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      ],
+    );
   }
 
   Widget _buildEnrollmentsSection() {
@@ -1035,8 +1136,8 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                 child: Text(
                   course.name,
                   style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w600,
                     color: AppColors.backgroundLight,
                   ),
                   textAlign: TextAlign.left,
@@ -1044,16 +1145,33 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 20),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4),
                 child: Text(
                   '${enrollment.remainingReservations}회 남음',
                   style: TextStyle(
-                    fontSize: 24,
-                    color: AppColors.backgroundWhite,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.backgroundLight,
                   ),
+                ),
+              ),
+
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Text(
+                  _formatValidPeriod(
+                    enrollment.validFrom,
+                    enrollment.validUntil,
+                  ),
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.backgroundLight,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ],
@@ -1075,6 +1193,14 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
           ),
       ],
     );
+  }
+
+  static String _formatValidPeriod(DateTime validFrom, DateTime validUntil) {
+    ;
+    final until = TimezoneUtils.formatDateToSeoul(
+      validUntil,
+    ).replaceAll('-', '.');
+    return '$until까지';
   }
 
   // 만료되었거나 횟수가 0인 코스 카드 (회색 배경)
@@ -1118,10 +1244,7 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
               const SizedBox(height: 4),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: AppColors.textSecondary.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
+
                 child: Text(
                   statusText,
                   style: TextStyle(

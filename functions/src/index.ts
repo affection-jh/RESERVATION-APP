@@ -4,7 +4,7 @@ import type { EventContext } from 'firebase-functions';
 import type { QueryDocumentSnapshot } from 'firebase-functions/v1/firestore';
 import type { Change } from 'firebase-functions';
 import { logFunctionStart, logFunctionSuccess, logFunctionError } from './logger';
-import { assertAdminUid, assertAdminForPlaceUid, isAdminForPlaceUid, getManagedPlaceIdsForUid } from './admin_auth';
+import { assertAdminForPlaceUid, isAdminForPlaceUid, getPlaceIdsWhereUserMustDeletePlaceFirst, demoteSubManagerToMemberIfNoCoursesInternal, getManagerUidsForPlaceAndCourse } from './admin_auth';
 import { getCourseName, getCourseNameFromCourse, getCourseOrThrow } from './course_catalog';
 import { throwRequiresForce, throwRequiresCascade, throwRequiresCascadeDeleteCourse, throwRequiresBulkMove } from './action_protocol';
 
@@ -473,16 +473,23 @@ export const createEnrollmentsFromPendingMembers = functions.https.onCall(async 
                 || null;
             placeIds.push(placeId);
 
+            const pendingRole = (pendingData.role as string) || 'member';
+            const isSubManager = pendingRole === 'subManager' || pendingRole === 'submanager';
+            const memberRole = isSubManager ? 'submanager' : 'member';
+            const manageableCourseIds = isSubManager && Array.isArray(pendingData.allowedCourseIds)
+                ? (pendingData.allowedCourseIds as string[]).map((id: string) => String(id)).filter(Boolean)
+                : [];
+
             const memberRef = db.collection('places').doc(placeId).collection('members').doc(userId);
             const userDoc = await db.collection('users').doc(userId).get();
             const userPhone = userDoc.exists ? (userDoc.data()?.phoneNumber as string) ?? phoneNumber : phoneNumber;
 
             await memberRef.set({
                 userId,
-                role: 'member',
+                role: memberRole,
                 adminDisplayName: adminDisplayName || null,
                 phoneNumber: userPhone,
-                manageableCourseIds: [],
+                manageableCourseIds,
                 createdAt: enrollmentTime,
                 updatedAt: enrollmentTime,
             }, { merge: true });
@@ -636,16 +643,40 @@ export const createReservation = functions.https.onCall(async (data, context) =>
     let isAdminCreatingForUser = false;
 
     if (requestedUserId && requestedUserId !== callerId) {
-        // 다른 사용자를 위해 예약 생성 시도 - 관리자 권한 확인
+        // 다른 사용자를 위해 예약 생성 시도 - 해당 플레이스 관리자 권한 확인
         if (!requestedUserId || requestedUserId.length === 0) {
             throw new functions.https.HttpsError('invalid-argument', '유효하지 않은 userId입니다.');
         }
+        if (!placeId || !courseId) {
+            throw new functions.https.HttpsError('invalid-argument', 'placeId, courseId가 필요합니다.');
+        }
         try {
-            await assertAdminUid(callerId);
+            await assertAdminForPlaceUid(callerId, placeId);
+            const dbAuth = admin.firestore();
+            const callerMemberSnap = await dbAuth.collection('places').doc(placeId).collection('members').doc(callerId).get();
+            const callerData = callerMemberSnap.data();
+            const callerRole = String(callerData?.role ?? '').toLowerCase();
+            if (callerRole === 'submanager') {
+                const rawManageable = callerData?.manageableCourseIds;
+                const manageableCourseIds: string[] = Array.isArray(rawManageable)
+                    ? (rawManageable as string[]).map((id: string) => String(id)).filter(Boolean)
+                    : [];
+                if (manageableCourseIds.length === 0) {
+                    await demoteSubManagerToMemberIfNoCoursesInternal(dbAuth, placeId, callerId);
+                    throw new functions.https.HttpsError('permission-denied', '관리할 코스가 없습니다.');
+                }
+                if (!manageableCourseIds.includes(courseId)) {
+                    throw new functions.https.HttpsError(
+                        'permission-denied',
+                        '부매니저는 지정된 관리 코스에만 예약을 생성할 수 있습니다.',
+                    );
+                }
+            }
             userId = requestedUserId;
             isAdminCreatingForUser = true;
             console.log(`[createReservation] Admin ${callerId} creating reservation for user ${userId}`);
         } catch (error) {
+            if (error instanceof functions.https.HttpsError) throw error;
             logFunctionError(functionName, error as Error, { callerId, requestedUserId });
             throw new functions.https.HttpsError('permission-denied', '다른 사용자를 위해 예약을 생성할 권한이 없습니다.');
         }
@@ -1172,12 +1203,6 @@ export const batchCreateReservations = functions.https.onCall(async (data, conte
         throw new functions.https.HttpsError('unauthenticated', '로그인이 필요합니다.');
     }
     const callerId = context.auth.uid;
-    try {
-        await assertAdminUid(callerId);
-    } catch {
-        throw new functions.https.HttpsError('permission-denied', '관리자만 사용할 수 있습니다.');
-    }
-
     const placeId = String(data?.placeId ?? '');
     const courseId = String(data?.courseId ?? '');
     const dayOfWeek = Number(data?.dayOfWeek ?? 0);
@@ -1196,6 +1221,28 @@ export const batchCreateReservations = functions.https.onCall(async (data, conte
     if (!placeId || !courseId || !startTime || !reservedDateString || !Number.isFinite(dayOfWeek)) {
         throw new functions.https.HttpsError('invalid-argument', 'placeId, courseId, dayOfWeek, startTime, reservedDateString이 필요합니다.');
     }
+
+    const db = admin.firestore();
+    await assertAdminForPlaceUid(callerId, placeId);
+    const callerMemberSnap = await db.collection('places').doc(placeId).collection('members').doc(callerId).get();
+    const callerData = callerMemberSnap.data();
+    const callerRole = String(callerData?.role ?? '').toLowerCase();
+    if (callerRole === 'submanager') {
+        const rawManageable = callerData?.manageableCourseIds;
+        const manageableCourseIds: string[] = Array.isArray(rawManageable)
+            ? (rawManageable as string[]).map((id: string) => String(id)).filter(Boolean)
+            : [];
+        if (manageableCourseIds.length === 0) {
+            await demoteSubManagerToMemberIfNoCoursesInternal(db, placeId, callerId);
+            throw new functions.https.HttpsError('permission-denied', '관리할 코스가 없습니다.');
+        }
+        if (!manageableCourseIds.includes(courseId)) {
+            throw new functions.https.HttpsError(
+                'permission-denied',
+                '부매니저는 지정된 관리 코스에만 배치 예약을 생성할 수 있습니다.',
+            );
+        }
+    }
     if (dayOfWeek < 1 || dayOfWeek > 7) {
         throw new functions.https.HttpsError('invalid-argument', 'dayOfWeek는 1-7(월-일) 사이여야 합니다.');
     }
@@ -1203,7 +1250,6 @@ export const batchCreateReservations = functions.https.onCall(async (data, conte
         return { created: [], results: [] };
     }
 
-    const db = admin.firestore();
     const now = new Date();
     const todayString = formatDateToSeoul(now);
     const placeRef = db.collection('places').doc(placeId);
@@ -1561,6 +1607,26 @@ export const cancelEnrollment = functions.https.onCall(async (data, context) => 
     await assertAdminForPlaceUid(callerId, placeId);
 
     const db = admin.firestore();
+    const callerMemberSnap = await db.collection('places').doc(placeId).collection('members').doc(callerId).get();
+    const callerData = callerMemberSnap.data();
+    const callerRole = String(callerData?.role ?? '').toLowerCase();
+    if (callerRole === 'submanager') {
+        const rawManageable = callerData?.manageableCourseIds;
+        const manageableCourseIds: string[] = Array.isArray(rawManageable)
+            ? (rawManageable as string[]).map((id: string) => String(id)).filter(Boolean)
+            : [];
+        if (manageableCourseIds.length === 0) {
+            await demoteSubManagerToMemberIfNoCoursesInternal(db, placeId, callerId);
+            throw new functions.https.HttpsError('permission-denied', '관리할 코스가 없습니다.');
+        }
+        if (!manageableCourseIds.includes(courseId)) {
+            throw new functions.https.HttpsError(
+                'permission-denied',
+                '부매니저는 지정된 관리 코스의 수강만 취소할 수 있습니다.',
+            );
+        }
+    }
+
     const realNow = new Date();
     const todayString = formatDateToSeoul(realNow);
 
@@ -1697,10 +1763,19 @@ export const removeMemberFromPlace = functions.https.onCall(async (data, context
         );
     }
 
-    // place 단위 관리자만 가능
+    // place 단위 관리자만 가능 (멤버 제거는 매니저/소유자만 — 부매니저 불가)
     await assertAdminForPlaceUid(callerId, placeId);
 
     const db = admin.firestore();
+    const callerMemberSnap = await db.collection('places').doc(placeId).collection('members').doc(callerId).get();
+    const callerData = callerMemberSnap.data();
+    const callerRole = String(callerData?.role ?? '').toLowerCase();
+    if (callerRole === 'submanager') {
+        throw new functions.https.HttpsError(
+            'permission-denied',
+            '플레이스에서 멤버를 제거할 수 있는 권한은 매니저에게만 있습니다.',
+        );
+    }
 
     // 매니저/부매니저/플레이스 소유자는 제거 불가 (일반 멤버만 제거 가능)
     const placeDoc = await db.collection('places').doc(placeId).get();
@@ -1894,6 +1969,26 @@ export const updateCourseSchedule = functions.https.onCall(async (data, context)
     await assertAdminForPlaceUid(callerId, placeId);
 
     const db = admin.firestore();
+    const callerMemberSnap = await db.collection('places').doc(placeId).collection('members').doc(callerId).get();
+    const callerData = callerMemberSnap.data();
+    const callerRole = String(callerData?.role ?? '').toLowerCase();
+    if (callerRole === 'submanager') {
+        const rawManageable = callerData?.manageableCourseIds;
+        const manageableCourseIds: string[] = Array.isArray(rawManageable)
+            ? (rawManageable as string[]).map((id: string) => String(id)).filter(Boolean)
+            : [];
+        if (manageableCourseIds.length === 0) {
+            await demoteSubManagerToMemberIfNoCoursesInternal(db, placeId, callerId);
+            throw new functions.https.HttpsError('permission-denied', '관리할 코스가 없습니다.');
+        }
+        if (!manageableCourseIds.includes(courseId)) {
+            throw new functions.https.HttpsError(
+                'permission-denied',
+                '부매니저는 지정된 관리 코스의 일정만 편집할 수 있습니다.',
+            );
+        }
+    }
+
     const realNow = new Date();
     const todayString = formatDateToSeoul(realNow);
 
@@ -2058,6 +2153,25 @@ export const updateCourseSchedule = functions.https.onCall(async (data, context)
         sessions: Array.from(newMap.values()),
     });
 
+    // 매니저·코스매니저에게 정기 일정 변경 푸시 알림 (변경한 사람 제외)
+    try {
+        const adminUids = await getManagerUidsForPlaceAndCourse(placeId, courseId);
+        for (const uid of adminUids) {
+            if (uid === callerId) continue;
+            await createNotification({
+                userId: uid,
+                type: 'system',
+                title: '정기 일정 변경',
+                body: `${courseName ?? '코스'} 정기 일정이 변경되었습니다`,
+                placeId,
+                data: { courseId, placeId, kind: 'schedule-update' },
+                isAdmin: true,
+            });
+        }
+    } catch (notifErr: any) {
+        console.error(`[updateCourseSchedule] 관리자 알림 전송 실패:`, notifErr?.message ?? notifErr);
+    }
+
     logFunctionSuccess(functionName, { callerId, placeId, courseId, removed: removedKeys.length, modified: modifiedKeys.length });
     return { success: true, courseName };
 });
@@ -2094,6 +2208,26 @@ export const deleteCourse = functions.https.onCall(async (data, context) => {
     await assertAdminForPlaceUid(callerId, placeId);
 
     const db = admin.firestore();
+    const callerMemberSnap = await db.collection('places').doc(placeId).collection('members').doc(callerId).get();
+    const callerData = callerMemberSnap.data();
+    const callerRole = String(callerData?.role ?? '').toLowerCase();
+    if (callerRole === 'submanager') {
+        const rawManageable = callerData?.manageableCourseIds;
+        const manageableCourseIds: string[] = Array.isArray(rawManageable)
+            ? (rawManageable as string[]).map((id: string) => String(id)).filter(Boolean)
+            : [];
+        if (manageableCourseIds.length === 0) {
+            await demoteSubManagerToMemberIfNoCoursesInternal(db, placeId, callerId);
+            throw new functions.https.HttpsError('permission-denied', '관리할 코스가 없습니다.');
+        }
+        if (!manageableCourseIds.includes(courseId)) {
+            throw new functions.https.HttpsError(
+                'permission-denied',
+                '부매니저는 지정된 관리 코스만 삭제할 수 있습니다.',
+            );
+        }
+    }
+
     const realNow = new Date();
     const todayString = formatDateToSeoul(realNow);
 
@@ -2244,6 +2378,27 @@ export const deleteCourse = functions.https.onCall(async (data, context) => {
     // 2') 코스 문서 삭제 — 정리(예약/집계/오버라이드/등록/정책 등) 완료 후 수행해 고아 데이터 방지
     await courseRef.delete();
 
+    // 8.5) 부매니저: 해당 코스 제거, 관리 코스 0개면 일반 멤버로 전락
+    const membersSnap = await db.collection('places').doc(placeId).collection('members').get();
+    let demotedSubManagers = 0;
+    for (const doc of membersSnap.docs) {
+        const d = doc.data() as any;
+        const role = String(d?.role ?? '').toLowerCase();
+        if (role !== 'submanager') continue;
+        const before = Array.isArray(d?.manageableCourseIds) ? (d.manageableCourseIds as string[]) : [];
+        const next = before.filter((id: string) => String(id ?? '') !== courseId);
+        if (next.length === before.length) continue;
+        const update: any = { updatedAt: admin.firestore.Timestamp.now() };
+        if (next.length === 0) {
+            update.role = 'member';
+            update.manageableCourseIds = [];
+            demotedSubManagers++;
+        } else {
+            update.manageableCourseIds = next;
+        }
+        await doc.ref.update(update);
+    }
+
     // 9) 알림: 해당 코스에 미래 예약이 있던 사용자에게 코스 삭제 안내 (예약 문서는 삭제하지 않고 이력 보존)
     if (futureUserCounts.size > 0) {
         for (const [uid, cnt] of futureUserCounts.entries()) {
@@ -2279,6 +2434,7 @@ export const deleteCourse = functions.https.onCall(async (data, context) => {
         deletedCourseMembers,
         updatedPendingMembers,
         deletedCoursePolicy,
+        demotedSubManagers,
     });
 
     return {
@@ -2315,6 +2471,15 @@ export const deletePlace = functions.https.onCall(async (data, context) => {
     await assertAdminForPlaceUid(callerId, placeId);
 
     const db = admin.firestore();
+    const callerMemberSnap = await db.collection('places').doc(placeId).collection('members').doc(callerId).get();
+    const callerData = callerMemberSnap.data();
+    const callerRole = String(callerData?.role ?? '').toLowerCase();
+    if (callerRole === 'submanager') {
+        throw new functions.https.HttpsError(
+            'permission-denied',
+            '플레이스 삭제는 매니저만 할 수 있습니다.',
+        );
+    }
 
     // place 존재 확인 및 코스 ID 수집
     const placeDoc = await db.collection('places').doc(placeId).get();
@@ -2449,10 +2614,10 @@ export const deleteUserAccount = functions.https.onCall(async (data, context) =>
     const db = admin.firestore();
 
     try {
-        // 0) 관리자이며 소속 플레이스가 있으면 탈퇴 거부 (places/{placeId}/members 기반)
-        const managedPlaceIds = await getManagedPlaceIdsForUid(userId);
-        if (managedPlaceIds.length > 0) {
-            logFunctionError(functionName, new Error('Admin has places'), { userId, placeCount: managedPlaceIds.length });
+        // 0) 전체 매니저 또는 플레이스 소유자이면 탈퇴 거부 (먼저 플레이스 삭제 필요). 코스매니저만이면 허용.
+        const placeIdsRequiringDeleteFirst = await getPlaceIdsWhereUserMustDeletePlaceFirst(userId);
+        if (placeIdsRequiringDeleteFirst.length > 0) {
+            logFunctionError(functionName, new Error('Manager/owner has places'), { userId, placeCount: placeIdsRequiringDeleteFirst.length });
             throw new functions.https.HttpsError(
                 'failed-precondition',
                 '관리자인 경우 소속 플레이스를 먼저 삭제해주세요.',
@@ -2690,6 +2855,54 @@ async function sendPushNotification({
         console.error(`[sendPushNotification] FCM 전송 실패 userId=${userId} error=${error?.message ?? error} code=${error?.code ?? '-'}`);
     }
 }
+
+/**
+ * 코스 문서(정책·이름 등) 변경 시 매니저·코스매니저에게 푸시 알림
+ * 정기 일정(sessions)만 변경된 경우는 updateCourseSchedule에서 이미 알림 전송하므로 스킵
+ */
+export const onCourseDocumentUpdated = functions.firestore
+    .document('places/{placeId}/courses/{courseId}')
+    .onUpdate(async (change: Change<QueryDocumentSnapshot>, context: EventContext) => {
+        const placeId = context.params.placeId as string;
+        const courseId = context.params.courseId as string;
+        const before = change.before.data() || {};
+        const after = change.after.data() || {};
+
+        // sessions만 변경된 경우(정기 일정은 updateCourseSchedule에서 알림 처리) 스킵
+        const allKeys = new Set([...Object.keys(before), ...Object.keys(after)]);
+        const changedKeys = [...allKeys].filter(
+            (k) => JSON.stringify((before as any)[k]) !== JSON.stringify((after as any)[k]),
+        );
+        const onlySessionsAndMeta =
+            changedKeys.length > 0 &&
+            changedKeys.every((k) => k === 'sessions' || k === 'updatedAt') &&
+            changedKeys.includes('sessions');
+        if (onlySessionsAndMeta) return;
+
+        const policyChanged = JSON.stringify(before.policy ?? {}) !== JSON.stringify(after.policy ?? {});
+        const courseName = (after.name as string) || '코스';
+        const title = policyChanged ? '예약 정책 변경' : '코스 정보 변경';
+        const body = policyChanged
+            ? `${courseName} 예약 정책이 변경되었습니다`
+            : `${courseName} 정보가 변경되었습니다`;
+
+        try {
+            const adminUids = await getManagerUidsForPlaceAndCourse(placeId, courseId);
+            for (const uid of adminUids) {
+                await createNotification({
+                    userId: uid,
+                    type: 'system',
+                    title,
+                    body,
+                    placeId,
+                    data: { courseId, placeId, kind: policyChanged ? 'policy-update' : 'course-update' },
+                    isAdmin: true,
+                });
+            }
+        } catch (err: any) {
+            console.error(`[onCourseDocumentUpdated] 관리자 알림 실패:`, err?.message ?? err);
+        }
+    });
 
 /**
  * 알림 생성 시 FCM 푸시 알림도 함께 전송
@@ -3142,8 +3355,7 @@ export const batchMoveReservations = functions.https.onCall(async (data, context
         logFunctionError(functionName, new Error('Unauthenticated'), { data });
         throw new functions.https.HttpsError('unauthenticated', '로그인이 필요합니다.');
     }
-    await assertAdminUid(context.auth.uid);
-
+    const callerId = context.auth.uid;
     const reservationIds = Array.isArray(data?.reservationIds) ? data.reservationIds.map(String) : [];
     const placeId = String(data?.placeId ?? '');
     const newDayOfWeek = Number(data?.newDayOfWeek ?? 0);
@@ -3156,6 +3368,22 @@ export const batchMoveReservations = functions.https.onCall(async (data, context
     if (!placeId || !newStartTime || !newReservedDateString || !Number.isFinite(newDayOfWeek)) {
         throw new functions.https.HttpsError('invalid-argument', 'placeId, newDayOfWeek, newStartTime, newReservedDateString이 필요합니다.');
     }
+
+    await assertAdminForPlaceUid(callerId, placeId);
+    const db = admin.firestore();
+    const callerMemberSnap = await db.collection('places').doc(placeId).collection('members').doc(callerId).get();
+    const callerData = callerMemberSnap.data();
+    const callerRole = String(callerData?.role ?? '').toLowerCase();
+    const rawManageable = callerData?.manageableCourseIds;
+    const manageableCourseIds: string[] = callerRole === 'submanager' && Array.isArray(rawManageable)
+        ? (rawManageable as string[]).map((id: string) => String(id)).filter(Boolean)
+        : [];
+
+    if (callerRole === 'submanager' && manageableCourseIds.length === 0) {
+        await demoteSubManagerToMemberIfNoCoursesInternal(db, placeId, callerId);
+        throw new functions.https.HttpsError('permission-denied', '관리할 코스가 없습니다.');
+    }
+
     if (newDayOfWeek < 1 || newDayOfWeek > 7) {
         throw new functions.https.HttpsError('invalid-argument', 'newDayOfWeek는 1-7(월-일) 사이여야 합니다.');
     }
@@ -3163,8 +3391,6 @@ export const batchMoveReservations = functions.https.onCall(async (data, context
         throw new functions.https.HttpsError('invalid-argument', '한 번에 최대 200건까지 이동할 수 있습니다.');
     }
     parseYYYYMMDD(newReservedDateString); // validate
-
-    const db = admin.firestore();
     const realNow = new Date();
     const todayString = formatDateToSeoul(realNow);
     if (seoulDateOnly(newReservedDateString).getTime() < seoulDateOnly(todayString).getTime()) {
@@ -3201,6 +3427,11 @@ export const batchMoveReservations = functions.https.onCall(async (data, context
 
             if (!courseId || !userId || !oldStartTime || !oldReservedDateString) {
                 results.push({ reservationId: reservationIds[i], success: false, error: '예약 데이터가 올바르지 않습니다.' });
+                continue;
+            }
+
+            if (manageableCourseIds.length > 0 && !manageableCourseIds.includes(courseId)) {
+                results.push({ reservationId: reservationIds[i], success: false, error: '해당 코스에 대한 권한이 없습니다.' });
                 continue;
             }
 
@@ -3379,6 +3610,21 @@ export const batchCancelReservations = functions.https.onCall(async (data, conte
     const nowForComparison = new Date();
     const isAdminForThisPlace = await isAdminForPlaceUid(callerId, placeId);
 
+    let manageableCourseIds: string[] = [];
+    if (isAdminForThisPlace) {
+        const callerMemberSnap = await db.collection('places').doc(placeId).collection('members').doc(callerId).get();
+        const callerData = callerMemberSnap.data();
+        const callerRole = String(callerData?.role ?? '').toLowerCase();
+        const rawManageable = callerData?.manageableCourseIds;
+        if (callerRole === 'submanager' && Array.isArray(rawManageable)) {
+            manageableCourseIds = (rawManageable as string[]).map((id: string) => String(id)).filter(Boolean);
+        }
+        if (callerRole === 'submanager' && manageableCourseIds.length === 0) {
+            await demoteSubManagerToMemberIfNoCoursesInternal(db, placeId, callerId);
+            throw new functions.https.HttpsError('permission-denied', '관리할 코스가 없습니다.');
+        }
+    }
+
     // 본인 예약 1건 취소는 일반 사용자도 허용 (관리자 아님 + 1건 + 예약 소유자 확인은 아래에서)
     const allowSelfCancelSingle = !isAdminForThisPlace && reservationIds.length === 1;
     if (!isAdminForThisPlace && !allowSelfCancelSingle) {
@@ -3420,6 +3666,11 @@ export const batchCancelReservations = functions.https.onCall(async (data, conte
 
         if (!reservationUserId || !courseId || !startTime || !reservedDateString || !Number.isFinite(dayOfWeek)) {
             results[i] = { reservationId: reservationIds[i], success: false, error: '예약 데이터가 올바르지 않습니다.' };
+            continue;
+        }
+
+        if (manageableCourseIds.length > 0 && !manageableCourseIds.includes(courseId)) {
+            results[i] = { reservationId: reservationIds[i], success: false, error: '해당 코스에 대한 권한이 없습니다.' };
             continue;
         }
 
@@ -3700,17 +3951,37 @@ export const registerMemberByAdmin = functions.https.onCall(async (data, context
     await assertAdminForPlaceUid(adminId, placeId);
 
     const db = admin.firestore();
+    const adminMemberSnap = await db.collection('places').doc(placeId).collection('members').doc(adminId).get();
+    const adminMemberData = adminMemberSnap.data();
+    const adminRole = (adminMemberData?.role as string) ?? 'member';
+    const isSubManager = adminRole === 'submanager' || adminRole === 'subManager';
+    const rawManageable = adminMemberData?.manageableCourseIds;
+    const manageableCourseIds: string[] = Array.isArray(rawManageable)
+        ? (rawManageable as string[]).map((id: string) => String(id)).filter(Boolean)
+        : [];
+
+    if (isSubManager && manageableCourseIds.length === 0) {
+        await demoteSubManagerToMemberIfNoCoursesInternal(db, placeId, adminId);
+        throw new functions.https.HttpsError('permission-denied', '관리할 코스가 없습니다.');
+    }
+
+    let courseIds = courseEnrollments.map((e: any) => e?.courseId).filter(Boolean) as string[];
+    if (isSubManager && manageableCourseIds.length > 0) {
+        const allowedSet = new Set(manageableCourseIds);
+        courseIds = courseIds.filter((id) => allowedSet.has(id));
+    }
+    if (courseIds.length === 0) {
+        throw new functions.https.HttpsError('invalid-argument', '최소 1개 이상의 코스를 선택해주세요. (부매니저는 관리 코스만 등록 가능합니다.)');
+    }
+    const allowedCourseIdSet = new Set(courseIds);
+    const courseEnrollmentsFiltered = courseEnrollments.filter((e: any) => e?.courseId && allowedCourseIdSet.has(String(e.courseId)));
+
     const pendingId = `${placeId}_${koreaPhone}`;
     const pendingRef = db.collection('places').doc(placeId).collection('pendingMembers').doc(pendingId);
 
     const pendingSnap = await pendingRef.get();
     if (pendingSnap.exists) {
         throw new functions.https.HttpsError('already-exists', '이미 해당 전화번호로 초대되었습니다.');
-    }
-
-    const courseIds = courseEnrollments.map((e: any) => e?.courseId).filter(Boolean);
-    if (courseIds.length === 0) {
-        throw new functions.https.HttpsError('invalid-argument', '최소 1개 이상의 코스를 선택해주세요.');
     }
 
     const userSnap = await db.collection('users').where('phoneNumber', '==', koreaPhone).limit(1).get();
@@ -3729,15 +4000,25 @@ export const registerMemberByAdmin = functions.https.onCall(async (data, context
 
     if (existingUserId) {
         const memberRef = db.collection('places').doc(placeId).collection('members').doc(existingUserId);
-        await memberRef.set({
-            userId: existingUserId,
-            role: 'member',
-            adminDisplayName: name || null,
-            phoneNumber: koreaPhone,
-            manageableCourseIds: [],
-            createdAt: now,
-            updatedAt: now,
-        }, { merge: true });
+        const existingMemberSnap = await memberRef.get();
+        // 이미 멤버 문서가 있으면 role·manageableCourseIds는 덮어쓰지 않음 (코스매니저 지정 유지)
+        if (existingMemberSnap.exists) {
+            await memberRef.update({
+                adminDisplayName: name || null,
+                phoneNumber: koreaPhone,
+                updatedAt: now,
+            });
+        } else {
+            await memberRef.set({
+                userId: existingUserId,
+                role: 'member',
+                adminDisplayName: name || null,
+                phoneNumber: koreaPhone,
+                manageableCourseIds: [],
+                createdAt: now,
+                updatedAt: now,
+            }, { merge: true });
+        }
 
         // Firestore 'in' 쿼리는 최대 30개 → 30개씩 청크 조회
         const existingCourseIds = new Set<string>();
@@ -3753,7 +4034,7 @@ export const registerMemberByAdmin = functions.https.onCall(async (data, context
         }
 
         const batch = db.batch();
-        for (const ce of courseEnrollments) {
+        for (const ce of courseEnrollmentsFiltered) {
             const courseId = ce?.courseId;
             if (!courseId || existingCourseIds.has(courseId)) continue;
 
@@ -3803,11 +4084,10 @@ export const registerMemberByAdmin = functions.https.onCall(async (data, context
             validUntil: admin.firestore.Timestamp;
             remainingReservations: number;
         }> = [];
-        for (const ce of courseEnrollments) {
+        for (const ce of courseEnrollmentsFiltered) {
             const courseId = ce?.courseId;
             if (!courseId) continue;
             let totalReservations = 10;
-            // validFrom = 등록(초대) 시점과 동일
             const validFrom = enrollmentTime;
             let validUntil = new Date(validFrom);
             validUntil.setFullYear(validUntil.getFullYear() + 1);
@@ -3840,6 +4120,225 @@ export const registerMemberByAdmin = functions.https.onCall(async (data, context
 });
 
 /**
+ * 코스별 부매니저 초대 (pendingMembers에 role: subManager, allowedCourseIds에 courseId 추가/병합)
+ * - 매니저만 호출 가능. 기존 pending이 있으면 allowedCourseIds에만 courseId 추가.
+ */
+export const inviteSubManagerForCourse = functions.https.onCall(async (data, context) => {
+    const functionName = 'inviteSubManagerForCourse';
+    logFunctionStart(functionName, {});
+
+    if (!context.auth?.uid) {
+        throw new functions.https.HttpsError('unauthenticated', '로그인이 필요합니다.');
+    }
+    const adminId = context.auth.uid;
+    const placeId = String(data?.placeId ?? '').trim();
+    const courseId = String(data?.courseId ?? '').trim();
+    const phoneNumber = String(data?.phoneNumber ?? '').trim();
+    const adminDisplayName = (data?.adminDisplayName as string)?.trim() || null;
+
+    if (!placeId || !courseId || !phoneNumber) {
+        throw new functions.https.HttpsError('invalid-argument', 'placeId, courseId, phoneNumber가 필요합니다.');
+    }
+
+    const normalizedPhone = phoneNumber.replace(/\D/g, '');
+    const koreaPhone = normalizedPhone.startsWith('82')
+        ? '0' + normalizedPhone.slice(2)
+        : normalizedPhone.startsWith('0')
+            ? normalizedPhone
+            : '0' + normalizedPhone;
+    if (koreaPhone.length !== 11) {
+        throw new functions.https.HttpsError('invalid-argument', '전화번호 형식이 올바르지 않습니다.');
+    }
+
+    await assertAdminForPlaceUid(adminId, placeId);
+
+    const db = admin.firestore();
+    const callerMemberSnap = await db.collection('places').doc(placeId).collection('members').doc(adminId).get();
+    const callerData = callerMemberSnap.data();
+    const callerRole = String(callerData?.role ?? '').toLowerCase();
+    if (callerRole === 'submanager') {
+        throw new functions.https.HttpsError(
+            'permission-denied',
+            '부매니저 추가는 매니저만 할 수 있습니다.',
+        );
+    }
+
+    const pendingId = `${placeId}_${koreaPhone}`;
+    const pendingRef = db.collection('places').doc(placeId).collection('pendingMembers').doc(pendingId);
+    const now = admin.firestore.Timestamp.now();
+
+    const pendingSnap = await pendingRef.get();
+    if (pendingSnap.exists) {
+        const pendingData = pendingSnap.data() || {};
+        const currentRole = (pendingData.role as string) || 'member';
+        if (currentRole !== 'subManager' && currentRole !== 'submanager') {
+            throw new functions.https.HttpsError(
+                'failed-precondition',
+                '이미 일반 멤버로 초대된 전화번호입니다. 부매니저는 별도 전화번호로 초대해주세요.',
+            );
+        }
+        const beforeAllowed = Array.isArray(pendingData.allowedCourseIds)
+            ? (pendingData.allowedCourseIds as string[]).map((id: string) => String(id)).filter(Boolean)
+            : [];
+        if (beforeAllowed.includes(courseId)) {
+            logFunctionSuccess(functionName, { updated: false, alreadyHasCourse: true });
+            return { success: true, alreadyHasCourse: true };
+        }
+        const nextAllowed = [...beforeAllowed, courseId];
+        await pendingRef.update({
+            role: 'submanager',
+            allowedCourseIds: nextAllowed,
+            ...(adminDisplayName != null ? { adminDisplayName } : {}),
+            updatedAt: now,
+        });
+        logFunctionSuccess(functionName, { updated: true, allowedCourseIds: nextAllowed.length });
+        return { success: true, updated: true };
+    }
+
+    const userSnap = await db.collection('users').where('phoneNumber', '==', koreaPhone).limit(1).get();
+    if (!userSnap.empty) {
+        const existingUserId = userSnap.docs[0].id;
+        const memberRef = db.collection('places').doc(placeId).collection('members').doc(existingUserId);
+        const memberSnap = await memberRef.get();
+        const memberData = memberSnap.data() || {};
+        const currentRole = String((memberData.role as string) ?? 'member').toLowerCase();
+        const beforeIds = Array.isArray(memberData.manageableCourseIds)
+            ? (memberData.manageableCourseIds as string[]).map((id: string) => String(id)).filter(Boolean)
+            : [];
+        if (beforeIds.includes(courseId)) {
+            logFunctionSuccess(functionName, { existingMember: true, alreadyHasCourse: true });
+            return { success: true, existingMember: true, alreadyHasCourse: true };
+        }
+        const nextIds = [...beforeIds, courseId];
+        const updateData: Record<string, unknown> = {
+            manageableCourseIds: nextIds,
+            updatedAt: now,
+        };
+        if (adminDisplayName != null) (updateData as any).adminDisplayName = adminDisplayName;
+        if (currentRole === 'member') {
+            (updateData as any).role = 'submanager';
+        }
+        await memberRef.update(updateData);
+        logFunctionSuccess(functionName, {
+            existingMember: true,
+            manageableCourseIds: nextIds.length,
+            promoted: currentRole === 'member',
+        });
+        return { success: true, existingMember: true, promoted: currentRole === 'member' };
+    }
+
+    await pendingRef.set({
+        placeId,
+        phoneNumber: koreaPhone,
+        invitedBy: adminId,
+        role: 'submanager',
+        allowedCourseIds: [courseId],
+        adminDisplayName: adminDisplayName || null,
+        createdAt: now,
+    });
+    logFunctionSuccess(functionName, { pending: true });
+    return { success: true, pending: true };
+});
+
+/**
+ * 코스별 부매니저 지정 취소 (해당 코스를 manageableCourseIds / allowedCourseIds에서 제거)
+ * - 매니저 또는 해당 코스 관리 권한이 있는 부매니저만 호출 가능
+ */
+export const removeSubManagerFromCourse = functions.https.onCall(async (data, context) => {
+    const functionName = 'removeSubManagerFromCourse';
+    logFunctionStart(functionName, {});
+
+    if (!context.auth?.uid) {
+        throw new functions.https.HttpsError('unauthenticated', '로그인이 필요합니다.');
+    }
+    const callerId = context.auth.uid;
+    const placeId = String(data?.placeId ?? '').trim();
+    const courseId = String(data?.courseId ?? '').trim();
+    const targetUserId = String(data?.targetUserId ?? '').trim();
+
+    if (!placeId || !courseId || !targetUserId) {
+        throw new functions.https.HttpsError('invalid-argument', 'placeId, courseId, targetUserId가 필요합니다.');
+    }
+
+    await assertAdminForPlaceUid(callerId, placeId);
+
+    const db = admin.firestore();
+    const callerMemberSnap = await db.collection('places').doc(placeId).collection('members').doc(callerId).get();
+    const callerData = callerMemberSnap.data();
+    const callerRole = String(callerData?.role ?? '').toLowerCase();
+    const isSubManager = callerRole === 'submanager';
+    const rawManageable = callerData?.manageableCourseIds;
+    const manageableCourseIds: string[] = Array.isArray(rawManageable)
+        ? (rawManageable as string[]).map((id: string) => String(id)).filter(Boolean)
+        : [];
+    if (isSubManager) {
+        if (manageableCourseIds.length === 0) {
+            await demoteSubManagerToMemberIfNoCoursesInternal(db, placeId, callerId);
+            throw new functions.https.HttpsError('permission-denied', '관리할 코스가 없습니다.');
+        }
+        if (!manageableCourseIds.includes(courseId)) {
+            throw new functions.https.HttpsError(
+                'permission-denied',
+                '이 코스에 대한 관리 권한이 없습니다.',
+            );
+        }
+    }
+
+    const now = admin.firestore.Timestamp.now();
+
+    if (targetUserId.startsWith('pending_')) {
+        const pendingDocId = targetUserId.slice('pending_'.length);
+        const pendingRef = db.collection('places').doc(placeId).collection('pendingMembers').doc(pendingDocId);
+        const pendingSnap = await pendingRef.get();
+        if (!pendingSnap.exists) {
+            return { success: true, removed: false, reason: 'pending_not_found' };
+        }
+        const pendingData = pendingSnap.data() || {};
+        const beforeAllowed = Array.isArray(pendingData.allowedCourseIds)
+            ? (pendingData.allowedCourseIds as string[]).map((id: string) => String(id)).filter(Boolean)
+            : [];
+        const nextAllowed = beforeAllowed.filter((id: string) => String(id) !== courseId);
+        if (nextAllowed.length === beforeAllowed.length) {
+            return { success: true, removed: false, reason: 'course_not_in_list' };
+        }
+        await pendingRef.update({
+            allowedCourseIds: nextAllowed,
+            updatedAt: now,
+        });
+        logFunctionSuccess(functionName, { pending: true, remainingCourses: nextAllowed.length });
+        return { success: true, removed: true, pending: true };
+    }
+
+    const memberRef = db.collection('places').doc(placeId).collection('members').doc(targetUserId);
+    const memberSnap = await memberRef.get();
+    if (!memberSnap.exists) {
+        return { success: true, removed: false, reason: 'member_not_found' };
+    }
+    const memberData = memberSnap.data() || {};
+    const role = String(memberData.role ?? '').toLowerCase();
+    if (role !== 'submanager') {
+        return { success: true, removed: false, reason: 'not_submanager' };
+    }
+    const before = Array.isArray(memberData.manageableCourseIds)
+        ? (memberData.manageableCourseIds as string[]).map((id: string) => String(id)).filter(Boolean)
+        : [];
+    const next = before.filter((id: string) => String(id) !== courseId);
+    if (next.length === before.length) {
+        return { success: true, removed: false, reason: 'course_not_in_list' };
+    }
+    const update: { manageableCourseIds: string[]; role?: string; updatedAt: admin.firestore.Timestamp } = {
+        manageableCourseIds: next.length > 0 ? next : [],
+        updatedAt: now,
+    };
+    if (next.length === 0) {
+        update.role = 'member';
+    }
+    await memberRef.update(update);
+    logFunctionSuccess(functionName, { removed: true, remainingCourses: next.length, demoted: next.length === 0 });
+    return { success: true, removed: true, demoted: next.length === 0 };
+});
+
+/**
  * 기존 멤버(place/members 소속)에게 코스 추가 — 서버에서 enrollment 생성 (클라이언트 permission-denied 회피)
  */
 export const addEnrollmentForExistingMember = functions.https.onCall(async (data, context) => {
@@ -3862,6 +4361,29 @@ export const addEnrollmentForExistingMember = functions.https.onCall(async (data
     await assertAdminForPlaceUid(callerId, placeId);
 
     const db = admin.firestore();
+    const callerMemberSnap = await db.collection('places').doc(placeId).collection('members').doc(callerId).get();
+    const callerData = callerMemberSnap.data();
+    const callerRole = String(callerData?.role ?? '').toLowerCase();
+    const isSubManager = callerRole === 'submanager';
+    const rawManageable = callerData?.manageableCourseIds;
+    const manageableCourseIds: string[] = Array.isArray(rawManageable)
+        ? (rawManageable as string[]).map((id: string) => String(id)).filter(Boolean)
+        : [];
+
+    if (isSubManager && manageableCourseIds.length === 0) {
+        await demoteSubManagerToMemberIfNoCoursesInternal(db, placeId, callerId);
+        throw new functions.https.HttpsError('permission-denied', '관리할 코스가 없습니다.');
+    }
+
+    let courseEnrollmentsFiltered = courseEnrollments;
+    if (isSubManager && manageableCourseIds.length > 0) {
+        const allowedSet = new Set(manageableCourseIds);
+        courseEnrollmentsFiltered = courseEnrollments.filter((e: any) => e?.courseId && allowedSet.has(String(e.courseId)));
+    }
+    if (courseEnrollmentsFiltered.length === 0) {
+        throw new functions.https.HttpsError('invalid-argument', '최소 1개 이상의 코스를 선택해주세요. (부매니저는 관리 코스만 등록 가능합니다.)');
+    }
+
     const now = admin.firestore.Timestamp.now();
     const enrollmentTime = now.toDate();
 
@@ -3872,7 +4394,7 @@ export const addEnrollmentForExistingMember = functions.https.onCall(async (data
         return isNaN(d.getTime()) ? enrollmentTime : d;
     };
 
-    const courseIds = courseEnrollments.map((e: any) => e?.courseId).filter(Boolean);
+    const courseIds = courseEnrollmentsFiltered.map((e: any) => e?.courseId).filter(Boolean);
     const existingCourseIds = new Set<string>();
     const IN_LIMIT = 30;
     for (let i = 0; i < courseIds.length; i += IN_LIMIT) {
@@ -3887,7 +4409,7 @@ export const addEnrollmentForExistingMember = functions.https.onCall(async (data
 
     const batch = db.batch();
     let added = 0;
-    for (const ce of courseEnrollments) {
+    for (const ce of courseEnrollmentsFiltered) {
         const courseId = ce?.courseId;
         if (!courseId || existingCourseIds.has(courseId)) continue;
 
@@ -3928,6 +4450,48 @@ export const addEnrollmentForExistingMember = functions.https.onCall(async (data
     await batch.commit();
     logFunctionSuccess(functionName, { userId, placeId, added });
     return { success: true, added };
+});
+
+/**
+ * 부매니저가 관리 코스가 0개일 때 일반 멤버로 전락 (클라이언트에서 호출)
+ * - caller가 해당 플레이스의 submanager이고 manageableCourseIds가 비어 있으면 role을 member로 변경
+ */
+export const demoteSubManagerToMemberIfNoCourses = functions.https.onCall(async (data, context) => {
+    const functionName = 'demoteSubManagerToMemberIfNoCourses';
+    logFunctionStart(functionName, {});
+
+    if (!context.auth?.uid) {
+        throw new functions.https.HttpsError('unauthenticated', '로그인이 필요합니다.');
+    }
+    const uid = context.auth.uid;
+    const placeId = String(data?.placeId ?? '').trim();
+    if (!placeId) {
+        throw new functions.https.HttpsError('invalid-argument', 'placeId가 필요합니다.');
+    }
+
+    const db = admin.firestore();
+    const memberRef = db.collection('places').doc(placeId).collection('members').doc(uid);
+    const snap = await memberRef.get();
+    if (!snap.exists) {
+        return { demoted: false, reason: 'no_member_doc' };
+    }
+    const d = snap.data() as any;
+    const role = String(d?.role ?? '').toLowerCase();
+    if (role !== 'submanager') {
+        return { demoted: false, reason: 'not_submanager' };
+    }
+    const manageableCourseIds = Array.isArray(d?.manageableCourseIds) ? (d.manageableCourseIds as string[]) : [];
+    if (manageableCourseIds.length > 0) {
+        return { demoted: false, reason: 'has_courses' };
+    }
+
+    await memberRef.update({
+        role: 'member',
+        manageableCourseIds: [],
+        updatedAt: admin.firestore.Timestamp.now(),
+    });
+    logFunctionSuccess(functionName, { uid, placeId });
+    return { demoted: true };
 });
 
 /**

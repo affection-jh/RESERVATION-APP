@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import '../../../providers/auth_provider.dart';
 import '../../../providers/course_provider.dart';
 import '../../../providers/member_provider.dart';
 import '../../../providers/place_provider.dart';
@@ -922,6 +923,7 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
                   const SizedBox(height: 24),
 
                   // 코스 선택 섹션 (restrictedCourseId가 없을 때만 표시)
+                  // 코스매니저(부매니저)일 때는 관리 코스만 표시
                   if (widget.restrictedCourseId == null)
                     Builder(
                       builder: (context) {
@@ -929,7 +931,28 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
                           context,
                           listen: false,
                         );
-                        if (courseProvider.courses.isEmpty) {
+                        final placeProvider = Provider.of<PlaceProvider>(
+                          context,
+                          listen: false,
+                        );
+                        final authProvider = Provider.of<AuthProvider>(
+                          context,
+                          listen: false,
+                        );
+                        final placeId = placeProvider.currentPlace?.id;
+                        final isSubManager = placeId != null &&
+                            authProvider.isSubManagerForPlace(placeId);
+                        final placeMember = placeId != null
+                            ? authProvider.getPlaceMemberForPlace(placeId)
+                            : null;
+                        final coursesToShow = isSubManager && placeMember != null
+                            ? courseProvider.courses
+                                .where((c) =>
+                                    placeMember.manageableCourseIds
+                                        .contains(c.id))
+                                .toList()
+                            : courseProvider.courses;
+                        if (coursesToShow.isEmpty) {
                           return const SizedBox.shrink();
                         }
 
@@ -962,7 +985,7 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
                               spacing: 8,
                               runSpacing: 8,
                               children:
-                                  courseProvider.courses.map((course) {
+                                  coursesToShow.map((course) {
                                     final isSelected = _selectedCourseIds
                                         .contains(course.id);
                                     // restrictedCourseId가 있으면 선택/해제 불가 (항상 선택된 상태)
@@ -1122,6 +1145,7 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
                   if (widget.restrictedCourseId == null)
                     const SizedBox(height: 24),
                   // 선택된 코스별 설정 UI (restrictedCourseId가 있어도 표시)
+                  // 코스매니저일 때는 관리 코스만 표시
                   if (_selectedCourseIds.isNotEmpty)
                     Builder(
                       builder: (context) {
@@ -1129,9 +1153,31 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
                           context,
                           listen: false,
                         );
+                        final placeProvider = Provider.of<PlaceProvider>(
+                          context,
+                          listen: false,
+                        );
+                        final authProvider = Provider.of<AuthProvider>(
+                          context,
+                          listen: false,
+                        );
+                        final placeId = placeProvider.currentPlace?.id;
+                        final isSubManager = placeId != null &&
+                            authProvider.isSubManagerForPlace(placeId);
+                        final allowedIds = isSubManager
+                            ? (authProvider
+                                    .getPlaceMemberForPlace(placeId)
+                                    ?.manageableCourseIds ??
+                                <String>[])
+                            : null;
+                        final courseIdsToShow = allowedIds != null
+                            ? _selectedCourseIds
+                                .where((id) => allowedIds.contains(id))
+                                .toList()
+                            : _selectedCourseIds.toList();
                         return Column(
                           children: [
-                            ..._selectedCourseIds.map((courseId) {
+                            ...courseIdsToShow.map((courseId) {
                               final course = courseProvider.courses.firstWhere(
                                 (c) => c.id == courseId,
                               );

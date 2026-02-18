@@ -1,7 +1,7 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import { logFunctionStart, logFunctionSuccess, logFunctionError } from './logger';
-import { assertAdminForPlaceUid } from './admin_auth';
+import { assertAdminForPlaceUid, demoteSubManagerToMemberIfNoCoursesInternal, getManagerUidsForPlaceAndCourse } from './admin_auth';
 
 /** 알림 본문용 날짜 포맷: "2026년 2월 17일" */
 function formatDateKr(dateStr: string): string {
@@ -61,6 +61,25 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
     await assertAdminForPlaceUid(callerId, placeId);
 
     const db = admin.firestore();
+    const callerMemberSnap = await db.collection('places').doc(placeId).collection('members').doc(callerId).get();
+    const callerData = callerMemberSnap.data();
+    const callerRole = String(callerData?.role ?? '').toLowerCase();
+    if (callerRole === 'submanager') {
+        const rawManageable = callerData?.manageableCourseIds;
+        const manageableCourseIds: string[] = Array.isArray(rawManageable)
+            ? (rawManageable as string[]).map((id: string) => String(id)).filter(Boolean)
+            : [];
+        if (manageableCourseIds.length === 0) {
+            await demoteSubManagerToMemberIfNoCoursesInternal(db, placeId, callerId);
+            throw new functions.https.HttpsError('permission-denied', '관리할 코스가 없습니다.');
+        }
+        if (!manageableCourseIds.includes(courseId)) {
+            throw new functions.https.HttpsError(
+                'permission-denied',
+                '부매니저는 지정된 관리 코스의 비정기 일정만 편집할 수 있습니다.',
+            );
+        }
+    }
 
     // add와 cancel은 별도 문서: add = courseId_date_startTime, cancel = courseId_date_startTime_cancel
     const baseId = `${courseId}_${date}_${startTime}`;
@@ -220,6 +239,20 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
                         isAdmin: false,
                     });
                 }
+                // 매니저·코스매니저에게도 푸시 알림 (해당 코스 관리자)
+                const adminUids = await getManagerUidsForPlaceAndCourse(placeId, courseId);
+                for (const uid of adminUids) {
+                    if (uid === callerId) continue;
+                    await createNotification({
+                        userId: uid,
+                        type: 'system',
+                        title: '비정기 일정 변경',
+                        body: `${formatDateTimeKr(effDate, effStartTime)} 세션이 취소되었습니다`,
+                        placeId,
+                        data: { courseId, placeId, date: effDate, startTime: effStartTime, kind: 'override-delete' },
+                        isAdmin: true,
+                    });
+                }
             } catch (error) {
                 console.error(`[upsertCourseOverride] Error creating notifications (delete):`, error);
             }
@@ -351,6 +384,20 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
                         isAdmin: false,
                     });
                 }
+                // 매니저·코스매니저에게도 푸시 알림 (해당 코스 관리자)
+                const adminUids = await getManagerUidsForPlaceAndCourse(placeId, courseId);
+                for (const uid of adminUids) {
+                    if (uid === callerId) continue;
+                    await createNotification({
+                        userId: uid,
+                        type: 'system',
+                        title: '비정기 일정 변경',
+                        body: `${formatDateTimeKr(date, startTime)} 세션이 취소되었습니다`,
+                        placeId,
+                        data: { courseId, placeId, date, startTime, kind: 'override-cancel' },
+                        isAdmin: true,
+                    });
+                }
             } catch (error) {
                 console.error(`[upsertCourseOverride] Error creating notifications:`, error);
             }
@@ -390,6 +437,26 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
     await overrideRef.set(overrideData, { merge: true });
 
     // 비정기일정 추가 시 수강생 알림 제거 (요청사항: 알림 보내지 않음)
+    // 매니저·코스매니저에게는 비정기 일정 추가 알림 전송 (푸시 수신)
+    if (sendNotification && !isCancelled) {
+        try {
+            const adminUids = await getManagerUidsForPlaceAndCourse(placeId, courseId);
+            for (const uid of adminUids) {
+                if (uid === callerId) continue;
+                await createNotification({
+                    userId: uid,
+                    type: 'system',
+                    title: '비정기 일정 추가',
+                    body: `${formatDateTimeKr(date, startTime)} 세션이 추가되었습니다`,
+                    placeId,
+                    data: { courseId, placeId, date, startTime, kind: 'override-add' },
+                    isAdmin: true,
+                });
+            }
+        } catch (error) {
+            console.error(`[upsertCourseOverride] Error creating admin notifications (add):`, error);
+        }
+    }
 
     logFunctionSuccess(functionName, { overrideId: finalOverrideId, action, isCancelled });
     return { success: true, overrideId: finalOverrideId };

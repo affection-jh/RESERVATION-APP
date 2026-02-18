@@ -174,10 +174,10 @@ class Chip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
         color: backgroundColor ?? AppColors.backgroundLight,
-        borderRadius: BorderRadius.circular(99),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Text(
         text,

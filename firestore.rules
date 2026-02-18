@@ -15,17 +15,35 @@ service cloud.firestore {
     }
 
     // places/{placeId}/members/{uid} 기준: manager / submanager / member 중 매니저·부매니저만
-    // (어드민 유저 개념 없음, 전부 manager-submanager-일반 member로만 동작)
+    // (서버에서 role이 'subManager'로 저장되는 경우도 허용)
     function isPlaceManager(placeId) {
       return signedIn() &&
         exists(/databases/$(database)/documents/places/$(placeId)/members/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/places/$(placeId)/members/$(request.auth.uid)).data.role in ['manager', 'submanager'];
+        get(/databases/$(database)/documents/places/$(placeId)/members/$(request.auth.uid)).data.role in ['manager', 'submanager', 'subManager'];
     }
 
     // 플레이스 소유자: place.adminId == request.auth.uid (place 생성 시 설정)
     function isPlaceOwner(placeId) {
       return signedIn() &&
         get(/databases/$(database)/documents/places/$(placeId)).data.adminId == request.auth.uid;
+    }
+
+    // 매니저만 (부매니저 제외) — 플레이스 문서 수정/삭제용
+    function isPlaceManagerOnly(placeId) {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/places/$(placeId)/members/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/places/$(placeId)/members/$(request.auth.uid)).data.role == 'manager';
+    }
+
+    // 코스 쓰기: 소유자, 또는 매니저(전체), 또는 부매니저(manageableCourseIds에 해당 코스만)
+    // exists()를 먼저 검사해야 비멤버일 때 get() 호출로 인한 permission-denied 방지
+    function canWriteCourse(placeId, courseId) {
+      let memberPath = /databases/$(database)/documents/places/$(placeId)/members/$(request.auth.uid);
+      return isPlaceOwner(placeId) || (signedIn() &&
+        exists(memberPath) &&
+        (get(memberPath).data.role == 'manager' ||
+         (get(memberPath).data.role in ['submanager', 'subManager'] &&
+          courseId in get(memberPath).data.get('manageableCourseIds', []))));
     }
 
     // 기본: 전부 거부
@@ -64,8 +82,8 @@ service cloud.firestore {
       allow read: if true;
       // place 생성: 로그인 사용자가 자신을 adminId로 설정해 생성 (생성 후 members에 manager로 추가는 앱/서버에서)
       allow create: if signedIn() && request.resource.data.adminId == request.auth.uid;
-      // place 수정/삭제: 해당 플레이스 소유자(adminId) 또는 매니저/부매니저만
-      allow update, delete: if isPlaceOwner(placeId) || isPlaceManager(placeId);
+      // place 수정/삭제: 소유자 또는 매니저만 (부매니저는 플레이스 문서 수정 불가)
+      allow update, delete: if isPlaceOwner(placeId) || isPlaceManagerOnly(placeId);
 
       // ==================== Places 서브컬렉션: Members ====================
       // places/{placeId}/members/{uid} — 매니저·부매니저·일반멤버 통일
@@ -92,7 +110,7 @@ service cloud.firestore {
       // ==================== Places 서브컬렉션: Courses ====================
       match /courses/{courseId} {
         allow read: if true;
-        allow create, update, delete: if isPlaceManager(placeId);
+        allow create, update, delete: if canWriteCourse(placeId, courseId);
       }
 
       // ==================== Places 서브컬렉션: Stories ====================
@@ -174,11 +192,12 @@ service cloud.firestore {
     }
 
     // ==================== Course Policies ====================
+    // 부매니저는 manageableCourseIds에 해당하는 코스의 정책만 수정 가능
     match /coursePolicies/{courseId} {
       allow read: if true;
-      allow create: if request.resource.data.placeId != null && isPlaceManager(request.resource.data.placeId);
-      allow update, delete: if (resource.data.placeId != null && isPlaceManager(resource.data.placeId)) ||
-        (request.resource.data.placeId != null && isPlaceManager(request.resource.data.placeId));
+      allow create: if request.resource.data.placeId != null && canWriteCourse(request.resource.data.placeId, courseId);
+      allow update, delete: if (resource.data.placeId != null && canWriteCourse(resource.data.placeId, courseId)) ||
+        (request.resource.data.placeId != null && canWriteCourse(request.resource.data.placeId, courseId));
     }
 
     // ==================== Booking Week Opens (매니저 "미리 예약 열기") ====================
@@ -208,10 +227,13 @@ service cloud.firestore {
     }
 
     // ==================== Course Overrides (비정기 일정) ====================
+    // 부매니저: manageableCourseIds에 해당하는 코스의 오버라이드만 쓰기 가능
     match /courseOverrides/{overrideId} {
       allow read: if true;
-      allow create, update, delete: if (resource.data.placeId != null && isPlaceManager(resource.data.placeId)) ||
-        (request.resource.data.placeId != null && isPlaceManager(request.resource.data.placeId));
+      allow create: if request.resource.data.placeId != null && request.resource.data.courseId != null &&
+        canWriteCourse(request.resource.data.placeId, request.resource.data.courseId);
+      allow update, delete: if resource.data.placeId != null && resource.data.courseId != null &&
+        canWriteCourse(resource.data.placeId, resource.data.courseId);
     }
   }
 }

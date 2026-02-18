@@ -31,7 +31,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 
 /// 앱 전역 상수 (버전 등)
 abstract class AppConfig {
-  static const String appVersion = '1.0.1';
+  static const String appVersion = '1.0.2';
 }
 
 // 백그라운드 메시지 핸들러 (최상위 함수로 선언, 앱이 백그라운드/종료일 때만 호출)

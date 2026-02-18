@@ -65,10 +65,15 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
   @override
   void initState() {
     super.initState();
-    Provider.of<MemberProvider>(
-      context,
-      listen: false,
-    ).setPlaceId(widget.placeId);
+    // setPlaceId는 notifyListeners()를 호출하므로 빌드 중 호출 시 setState during build 오류 발생.
+    // 첫 프레임 이후에 실행하도록 지연.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Provider.of<MemberProvider>(
+        context,
+        listen: false,
+      ).setPlaceId(widget.placeId);
+    });
     _listenReservations();
     _listenReservationOperationEvents();
   }
@@ -563,7 +568,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                 memberProvider.setPlaceId(widget.placeId);
                 memberProvider.setSelectedCourseId(widget.course.id);
                 memberProvider.setShowPending(true);
-                MemberSelectionSidePanel.show(
+                MemberSelectionSidePanel.showForReservation(
                   context: context,
                   placeId: widget.placeId,
                   course: widget.course,

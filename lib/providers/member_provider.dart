@@ -37,12 +37,24 @@ class MemberProvider with ChangeNotifier {
   bool _isLoading = true;
   String? _error;
   final Set<String> _deletingMemberIds = {};
+  final Set<String> _processingMemberIds = {};
+  /// 코스별 "부매니저 추가 중" userId 목록 (로컬에서 카드 먼저 보여주고 로딩)
+  final Map<String, Set<String>> _pendingSubManagerAdds = {};
 
   StreamSubscription<(List<PlaceMember>, DocumentSnapshot?)>?
   _placeMembersSegmentSub;
   StreamSubscription<List<PendingMember>>? _pendingSub;
   StreamSubscription<List<CourseEnrollment>>? _enrollmentsSub;
   Set<String> _lastEnrollmentUserIds = {};
+
+  /// 부매니저 모드: 전체 멤버 스트림 미구독, 코스별 30명 롤링 윈도우
+  bool _isSubManagerForPlace = false;
+  List<String> _courseOnlyUserIds = [];
+  int _courseOnlySegmentIndex = 0;
+  List<PlaceMember> _courseOnlyCachedBefore = [];
+  List<PlaceMember> _courseOnlyStreamed = [];
+  List<PlaceMember> _courseOnlyLoadedAfter = [];
+  StreamSubscription<List<PlaceMember>>? _courseOnlyMembersSub;
 
   // 멤버관리 화면 UI 상태 (Provider 일괄 관리)
   String _searchQuery = '';
@@ -57,11 +69,21 @@ class MemberProvider with ChangeNotifier {
   String? get placeId => _placeId;
   bool get isLoading => _isLoading;
   bool get isLoadingMore => _isLoadingMore;
-  bool get hasMoreMembers => _hasMoreMembers;
+  bool get hasMoreMembers {
+    if (_isSubManagerForPlace) {
+      final total =
+          _courseOnlyCachedBefore.length +
+          _courseOnlyStreamed.length +
+          _courseOnlyLoadedAfter.length;
+      return total < _courseOnlyUserIds.length;
+    }
+    return _hasMoreMembers;
+  }
   String? get error => _error;
   String? get selectedCourseId => _selectedCourseId;
   bool get showPending => _showPending;
   Set<String> get deletingMemberIds => Set.unmodifiable(_deletingMemberIds);
+  Set<String> get processingMemberIds => Set.unmodifiable(_processingMemberIds);
 
   String get searchQuery => _searchQuery;
   int get selectedTab => _selectedTab;
@@ -105,8 +127,34 @@ class MemberProvider with ChangeNotifier {
     }).toList();
   }
 
-  /// 전체 멤버: 캐시(이전 세그먼트) + 스트림(현재 세그먼트) + 로드(이후) + pending
+  bool get isSubManagerForPlace => _isSubManagerForPlace;
+
+  /// 전체 멤버: 캐시(이전 세그먼트) + 스트림(현재 세그먼트) + 로드(이후) + pending.
+  /// 부매니저 모드: 코스별 30명 롤링 윈도우(cached+streamed+loaded) + 해당 코스 pending.
   List<MemberView> get allMembers {
+    if (_isSubManagerForPlace) {
+      final byUser = <String, List<String>>{};
+      for (final e in _enrollments) {
+        byUser.putIfAbsent(e.userId, () => []).add(e.courseId);
+      }
+      final placeViews = _placeMembersToViews(
+        [
+          ..._courseOnlyCachedBefore,
+          ..._courseOnlyStreamed,
+          ..._courseOnlyLoadedAfter,
+        ],
+        byUser,
+      );
+      final courseIds = _selectedCourseIds.toList();
+      final pendingForCourse = _pendingToViews().where(
+        (v) => courseIds.isEmpty ||
+            v.manageableCourseIds.any((id) => courseIds.contains(id)),
+      ).toList();
+      final combined = [...placeViews, ...pendingForCourse];
+      return combined
+          .map((v) => v.copyWith(enrolledCourseIds: byUser[v.userId] ?? []))
+          .toList();
+    }
     final byUser = <String, List<String>>{};
     for (final e in _enrollments) {
       byUser.putIfAbsent(e.userId, () => []).add(e.courseId);
@@ -181,9 +229,24 @@ class MemberProvider with ChangeNotifier {
     return list;
   }
 
-  /// 코스별 탭용: 선택된 코스들의 멤버 (검색·정렬 적용)
+  /// 코스별 탭용: 선택된 코스들의 멤버 (검색·정렬 적용).
+  /// 부매니저 모드: 30명 롤링 윈도우로 로드한 allMembers 기준.
   List<MemberView> get listForCourseTab {
     if (_selectedCourseIds.isEmpty) return [];
+    if (_isSubManagerForPlace) {
+      var list = allMembers;
+      if (_selectedCourseIds.length == 1) {
+        final courseId = _selectedCourseIds.first;
+        final byUser = <String, CourseEnrollment>{};
+        for (final e in _enrollments) {
+          if (e.courseId == courseId) byUser[e.userId] = e;
+        }
+        list = list.map((v) => v.copyWith(enrollment: byUser[v.userId])).toList();
+      }
+      list = _filteredBySearch(list);
+      list = _sortCourseMembers(list);
+      return list;
+    }
     if (_selectedCourseIds.length == 1) {
       final courseId = _selectedCourseIds.first;
       var list = getMembersForCourse(courseId);
@@ -211,7 +274,6 @@ class MemberProvider with ChangeNotifier {
           return hasCourse;
         }).toList();
     var list = _filteredBySearch(filtered);
-    // 다중 코스 선택 시 코스별 enrollment 없음 → 이름 순 정렬
     list.sort((a, b) => a.adminDisplayName.compareTo(b.adminDisplayName));
     return list;
   }
@@ -433,6 +495,7 @@ class MemberProvider with ChangeNotifier {
     }
     _selectedCourseIds.clear();
     _selectedCourseIds.add(courseId);
+    if (_isSubManagerForPlace) _updateCourseOnlyMembers();
     notifyListeners();
     if (save && _placeId != null && _placeId!.isNotEmpty) {
       StorageService()
@@ -471,10 +534,104 @@ class MemberProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  /// 부매니저 모드: 선택 코스(들)의 userId 목록 갱신 후 0번 세그먼트 구독 (30명 롤링 윈도우)
+  void _updateCourseOnlyMembers() {
+    final placeId = _placeId;
+    if (placeId == null ||
+        placeId.isEmpty ||
+        _selectedCourseIds.isEmpty ||
+        !_isSubManagerForPlace) {
+      _courseOnlyUserIds = [];
+      _courseOnlySegmentIndex = 0;
+      _courseOnlyCachedBefore = [];
+      _courseOnlyStreamed = [];
+      _courseOnlyLoadedAfter = [];
+      _courseOnlyMembersSub?.cancel();
+      _courseOnlyMembersSub = null;
+      notifyListeners();
+      return;
+    }
+    final courseIds = _selectedCourseIds.toList();
+    final userIds = <String>{};
+    for (final e in _enrollments) {
+      if (courseIds.contains(e.courseId)) userIds.add(e.userId);
+    }
+    _courseOnlyUserIds = userIds.toList()..sort();
+    _courseOnlySegmentIndex = 0;
+    _courseOnlyCachedBefore = [];
+    _courseOnlyStreamed = [];
+    _courseOnlyLoadedAfter = [];
+    _courseOnlyMembersSub?.cancel();
+    _courseOnlyMembersSub = null;
+    _subscribeCourseOnlySegment();
+    notifyListeners();
+  }
+
+  /// 부매니저: 현재 세그먼트(30명) 구독
+  void _subscribeCourseOnlySegment() {
+    final placeId = _placeId;
+    if (placeId == null ||
+        placeId.isEmpty ||
+        _courseOnlyUserIds.isEmpty ||
+        !_isSubManagerForPlace) return;
+    final start = _courseOnlySegmentIndex * _segmentSize;
+    if (start >= _courseOnlyUserIds.length) return;
+    final segmentUserIds =
+        _courseOnlyUserIds.skip(start).take(_segmentSize).toList();
+    _courseOnlyMembersSub = _service
+        .watchPlaceMembersByUserIds(placeId, segmentUserIds)
+        .listen(
+          (list) {
+            _courseOnlyStreamed = list;
+            notifyListeners();
+          },
+          onError: (e) {
+            debugPrint('[MemberProvider] courseOnly stream error: $e');
+          },
+        );
+  }
+
+  /// 부매니저: 스크롤에 따라 현재 세그먼트 전환 (30명 롤링 윈도우)
+  void _switchCourseOnlySegmentTo(int newSegmentIndex) {
+    final placeId = _placeId;
+    if (placeId == null || placeId.isEmpty || !_isSubManagerForPlace) return;
+    if (newSegmentIndex < 0 ||
+        newSegmentIndex * _segmentSize >= _courseOnlyUserIds.length) return;
+    if (newSegmentIndex == _courseOnlySegmentIndex) return;
+
+    _courseOnlyMembersSub?.cancel();
+    _courseOnlyMembersSub = null;
+
+    if (newSegmentIndex > _courseOnlySegmentIndex) {
+      _courseOnlyCachedBefore = [
+        ..._courseOnlyCachedBefore,
+        ..._courseOnlyStreamed,
+      ];
+      _courseOnlyStreamed = [];
+    } else {
+      final dropCount = (_courseOnlySegmentIndex - newSegmentIndex) * _segmentSize;
+      if (_courseOnlyCachedBefore.length >= dropCount) {
+        _courseOnlyCachedBefore = _courseOnlyCachedBefore.sublist(
+          0,
+          _courseOnlyCachedBefore.length - dropCount,
+        );
+      } else {
+        _courseOnlyCachedBefore = [];
+      }
+      _courseOnlyStreamed = [];
+    }
+
+    _courseOnlySegmentIndex = newSegmentIndex;
+    _subscribeCourseOnlySegment();
+    notifyListeners();
+  }
+
   /// 현재 로드된 멤버 기준 enrollments 구독. streamed(현재 화면) 우선, 최대 30명.
   void _refreshEnrollmentsSubscription() {
     final placeId = _placeId;
     if (placeId == null || placeId.isEmpty) return;
+
+    if (_isSubManagerForPlace) return;
 
     // 현재 세그먼트(streamed) 우선 → 상단 30명에 반드시 enrollment 포함
     final userIds = <String>[];
@@ -529,6 +686,14 @@ class MemberProvider with ChangeNotifier {
     _visibleRangeDebounce?.cancel();
     _visibleRangeDebounce = Timer(Duration(milliseconds: _debounceMs), () {
       _visibleRangeDebounce = null;
+      if (_isSubManagerForPlace) {
+        final segmentIndex = (firstVisibleIndex / _segmentSize).floor();
+        if (segmentIndex != _courseOnlySegmentIndex &&
+            segmentIndex * _segmentSize < _courseOnlyUserIds.length) {
+          _switchCourseOnlySegmentTo(segmentIndex);
+        }
+        return;
+      }
       final segmentIndex = (firstVisibleIndex / _segmentSize).floor();
       if (segmentIndex != _currentSegmentIndex) {
         _switchSegmentTo(segmentIndex);
@@ -609,10 +774,12 @@ class MemberProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  /// placeId 설정 시 멤버/등록 구독 시작
-  void setPlaceId(String? placeId) {
-    if (_placeId == placeId) return;
+  /// placeId 설정 시 멤버/등록 구독 시작.
+  /// [isSubManagerForPlace] true면 전체 멤버 스트림 미구독, enrollments만 구독 후 코스별로만 로드.
+  void setPlaceId(String? placeId, {bool isSubManagerForPlace = false}) {
+    if (_placeId == placeId && _isSubManagerForPlace == isSubManagerForPlace) return;
     _placeId = placeId;
+    _isSubManagerForPlace = isSubManagerForPlace;
     _placeMembersSegmentSub?.cancel();
     _placeMembersSegmentSub = null;
     _pendingSub?.cancel();
@@ -630,6 +797,13 @@ class MemberProvider with ChangeNotifier {
     _segmentBoundaryDocs.clear();
     _currentSegmentIndex = 0;
     _hasMoreMembers = true;
+    _courseOnlyUserIds = [];
+    _courseOnlySegmentIndex = 0;
+    _courseOnlyCachedBefore = [];
+    _courseOnlyStreamed = [];
+    _courseOnlyLoadedAfter = [];
+    _courseOnlyMembersSub?.cancel();
+    _courseOnlyMembersSub = null;
     _enrollments = [];
     _isLoading = true;
     _error = null;
@@ -638,6 +812,39 @@ class MemberProvider with ChangeNotifier {
     if (placeId == null || placeId.isEmpty) {
       _isLoading = false;
       notifyListeners();
+      return;
+    }
+
+    _pendingSub = _service
+        .watchPendingMembersByPlace(placeId)
+        .listen(
+          (list) {
+            _pendingMembers = list;
+            notifyListeners();
+            if (_isSubManagerForPlace) _updateCourseOnlyMembers();
+          },
+          onError: (e) {
+            debugPrint('[MemberProvider] pending stream error: $e');
+          },
+        );
+
+    if (isSubManagerForPlace) {
+      _enrollmentsSub = _service
+          .watchEnrollmentsByPlace(placeId)
+          .listen(
+            (list) {
+              _enrollments = list;
+              _isLoading = false;
+              _error = null;
+              _updateCourseOnlyMembers();
+              notifyListeners();
+            },
+            onError: (e) {
+              _error = e.toString();
+              _isLoading = false;
+              notifyListeners();
+            },
+          );
       return;
     }
 
@@ -659,17 +866,6 @@ class MemberProvider with ChangeNotifier {
             _error = e.toString();
             _isLoading = false;
             notifyListeners();
-          },
-        );
-    _pendingSub = _service
-        .watchPendingMembersByPlace(placeId)
-        .listen(
-          (list) {
-            _pendingMembers = list;
-            notifyListeners();
-          },
-          onError: (e) {
-            debugPrint('[MemberProvider] pending stream error: $e');
           },
         );
   }
@@ -699,6 +895,44 @@ class MemberProvider with ChangeNotifier {
   bool isDeletingMember(String memberId) =>
       _deletingMemberIds.contains(memberId);
 
+  void startProcessingMember(String memberId) {
+    _processingMemberIds.add(memberId);
+    notifyListeners();
+  }
+
+  void finishProcessingMember(String memberId) {
+    _processingMemberIds.remove(memberId);
+    notifyListeners();
+  }
+
+  bool isProcessingMember(String memberId) =>
+      _processingMemberIds.contains(memberId);
+
+  /// 삭제/추가 등 카드에서 로딩 표시할지 여부 (> 자리에 스피너)
+  bool isMemberCardLoading(String memberId) =>
+      _deletingMemberIds.contains(memberId) ||
+      _processingMemberIds.contains(memberId);
+
+  /// 부매니저 추가 시작: 로컬 리스트에 카드 표시 + 로딩
+  void startAddingSubManagerForCourse(String courseId, String userId) {
+    _pendingSubManagerAdds.putIfAbsent(courseId, () => {}).add(userId);
+    _processingMemberIds.add(userId);
+    notifyListeners();
+  }
+
+  /// 부매니저 추가 완료 (성공/실패 관계없이 호출)
+  void finishAddingSubManagerForCourse(String courseId, String userId) {
+    _pendingSubManagerAdds[courseId]?.remove(userId);
+    if (_pendingSubManagerAdds[courseId]?.isEmpty ?? false) {
+      _pendingSubManagerAdds.remove(courseId);
+    }
+    _processingMemberIds.remove(userId);
+    notifyListeners();
+  }
+
+  Set<String> getPendingSubManagerUserIds(String courseId) =>
+      Set<String>.from(_pendingSubManagerAdds[courseId] ?? const {});
+
   /// 플레이스에서 멤버 제거 (Cloud Function 호출)
   Future<void> removeMemberFromPlace({
     required String placeId,
@@ -723,9 +957,30 @@ class MemberProvider with ChangeNotifier {
     }
   }
 
-  /// 무한 스크롤: 현재 구간 이후 멤버 추가 로드
+  /// 무한 스크롤: 현재 구간 이후 멤버 추가 로드. 부매니저 모드: 다음 30명 세그먼트 로드.
   Future<void> loadMoreMembers() async {
     final placeId = _placeId;
+    if (_isSubManagerForPlace) {
+      if (placeId == null || placeId.isEmpty || _courseOnlyUserIds.isEmpty) return;
+      final alreadyLoaded = _courseOnlyCachedBefore.length +
+          _courseOnlyStreamed.length +
+          _courseOnlyLoadedAfter.length;
+      if (alreadyLoaded >= _courseOnlyUserIds.length) return;
+      if (_isLoadingMore) return;
+      _isLoadingMore = true;
+      notifyListeners();
+      try {
+        final start = alreadyLoaded;
+        final segmentUserIds =
+            _courseOnlyUserIds.skip(start).take(_segmentSize).toList();
+        final list = await _service.getPlaceMembersByUserIds(placeId!, segmentUserIds);
+        _courseOnlyLoadedAfter = [..._courseOnlyLoadedAfter, ...list];
+      } finally {
+        _isLoadingMore = false;
+        notifyListeners();
+      }
+      return;
+    }
     if (placeId == null ||
         placeId.isEmpty ||
         _isLoadingMore ||
@@ -763,8 +1018,16 @@ class MemberProvider with ChangeNotifier {
     _placeMembersSegmentSub?.cancel();
     _pendingSub?.cancel();
     _enrollmentsSub?.cancel();
+    _courseOnlyMembersSub?.cancel();
     _visibleRangeDebounce?.cancel();
     _placeId = null;
+    _isSubManagerForPlace = false;
+    _courseOnlyUserIds = [];
+    _courseOnlySegmentIndex = 0;
+    _courseOnlyCachedBefore = [];
+    _courseOnlyStreamed = [];
+    _courseOnlyLoadedAfter = [];
+    _courseOnlyMembersSub = null;
     _streamedPlaceMembers = [];
     _streamedSegmentLastDoc = null;
     _cachedPlaceMembersBefore = [];
@@ -793,6 +1056,7 @@ class MemberProvider with ChangeNotifier {
     _placeMembersSegmentSub?.cancel();
     _pendingSub?.cancel();
     _enrollmentsSub?.cancel();
+    _courseOnlyMembersSub?.cancel();
     _visibleRangeDebounce?.cancel();
     super.dispose();
   }

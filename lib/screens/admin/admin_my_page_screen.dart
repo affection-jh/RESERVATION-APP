@@ -60,10 +60,11 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
         if (currentPlace == null) {
           return const SizedBox.shrink();
         }
+        final isSubManager = authProvider.isSubManagerForPlace(currentPlace.id);
 
         return Row(
           children: [
-            // PlaceSwitchWidget
+            // PlaceSwitchWidget (부매니저는 플레이스 수정·more_vert 숨김)
             Expanded(
               child: PlaceSwitchWidget(
                 enabled: authProvider.currentAdmin != null,
@@ -73,38 +74,36 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
                 isAdminContext: true,
               ),
             ),
-
-            GestureDetector(
-              onTap: () {
-                Navigator.of(context)
-                    .push(
-                      MaterialPageRoute(
-                        builder:
-                            (context) =>
-                                AdminPlaceEditScreen(place: currentPlace),
-                      ),
-                    )
-                    .then((_) {
-                      // 편집 화면에서 돌아왔을 때 화면 새로고침
-                      if (mounted) {
-                        setState(() {});
-                      }
-                    });
-              },
-              child: Container(
-                padding: const EdgeInsets.only(right: 8),
-                decoration: BoxDecoration(
-                  color: AppColors.backgroundLight,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(
-                  Icons.more_vert,
-                  size: 22,
-                  color: AppColors.textPrimary.withOpacity(0.8),
+            if (!isSubManager)
+              GestureDetector(
+                onTap: () {
+                  Navigator.of(context)
+                      .push(
+                        MaterialPageRoute(
+                          builder:
+                              (context) =>
+                                  AdminPlaceEditScreen(place: currentPlace),
+                        ),
+                      )
+                      .then((_) {
+                        if (mounted) {
+                          setState(() {});
+                        }
+                      });
+                },
+                child: Container(
+                  padding: const EdgeInsets.only(right: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.backgroundLight,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    Icons.more_vert,
+                    size: 22,
+                    color: AppColors.textPrimary.withOpacity(0.8),
+                  ),
                 ),
               ),
-            ),
-            // 편집 아이콘 (관리자 마이페이지에서만)
             const SizedBox(width: 12),
           ],
         );
@@ -113,22 +112,25 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
   }
 
   Widget _buildCoursesSection(BuildContext context) {
-    return Consumer<CourseProvider>(
-      builder: (context, courseProvider, child) {
-        final courses = courseProvider.courses;
+    return Consumer2<CourseProvider, AuthProvider>(
+      builder: (context, courseProvider, authProvider, child) {
+        final placeId = Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
+        final isSubManager = placeId != null && authProvider.isSubManagerForPlace(placeId);
+        final placeMember = placeId != null ? authProvider.getPlaceMemberForPlace(placeId) : null;
+        final courses = isSubManager && placeMember != null
+            ? courseProvider.courses
+                .where((c) => placeMember.manageableCourseIds.contains(c.id))
+                .toList()
+            : courseProvider.courses;
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const SizedBox(height: 22),
             SectionHeader(
-              title: '개설한 코스',
-              onIconTap: () => _openCourseAddFlow(context),
-              icon: Icon(
-                Icons.add_circle,
-                size: 30,
-                color: AppColors.primaryGreen,
-              ),
+              title: isSubManager ? '관리중인 코스' : '개설한 코스',
+              onIconTap: isSubManager ? null : () => _openCourseAddFlow(context),
+              icon: isSubManager ? null : Icon(Icons.add_circle, size: 30, color: AppColors.primaryGreen),
               horizontalPadding: 20,
               fontSize: 20,
             ),
@@ -137,9 +139,9 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: courses.isEmpty
                   ? EmptyStateCard(
-                      title: '아직 코스가 없어요',
-                      buttonText: '코스 추가하기',
-                      onPressed: () => _openCourseAddFlow(context),
+                      title: isSubManager ? '관리 중인 코스가 없어요' : '아직 코스가 없어요',
+                      buttonText: isSubManager ? null : '코스 추가하기',
+                      onPressed: isSubManager ? null : () => _openCourseAddFlow(context),
                     )
                   : Column(
                       children: courses

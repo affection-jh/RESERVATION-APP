@@ -72,13 +72,16 @@ class PlaceMember {
   }
 
   factory PlaceMember.fromJson(Map<String, dynamic> json) {
+    final roleRaw = json['role']?.toString().toLowerCase();
+    final role = roleRaw == 'manager'
+        ? PlaceMemberRole.manager
+        : roleRaw == 'submanager'
+            ? PlaceMemberRole.subManager
+            : PlaceMemberRole.member;
     return PlaceMember(
       userId: json['userId'] as String,
       placeId: json['placeId'] as String?,
-      role: PlaceMemberRole.values.firstWhere(
-        (e) => e.name == json['role'],
-        orElse: () => PlaceMemberRole.member,
-      ),
+      role: role,
       adminDisplayName: (json['adminDisplayName'] as String?) ?? (json['displayName'] as String?),
       phoneNumber: json['phoneNumber'] as String?,
       manageableCourseIds:

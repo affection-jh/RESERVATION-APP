@@ -60,6 +60,7 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
     final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
     final courseProvider = Provider.of<CourseProvider>(context, listen: false);
     final memberProvider = Provider.of<MemberProvider>(context, listen: false);
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
 
     final currentPlace = placeProvider.currentPlace;
     if (currentPlace == null) return;
@@ -68,7 +69,11 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
       if (courseProvider.courses.isEmpty) {
         await courseProvider.loadCourses(currentPlace.id);
       }
-      memberProvider.setPlaceId(currentPlace.id);
+      final isSubManager = authProvider.isSubManagerForPlace(currentPlace.id);
+      memberProvider.setPlaceId(currentPlace.id, isSubManagerForPlace: isSubManager);
+      if (isSubManager && memberProvider.selectedTab == 0) {
+        memberProvider.setSelectedTab(1);
+      }
     } catch (e) {
       debugPrint('[AdminMemberScreen] Error loading data: $e');
     }
@@ -86,7 +91,14 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
     final memberProvider = Provider.of<MemberProvider>(context);
     final courseProvider = Provider.of<CourseProvider>(context);
     final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final placeId = placeProvider.currentPlace?.id;
+    final isSubManager = placeId != null && authProvider.isSubManagerForPlace(placeId);
+    final showCourseTab = memberProvider.selectedTab == 1 || isSubManager;
+    final placeMember = placeId != null ? authProvider.getPlaceMemberForPlace(placeId) : null;
+    final coursesForTab = isSubManager && placeMember != null
+        ? courseProvider.courses.where((c) => placeMember.manageableCourseIds.contains(c.id)).toList()
+        : courseProvider.courses;
 
     // 과목 키워드 검색용 코스명 맵 동기화 (빌드 중 notifyListeners 금지 → 프레임 후 실행)
     if (courseProvider.courses.isNotEmpty) {
@@ -98,24 +110,21 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
       });
     }
 
-    // 코스별 탭 진입 시 선택이 비어 있으면 SharedPreferences 복원 또는 첫 코스 선택
-    if (memberProvider.selectedTab == 1 &&
+    // 코스별 탭 진입 시 선택이 비어 있으면 SharedPreferences 복원 또는 첫 코스 선택 (부매니저는 관리 코스만)
+    if (showCourseTab &&
         memberProvider.selectedCourseIds.isEmpty &&
-        courseProvider.courses.isNotEmpty &&
+        coursesForTab.isNotEmpty &&
         placeId != null &&
         placeId != _courseTabRestoredForPlaceId) {
       _courseTabRestoredForPlaceId = placeId;
+      final validCourseIds = coursesForTab.map((c) => c.id).toList();
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted) return;
         final mp = Provider.of<MemberProvider>(context, listen: false);
-        final cp = Provider.of<CourseProvider>(context, listen: false);
         final pid = placeProvider.currentPlace?.id;
-        if (pid == null || cp.courses.isEmpty) return;
+        if (pid == null || validCourseIds.isEmpty) return;
         if (mp.selectedCourseIds.isNotEmpty) return;
-        await mp.restoreCourseSelectionForCourseTab(
-          pid,
-          cp.courses.map((c) => c.id).toList(),
-        );
+        await mp.restoreCourseSelectionForCourseTab(pid, validCourseIds);
       });
     }
 
@@ -126,22 +135,21 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
         _buildTabs(),
         _buildSearchBar(),
 
-        // 코스 선택 (코스별 탭일 때만)
+        // 코스 선택 (코스별 탭일 때만, 부매니저는 항상·관리 코스만)
         AnimatedSize(
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeInOut,
           child:
-              memberProvider.selectedTab == 1
-                  ? _buildCourseSelector(memberProvider, courseProvider.courses)
+              showCourseTab
+                  ? _buildCourseSelector(memberProvider, coursesForTab)
                   : const SizedBox.shrink(),
         ),
         Expanded(
           child:
-              memberProvider.selectedTab == 1 &&
-                      memberProvider.selectedCourseIds.isNotEmpty
+              showCourseTab && memberProvider.selectedCourseIds.isNotEmpty
                   ? _buildCourseMemberList(
                     memberProvider,
-                    courseProvider.courses,
+                    coursesForTab,
                   )
                   : memberProvider.isLoading
                   ? const Center(
@@ -233,17 +241,24 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
     );
   }
 
-  // 탭
+  // 탭 (부매니저일 때는 '전체' 탭 숨김, 코스별만 표시)
   Widget _buildTabs() {
     final memberProvider = Provider.of<MemberProvider>(context);
+    final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final placeId = placeProvider.currentPlace?.id;
+    final isSubManager = placeId != null && authProvider.isSubManagerForPlace(placeId);
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 16),
       child: DefaultTapbar(
-        labels: ['전체', '코스별'],
-        selectedIndex: memberProvider.selectedTab,
-        onTabChanged: (index) {
-          memberProvider.setSelectedTab(index);
-        },
+        labels: isSubManager ? ['코스별'] : ['전체', '코스별'],
+        selectedIndex: isSubManager ? 0 : memberProvider.selectedTab,
+        onTabChanged: isSubManager
+            ? (_) {}
+            : (index) {
+                memberProvider.setSelectedTab(index);
+              },
         trailing: IconButton(
           icon: Icon(Icons.add_circle, color: AppColors.primaryGreen, size: 34),
           onPressed: () => _showMemberEditor(context),

@@ -26,6 +26,14 @@ class SnackbarUtil {
         if (overlay != null) return overlay;
       } catch (_) {}
     }
+
+    // 3) rootOverlay 시도 (하단 fallback 대신 상단 동일 디자인 유지)
+    final ctx = context ?? navCtx;
+    if (ctx != null) {
+      try {
+        return Overlay.of(ctx, rootOverlay: true);
+      } catch (_) {}
+    }
     return null;
   }
 
@@ -33,9 +41,11 @@ class SnackbarUtil {
     BuildContext? context,
     String message, {
     bool isError = false,
+    String? actionLabel,
+    VoidCallback? onActionPressed,
   }) {
     final overlay = _resolveOverlay(context);
-    if (overlay != null) {
+    if (overlay != null && actionLabel == null) {
       showTopSnackBar(
         overlay,
         _SimpleSnackBar(message: message, isError: isError),
@@ -52,11 +62,31 @@ class SnackbarUtil {
       final messenger = ScaffoldMessenger.maybeOf(safeCtx);
       if (messenger == null) return;
       messenger.hideCurrentSnackBar();
+      final hasAction = actionLabel != null && onActionPressed != null;
       messenger.showSnackBar(
         SnackBar(
-          content: Text(message),
+          content: hasAction
+              ? Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(message),
+                    const SizedBox(width: 16),
+                    TextButton(
+                      onPressed: onActionPressed,
+                      style: TextButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: Text(actionLabel),
+                    ),
+                  ],
+                )
+              : Text(message),
           backgroundColor: AppColors.primaryGreen,
           behavior: SnackBarBehavior.floating,
+          action: null,
         ),
       );
     } catch (_) {}
@@ -77,6 +107,37 @@ class SnackbarUtil {
     showTopSnackBar(
       overlay,
       _SimpleSnackBar(message: message, isError: false, imageUrl: imageUrl),
+      animationDuration: const Duration(milliseconds: 300),
+      reverseAnimationDuration: const Duration(milliseconds: 250),
+      curve: Curves.easeOut,
+    );
+  }
+
+  /// 상단에 성공 스낵바 + 액션 버튼 표시 (디자인은 _SimpleSnackBar와 동일)
+  static void showSuccessWithAction(
+    BuildContext context,
+    String message, {
+    required String actionLabel,
+    required VoidCallback onActionPressed,
+  }) {
+    final overlay = _resolveOverlay(context);
+    if (overlay == null) {
+      _fallbackSnackBar(
+        context,
+        message,
+        isError: false,
+        actionLabel: actionLabel,
+        onActionPressed: onActionPressed,
+      );
+      return;
+    }
+    showTopSnackBar(
+      overlay,
+      _SimpleSnackBarWithAction(
+        message: message,
+        actionLabel: actionLabel,
+        onActionPressed: onActionPressed,
+      ),
       animationDuration: const Duration(milliseconds: 300),
       reverseAnimationDuration: const Duration(milliseconds: 250),
       curve: Curves.easeOut,
@@ -234,6 +295,107 @@ class _SimpleSnackBar extends StatelessWidget {
                           letterSpacing: -0.2,
                         ),
                         textAlign: TextAlign.left,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// _SimpleSnackBar와 동일 디자인 + 액션 버튼
+class _SimpleSnackBarWithAction extends StatelessWidget {
+  final String message;
+  final String actionLabel;
+  final VoidCallback onActionPressed;
+
+  const _SimpleSnackBarWithAction({
+    required this.message,
+    required this.actionLabel,
+    required this.onActionPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: Dismissible(
+        key: UniqueKey(),
+        direction: DismissDirection.up,
+        movementDuration: const Duration(milliseconds: 300),
+        resizeDuration: const Duration(milliseconds: 300),
+        dismissThresholds: const {DismissDirection.up: 0.3},
+        onDismissed: (_) {},
+        child: Container(
+          margin: const EdgeInsets.only(left: 16, right: 16, top: 0, bottom: 8),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+              child: Container(
+                padding: const EdgeInsets.only(left: 16, right: 10, top: 14, bottom: 14),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryGreen.withOpacity(0.85),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: Colors.white.withOpacity(0.2),
+                    width: 0.5,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.15),
+                      blurRadius: 20,
+                      offset: const Offset(0, 4),
+                    ),
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.1),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        message,
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.white.withOpacity(0.95),
+                          letterSpacing: -0.2,
+                        ),
+                        textAlign: TextAlign.left,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Container(
+                      width: 1,
+                      height: 18,
+                      margin: const EdgeInsets.only(right: 12),
+                      color: Colors.white.withOpacity(0.4),
+                    ),
+                    TextButton(
+                      onPressed: onActionPressed,
+                      style: TextButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: Text(
+                        actionLabel,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
                       ),
                     ),
                   ],

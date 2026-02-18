@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../../models/member_view.dart';
+import '../../../providers/auth_provider.dart';
 import '../../../providers/course_provider.dart';
 import '../../../providers/place_provider.dart';
 import '../../../providers/member_provider.dart';
@@ -250,7 +251,7 @@ class _MemberEditBottomSheetState extends State<MemberEditBottomSheet> {
                               ),
                             ),
                           ),
-                          // 코스 선택 섹션 (코스가 있을 때만 표시)
+                          // 코스 선택 섹션 (코스가 있을 때만 표시). 코스매니저는 관리 코스만 표시
                           Builder(
                             builder: (context) {
                               final courseProvider =
@@ -258,7 +259,35 @@ class _MemberEditBottomSheetState extends State<MemberEditBottomSheet> {
                                     context,
                                     listen: false,
                                   );
-                              if (courseProvider.courses.isEmpty) {
+                              final placeProvider = Provider.of<PlaceProvider>(
+                                context,
+                                listen: false,
+                              );
+                              final authProvider = Provider.of<AuthProvider>(
+                                context,
+                                listen: false,
+                              );
+                              final placeId = placeProvider.currentPlace?.id;
+                              final isSubManager =
+                                  placeId != null &&
+                                  authProvider.isSubManagerForPlace(placeId);
+                              final placeMember =
+                                  placeId != null
+                                      ? authProvider.getPlaceMemberForPlace(
+                                        placeId,
+                                      )
+                                      : null;
+                              final coursesToShow =
+                                  isSubManager && placeMember != null
+                                      ? courseProvider.courses
+                                          .where(
+                                            (c) => placeMember
+                                                .manageableCourseIds
+                                                .contains(c.id),
+                                          )
+                                          .toList()
+                                      : courseProvider.courses;
+                              if (coursesToShow.isEmpty) {
                                 return const SizedBox.shrink();
                               }
                               return Column(
@@ -281,8 +310,7 @@ class _MemberEditBottomSheetState extends State<MemberEditBottomSheet> {
                                           MediaQuery.of(
                                             context,
                                           ).viewInsets.bottom;
-                                      final courseCount =
-                                          courseProvider.courses.length;
+                                      final courseCount = coursesToShow.length;
                                       // 코스 개수에 따라 기본 높이 계산
                                       // 2열 그리드, childAspectRatio 1.5 기준
                                       // 각 행의 높이 = (너비/2 - spacing) / 1.5 + mainAxisSpacing
@@ -307,11 +335,9 @@ class _MemberEditBottomSheetState extends State<MemberEditBottomSheet> {
                                                 mainAxisSpacing: 4,
                                                 childAspectRatio: 1.5,
                                               ),
-                                          itemCount:
-                                              courseProvider.courses.length,
+                                          itemCount: coursesToShow.length,
                                           itemBuilder: (context, index) {
-                                            final course =
-                                                courseProvider.courses[index];
+                                            final course = coursesToShow[index];
                                             final isSelected = selectedCourseIds
                                                 .contains(course.id);
                                             return GestureDetector(

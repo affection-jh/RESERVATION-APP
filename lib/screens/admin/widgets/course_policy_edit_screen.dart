@@ -336,15 +336,20 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
       final ok = await _savePolicy(popAfterSave: false, isInternalCall: true);
       if (!ok || !mounted) return;
 
+      // 코스 등록(requireSave) 시: 코스 추가 플로우 4개 화면만 제거 (정책→일정→세부→기본정보), 관리자 화면 유지
       if (!widget.requireSave) {
         SnackbarUtil.showSuccess(context, '코스가 등록되었습니다.');
-      }
-      // 코스 추가 플로우 전체 제거 후 관리자 홈으로 (전역 navigatorKey로 루트 네비게이터 보장)
-      final navContext = navigatorKey.currentContext;
-      if (navContext != null) {
-        Navigator.of(
-          navContext,
-        ).pushNamedAndRemoveUntil('/admin', (route) => false);
+      } else {
+        final nav = Navigator.of(context);
+        for (int i = 0; i < 4 && nav.canPop(); i++) {
+          nav.pop();
+        }
+        WidgetsBinding.instance.addPostFrameCallback((_) async {
+          await Future.delayed(const Duration(milliseconds: 400));
+          final ctx = navigatorKey.currentContext;
+          if (ctx == null || !ctx.mounted) return;
+          SnackbarUtil.showSuccess(ctx, '코스가 추가되었습니다.');
+        });
       }
     } catch (e) {
       if (_leaveRequested) return;

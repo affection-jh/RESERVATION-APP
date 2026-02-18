@@ -81,11 +81,11 @@ class PendingMember {
 
   static PlaceMemberRole _roleFromJson(dynamic v) {
     if (v == null) return PlaceMemberRole.member;
-    final s = v.toString();
+    final s = v.toString().toLowerCase();
     switch (s) {
       case 'manager':
         return PlaceMemberRole.manager;
-      case 'subManager':
+      case 'submanager':
         return PlaceMemberRole.subManager;
       default:
         return PlaceMemberRole.member;

@@ -61,13 +61,16 @@ class ReservationCourseCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.center,
           mainAxisAlignment: MainAxisAlignment.start,
           children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: CourseImageWidget(
-                imageUrl: course.imageUrl,
-                width: 100,
-                height: 100,
+            Hero(
+              tag: 'course_image_${course.id}',
+              child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
+                child: CourseImageWidget(
+                  imageUrl: course.imageUrl,
+                  width: 100,
+                  height: 100,
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
             ),
             const SizedBox(width: 16),
@@ -182,6 +185,12 @@ class MemberCard extends StatefulWidget {
   /// 코스별 보기에서 true면 탭 시 바텀시트 대신 EnrollmentDetailScreen으로 바로 이동
   final reservation_models.Course? courseForDirectDetail;
 
+  /// 관리자 역할 칩 문구 오버라이드 (예: '코스매니저'). null이면 canManagePlace일 때 '매니저' 표시
+  final String? roleChipLabel;
+
+  /// false면 탭 시 MemberDetailBottomSheet를 열지 않고 onMemberTapped만 실행 (코스 편집 부매니저 카드 등)
+  final bool openDetailSheetOnTap;
+
   const MemberCard({
     super.key,
     required this.member,
@@ -190,6 +199,8 @@ class MemberCard extends StatefulWidget {
     this.extensionRequestInfo,
     this.showCourseEnrollmentDetail = false,
     this.courseForDirectDetail,
+    this.roleChipLabel,
+    this.openDetailSheetOnTap = true,
   });
 
   @override
@@ -260,6 +271,9 @@ class _MemberCardState extends State<MemberCard> {
     final hasRequests = widget.member.hasPendingRequests;
     final memberProvider = Provider.of<MemberProvider>(context);
     final isDeleting = memberProvider.isDeletingMember(widget.member.userId);
+    final isCardLoading = memberProvider.isMemberCardLoading(
+      widget.member.userId,
+    );
 
     return GestureDetector(
       onTap:
@@ -271,6 +285,7 @@ class _MemberCardState extends State<MemberCard> {
                   _openEnrollmentDetailDirect(context);
                   return;
                 }
+                if (!widget.openDetailSheetOnTap) return;
                 MemberDetailBottomSheet.show(
                   context: context,
                   member: widget.member,
@@ -304,20 +319,27 @@ class _MemberCardState extends State<MemberCard> {
                               child: Row(
                                 children: [
                                   Flexible(
-                                    child: Text(
-                                      widget.member.adminDisplayName,
-                                      style: TextStyle(
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.bold,
-                                        color: AppColors.textPrimary,
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(top: 4),
+                                      child: Text(
+                                        widget.member.adminDisplayName,
+                                        style: TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.bold,
+                                          color: AppColors.textPrimary,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
                                       ),
-                                      overflow: TextOverflow.ellipsis,
                                     ),
                                   ),
                                   if (widget.member.canManagePlace) ...[
                                     const SizedBox(width: 8),
                                     admin_shared.Chip(
-                                      text: '매니저',
+                                      text:
+                                          widget.roleChipLabel ??
+                                          (widget.member.isSubManager
+                                              ? '코스매니저'
+                                              : '매니저'),
                                       backgroundColor: AppColors.primaryGreen,
                                       textColor: Colors.white,
                                     ),
@@ -326,6 +348,7 @@ class _MemberCardState extends State<MemberCard> {
                                     const SizedBox(width: 8),
                                     const admin_shared.Chip(text: '가입 대기중'),
                                   ],
+
                                   if (widget.showCourseEnrollmentDetail) ...[
                                     const SizedBox(width: 8),
                                     Text(
@@ -342,20 +365,9 @@ class _MemberCardState extends State<MemberCard> {
                                 ],
                               ),
                             ),
-                            if (!isDeleting &&
-                                (widget.member.needsReenrollment == true ||
-                                    hasRequests))
-                              Container(
-                                margin: const EdgeInsets.only(right: 8),
-                                width: 8,
-                                height: 8,
-                                decoration: const BoxDecoration(
-                                  color: Colors.red,
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
                           ],
                         ),
+                        const SizedBox(height: 6),
                         if (!widget.showCourseEnrollmentDetail)
                           Row(
                             children: [
@@ -452,47 +464,40 @@ class _MemberCardState extends State<MemberCard> {
                       ],
                     ),
                   ),
-                  Icon(
-                    Icons.arrow_forward_ios,
-                    size: 16,
-                    color: AppColors.textSecondary.withOpacity(0.5),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          if (isDeleting)
-            Positioned.fill(
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: Container(
-                  color: Colors.black.withOpacity(0.08),
-                  alignment: Alignment.center,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const SizedBox(
-                        width: 18,
-                        height: 18,
+                  isCardLoading
+                      ? SizedBox(
+                        width: 20,
+                        height: 20,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
                           color: AppColors.primaryGreen,
                         ),
-                      ),
-                      const SizedBox(width: 10),
-                      Text(
-                        '삭제중',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                      )
+                      : (!isDeleting &&
+                              (widget.member.needsReenrollment == true ||
+                                  hasRequests))
+                          ? Container(
+                              width: 16,
+                              height: 16,
+                              alignment: Alignment.center,
+                              child: Container(
+                                width: 8,
+                                height: 8,
+                                decoration: const BoxDecoration(
+                                  color: Colors.red,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            )
+                          : Icon(
+                              Icons.arrow_forward_ios,
+                              size: 16,
+                              color: AppColors.textSecondary.withOpacity(0.5),
+                            ),
+                ],
               ),
             ),
+          ),
         ],
       ),
     );

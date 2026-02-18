@@ -5,6 +5,7 @@ import '../../../models/course.dart';
 import '../../../models/member_view.dart';
 import '../../../models/course_enrollment.dart';
 import '../../../theme/app_colors.dart';
+import '../../../providers/auth_provider.dart';
 import '../../../providers/member_provider.dart';
 import '../../../utils/format_utils.dart';
 
@@ -16,9 +17,18 @@ import '../../../utils/format_utils.dart';
 /// - 멤버 목록: MemberProvider (places/{placeId}/members)
 ///
 /// SessionDetailScreen에서 호출. N/M은 reservationSummary, 예약자 목록(누가)은 reservations.
+enum MemberSelectionMode {
+  /// 예약 추가용 (이미 예약한 유저 제외, 남은 횟수 표시)
+  justMemberAdd,
+
+  /// 부매니저 추가용 (이미 이 코스 부매니저인 유저 제외)
+  forSubManagerAdd,
+}
+
 class MemberSelectionSidePanel extends StatefulWidget {
   final String placeId;
   final Course course;
+  final MemberSelectionMode mode;
   final int totalCapacity;
   final int reservedCount;
   final List<String> existingReservationUserIds;
@@ -28,11 +38,68 @@ class MemberSelectionSidePanel extends StatefulWidget {
     super.key,
     required this.placeId,
     required this.course,
-    required this.totalCapacity,
-    required this.reservedCount,
-    required this.existingReservationUserIds,
+    this.mode = MemberSelectionMode.justMemberAdd,
+    this.totalCapacity = 0,
+    this.reservedCount = 0,
+    this.existingReservationUserIds = const [],
     required this.onMembersSelected,
   });
+
+  /// 예약 추가용 (세션 상세에서 호출)
+  static void showForReservation({
+    required BuildContext context,
+    required String placeId,
+    required Course course,
+    required int totalCapacity,
+    required int reservedCount,
+    required List<String> existingReservationUserIds,
+    required Function(List<MemberView> members) onMembersSelected,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withOpacity(0.7),
+      isDismissible: true,
+      enableDrag: true,
+      useSafeArea: true,
+      builder:
+          (context) => MemberSelectionSidePanel(
+            placeId: placeId,
+            course: course,
+            mode: MemberSelectionMode.justMemberAdd,
+            totalCapacity: totalCapacity,
+            reservedCount: reservedCount,
+            existingReservationUserIds: existingReservationUserIds,
+            onMembersSelected: onMembersSelected,
+          ),
+    );
+  }
+
+  /// 부매니저 추가용 (코스 편집에서 호출)
+  static void showForSubManagerAdd({
+    required BuildContext context,
+    required String placeId,
+    required Course course,
+    required Function(List<MemberView> members) onMembersSelected,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withOpacity(0.7),
+      isDismissible: true,
+      enableDrag: true,
+      useSafeArea: true,
+      builder:
+          (context) => MemberSelectionSidePanel(
+            placeId: placeId,
+            course: course,
+            mode: MemberSelectionMode.forSubManagerAdd,
+            onMembersSelected: onMembersSelected,
+          ),
+    );
+  }
 
   static void show({
     required BuildContext context,
@@ -55,6 +122,7 @@ class MemberSelectionSidePanel extends StatefulWidget {
           (context) => MemberSelectionSidePanel(
             placeId: placeId,
             course: course,
+            mode: MemberSelectionMode.justMemberAdd,
             totalCapacity: totalCapacity,
             reservedCount: reservedCount,
             existingReservationUserIds: existingReservationUserIds,
@@ -80,14 +148,26 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
       setState(() => _searchQuery = _searchController.text);
     });
     // Provider 업데이트는 빌드 완료 후로 미룸 (setState during build 방지)
+    // 부매니저일 때는 코스별 멤버만 구독(전체 멤버 미로드)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final memberProvider = Provider.of<MemberProvider>(
         context,
         listen: false,
       );
-      memberProvider.setPlaceId(widget.placeId);
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      final isSubManager = authProvider.isSubManagerForPlace(widget.placeId);
+      memberProvider.setPlaceId(
+        widget.placeId,
+        isSubManagerForPlace: isSubManager,
+      );
       memberProvider.setSelectedCourseId(widget.course.id);
+      if (isSubManager) {
+        memberProvider.selectSingleCourseForCourseTab(
+          widget.course.id,
+          save: false,
+        );
+      }
       memberProvider.setShowPending(true);
     });
   }
@@ -100,6 +180,16 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
 
   List<MemberView> _getDisplayMembers(MemberProvider memberProvider) {
     final all = memberProvider.allMembers;
+    if (widget.mode == MemberSelectionMode.forSubManagerAdd) {
+      final courseId = widget.course.id;
+      return all.where((v) {
+        // 전체 플레이스 매니저는 제외 (부매니저로 추가 대상 아님)
+        if (v.isManager) return false;
+        // 이미 이 코스 부매니저인 사람 제외
+        if (v.manageableCourseIds.contains(courseId)) return false;
+        return true;
+      }).toList();
+    }
     return all
         .where((v) => !widget.existingReservationUserIds.contains(v.userId))
         .toList();
@@ -234,11 +324,19 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
             );
           }
           if (filtered.isEmpty) {
+            final emptyText =
+                widget.mode == MemberSelectionMode.forSubManagerAdd
+                    ? (_searchQuery.isEmpty
+                        ? '추가할 수 있는 멤버가 없어요'
+                        : '검색 결과가 없습니다')
+                    : (_searchQuery.isEmpty
+                        ? '추가할 수 있는 멤버가 없어요'
+                        : '검색 결과가 없습니다');
             return Center(
               child: Padding(
                 padding: const EdgeInsets.all(40),
                 child: Text(
-                  _searchQuery.isEmpty ? '추가할 수 있는 멤버가 없어요' : '검색 결과가 없습니다',
+                  emptyText,
                   style: TextStyle(
                     fontSize: 16,
                     color: AppColors.textSecondary,
@@ -313,9 +411,14 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
                 ),
                 elevation: 0,
               ),
-              child: const Text(
-                '추가하기',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              child: Text(
+                widget.mode == MemberSelectionMode.forSubManagerAdd
+                    ? '코스매니저로 추가'
+                    : '추가하기',
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ),
@@ -326,7 +429,9 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
 
   Widget _buildMemberItem(MemberView member, MemberProvider memberProvider) {
     final isSelected = _selectedUserIds.contains(member.userId);
-    final isEnrolled = member.enrolledCourseIds.contains(widget.course.id);
+    final isForSubManager = widget.mode == MemberSelectionMode.forSubManagerAdd;
+    final isEnrolled =
+        !isForSubManager && member.enrolledCourseIds.contains(widget.course.id);
     final remaining =
         isEnrolled
             ? _getRemainingForCourse(member, memberProvider.enrollments)
@@ -413,15 +518,17 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
                       fontWeight: FontWeight.w600,
                     ),
                   ),
-                  const SizedBox(height: 6),
-                  Text(
-                    isEnrolled ? '남은 횟수: $remaining' : '이 코스에 등록되지 않음',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: AppColors.textSecondary.withOpacity(0.8),
-                      fontWeight: FontWeight.w600,
+                  if (!isForSubManager) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      isEnrolled ? '남은 횟수: $remaining' : '이 코스에 등록되지 않음',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: AppColors.textSecondary.withOpacity(0.8),
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
+                  ],
                 ],
               ),
             ),

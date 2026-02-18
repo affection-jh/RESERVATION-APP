@@ -7,17 +7,24 @@ import 'dart:io';
 import 'package:provider/provider.dart';
 import '../../../theme/app_colors.dart';
 import '../../../models/course.dart' as reservation_models;
+import '../../../models/member_view.dart';
 import '../../../utils/text_field_decoration_util.dart';
 import '../../../services/storage_service.dart';
+import '../../../services/member_service.dart';
 import '../../../utils/navigator_key.dart';
 import '../../../utils/snackbar_util.dart';
 import '../../../widgets/cached_image_widget.dart';
 import '../../../widgets/course_color_picker_bottom_sheet.dart';
 import '../../../widgets/common_dialog.dart';
+import '../../../providers/auth_provider.dart';
 import '../../../providers/course_provider.dart';
 import '../../../providers/place_provider.dart';
+import '../../../providers/member_provider.dart';
 import '../../../utils/firestore_utils.dart';
 import 'course_schedule_edit_screen.dart';
+import 'card_widgets.dart';
+import 'member_selection_side_panel.dart';
+import 'sub_manager_action_bottom_sheet.dart';
 
 /// 코스 정보 수정 화면 (한 페이지)
 class CourseEditScreen extends StatefulWidget {
@@ -708,14 +715,18 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                             children: [
                               // 코스 이미지 업로드
                               _buildImageUpload(),
-                              const SizedBox(height: 44),
+                              const SizedBox(height: 24),
+                              // 매니저 관리 (매니저만 표시)
+                              _buildManagerManagement(),
+
+                              const SizedBox(height: 38),
                               // 코스명
                               Text(
-                                '코스명',
+                                '코스명 및 설명',
                                 style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w500,
-                                  color: AppColors.textSecondary,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.textPrimary.withOpacity(0.8),
                                 ),
                               ),
                               const SizedBox(height: 8),
@@ -725,16 +736,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                                 hintText: '코스명을 입력해주세요',
                                 errorText: _nameErrorText,
                               ),
-                              const SizedBox(height: 20),
-                              // 위치/설명
-                              Text(
-                                '설명',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w500,
-                                  color: AppColors.textSecondary,
-                                ),
-                              ),
+
                               const SizedBox(height: 8),
                               _buildModernTextField(
                                 controller: _descriptionController,
@@ -742,10 +744,10 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                                 hintText: '위치 또는 설명을 입력해주세요',
                                 minLines: 2,
                               ),
-                              const SizedBox(height: 24),
+                              const SizedBox(height: 42),
                               // 코스 색상 선택
                               _buildColorSelection(),
-                              const SizedBox(height: 34),
+                              const SizedBox(height: 42),
 
                               // 일괄 적용 모드
                               _buildUniformSettingsField(),
@@ -876,21 +878,24 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
     );
   }
 
-  // 코스 이미지 업로드
+  // 코스 이미지 업로드 (마이페이지 코스 카드 → 편집 진입 시 Hero 애니메이션용)
   Widget _buildImageUpload() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         GestureDetector(
           onTap: _pickOrReplaceImage,
-          child: Container(
-            width: 150,
-            height: 150,
-            decoration: BoxDecoration(
-              color: AppColors.backgroundLight,
-              borderRadius: BorderRadius.circular(16),
+          child: Hero(
+            tag: 'course_image_${widget.course.id}',
+            child: Container(
+              width: 80,
+              height: 80,
+              decoration: BoxDecoration(
+                color: AppColors.backgroundLight,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: _buildImageContent(),
             ),
-            child: _buildImageContent(),
           ),
         ),
       ],
@@ -912,8 +917,8 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
               onTap: _pickOrReplaceImage,
               child: CourseImageWidget(
                 imageUrl: _uploadedImageUrl,
-                width: 150,
-                height: 150,
+                width: 80,
+                height: 80,
                 borderRadius: borderRadius,
                 localImageFile: _selectedImage,
               ),
@@ -1030,6 +1035,189 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
     );
   }
 
+  /// 매니저 관리: 이 코스의 부매니저 칩 목록 + 부매니저 추가. (매니저만 표시)
+  Widget _buildManagerManagement() {
+    final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final placeId = placeProvider.currentPlace?.id;
+    if (placeId == null) return const SizedBox.shrink();
+    final placeMember = authProvider.getPlaceMemberForPlace(placeId);
+    if (placeMember == null || placeMember.isSubManager) {
+      return const SizedBox.shrink();
+    }
+
+    return Consumer<MemberProvider>(
+      builder: (context, memberProvider, _) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (memberProvider.placeId != placeId) {
+            memberProvider.setPlaceId(placeId);
+          }
+        });
+        final courseId = widget.course.id;
+        final all = memberProvider.allMembers;
+        final subManagersForCourse =
+            all.where((v) {
+              if (v.isPending) {
+                return v.manageableCourseIds.contains(courseId);
+              }
+              return v.isSubManager && v.manageableCourseIds.contains(courseId);
+            }).toList();
+        final pendingIds = memberProvider.getPendingSubManagerUserIds(courseId);
+        final pendingMembers =
+            all.where((v) => pendingIds.contains(v.userId)).toList();
+        final combined = <MemberView>[...subManagersForCourse];
+        for (final p in pendingMembers) {
+          if (!combined.any((c) => c.userId == p.userId)) combined.add(p);
+        }
+
+        return SizedBox(
+          width: double.infinity,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: Text(
+                      '코스 매니저 관리',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary.withOpacity(0.8),
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    onPressed:
+                        () =>
+                            _openSubManagerAddPanel(context, placeId, courseId),
+                    icon: Icon(
+                      Icons.add_circle,
+                      color: AppColors.primaryGreen,
+                      size: 28,
+                    ),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              if (combined.isEmpty)
+                Container(
+                  decoration: BoxDecoration(
+                    color: AppColors.backgroundLight.withOpacity(0.9),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  child: Text(
+                    '아직 코스 매니저가 없어요',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                )
+              else
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final v in combined)
+                      MemberCard(
+                        backgroundColor: AppColors.backgroundLight.withOpacity(
+                          0.5,
+                        ),
+                        member: v,
+                        roleChipLabel: v.isPending ? null : '코스매니저',
+                        openDetailSheetOnTap: false,
+                        onMemberTapped:
+                            () => SubManagerActionBottomSheet.show(
+                              context: context,
+                              placeId: placeId,
+                              courseId: courseId,
+                              member: v,
+                            ),
+                      ),
+                  ],
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _openSubManagerAddPanel(
+    BuildContext context,
+    String placeId,
+    String courseId,
+  ) {
+    MemberSelectionSidePanel.showForSubManagerAdd(
+      context: context,
+      placeId: placeId,
+      course: widget.course,
+      onMembersSelected: (selected) async {
+        if (selected.isEmpty || !context.mounted) return;
+        final memberProvider = Provider.of<MemberProvider>(
+          context,
+          listen: false,
+        );
+        final memberService = MemberService();
+        int successCount = 0;
+        for (final m in selected) {
+          memberProvider.startAddingSubManagerForCourse(courseId, m.userId);
+        }
+        try {
+          for (final m in selected) {
+            try {
+              final ok = await memberService.inviteSubManagerForCourse(
+                placeId: placeId,
+                courseId: courseId,
+                phoneNumber: m.phoneNumber,
+                adminDisplayName:
+                    m.adminDisplayName.isEmpty ? null : m.adminDisplayName,
+              );
+              if (ok) successCount++;
+            } finally {
+              memberProvider.finishAddingSubManagerForCourse(
+                courseId,
+                m.userId,
+              );
+            }
+          }
+          if (!context.mounted) return;
+          memberProvider.setPlaceId(placeId);
+          if (successCount > 0) {
+            SnackbarUtil.showSuccess(
+              context,
+              successCount == selected.length
+                  ? '$successCount명을 코스매니저로 지정했습니다.'
+                  : '$successCount명 지정됨.',
+            );
+          } else {
+            SnackbarUtil.showInfo(context, '코스매니저 지정에 실패했습니다.');
+          }
+        } on FirebaseFunctionsException catch (e) {
+          for (final m in selected) {
+            memberProvider.finishAddingSubManagerForCourse(courseId, m.userId);
+          }
+          if (context.mounted) {
+            memberProvider.setPlaceId(placeId);
+            SnackbarUtil.showInfoFromError(
+              context,
+              e,
+              fallback: '코스매니저 지정에 실패했습니다.',
+            );
+          }
+        }
+      },
+    );
+  }
+
   // 코스 색상 선택
   Widget _buildColorSelection() {
     return Column(
@@ -1038,7 +1226,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
         Text(
           '코스 대표 색상',
           style: TextStyle(
-            fontSize: 16,
+            fontSize: 18,
             fontWeight: FontWeight.w600,
             color: AppColors.textPrimary.withOpacity(0.8),
           ),
@@ -1055,9 +1243,9 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
             });
           },
           child: Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(26),
               border: Border.all(color: AppColors.borderLight, width: 1),
             ),
             child: Row(
@@ -1104,7 +1292,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                   Text(
                     '기본 등록값 설정',
                     style: TextStyle(
-                      fontSize: 16,
+                      fontSize: 18,
                       fontWeight: FontWeight.w600,
                       color: AppColors.textPrimary.withOpacity(0.8),
                     ),

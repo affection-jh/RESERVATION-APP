@@ -28,12 +28,15 @@ class WeeklyOverrideScheduleScreen extends StatefulWidget {
   final int weekOffset; // 0: 이번주, 1: 다음주, ...
   final String? weekStartDate; // "YYYY-MM-DD" 형식, null이면 weekOffset으로 계산
   final String? selectedCourseId; // 선택된 코스 ID
+  /// 부매니저일 때 편집 가능한 코스 ID 목록. null이면 전체 코스.
+  final List<String>? allowedCourseIds;
 
   const WeeklyOverrideScheduleScreen({
     super.key,
     required this.weekOffset,
     this.weekStartDate,
     this.selectedCourseId,
+    this.allowedCourseIds,
   });
 
   @override
@@ -119,6 +122,16 @@ class _WeeklyOverrideScheduleScreenState
       setState(() => _isSaving = false);
       _popOnce(null);
     }
+  }
+
+  /// 부매니저일 때는 allowedCourseIds만 반환
+  List<reservation_models.Course> _getCourses(CourseProvider cp) {
+    var list = cp.courses;
+    if (widget.allowedCourseIds != null && widget.allowedCourseIds!.isNotEmpty) {
+      final allowed = widget.allowedCourseIds!.toSet();
+      list = list.where((c) => allowed.contains(c.id)).toList();
+    }
+    return list;
   }
 
   @override
@@ -219,13 +232,17 @@ class _WeeklyOverrideScheduleScreenState
       final newRegularSessions =
           <String, List<reservation_models.CourseSession>>{};
 
-      // 선택된 코스만 필터링 (null이면 전체 코스 → 이번주 진입 시 세션 나오도록)
-      final targetCourses =
+      // 선택된 코스만 필터링 (null이면 전체 코스). 부매니저면 allowedCourseIds만
+      var targetCourses =
           widget.selectedCourseId != null
               ? courseProvider.courses
                   .where((c) => c.id == widget.selectedCourseId)
                   .toList()
               : courseProvider.courses;
+      if (widget.allowedCourseIds != null && widget.allowedCourseIds!.isNotEmpty) {
+        final allowed = widget.allowedCourseIds!.toSet();
+        targetCourses = targetCourses.where((c) => allowed.contains(c.id)).toList();
+      }
 
       for (final course in targetCourses) {
         newRegularSessions[course.id] = course.sessions;
@@ -1110,17 +1127,15 @@ class _WeeklyOverrideScheduleScreenState
 
     // 선택된 코스 색상 사용
     final courseProvider = Provider.of<CourseProvider>(context, listen: false);
+    final courses = _getCourses(courseProvider);
     Color courseColor = AppColors.primaryGreen;
     if (widget.selectedCourseId != null) {
-      final selectedCourse =
-          courseProvider.courses
-              .where((c) => c.id == widget.selectedCourseId)
-              .firstOrNull;
+      final selectedCourse = courses.where((c) => c.id == widget.selectedCourseId).firstOrNull;
       if (selectedCourse != null) {
         courseColor = Color(selectedCourse.color);
       }
-    } else if (courseProvider.courses.isNotEmpty) {
-      courseColor = Color(courseProvider.courses.first.color);
+    } else if (courses.isNotEmpty) {
+      courseColor = Color(courses.first.color);
     }
 
     // 모든 세션을 하나의 리스트로 합침 (정기 + 비정기)
@@ -1412,15 +1427,11 @@ class _WeeklyOverrideScheduleScreenState
       bool sendNotification = true; // 기본값: 알림 전송
 
       // 세션 정보 찾기
-      final courseProvider = Provider.of<CourseProvider>(
-        context,
-        listen: false,
-      );
+      final courseProvider = Provider.of<CourseProvider>(context, listen: false);
+      final courses = _getCourses(courseProvider);
       final displayCourse =
           widget.selectedCourseId != null
-              ? courseProvider.courses
-                  .where((c) => c.id == widget.selectedCourseId)
-                  .firstOrNull
+              ? courses.where((c) => c.id == widget.selectedCourseId).firstOrNull
               : null;
 
       final sessionDate = _weekDates.firstWhere(

@@ -168,6 +168,70 @@ class MemberService {
     return (list, lastDoc);
   }
 
+  /// 특정 userId 목록(최대 30개)에 해당하는 place 멤버 스트림. 부매니저 30명 롤링 윈도우용.
+  Stream<List<PlaceMember>> watchPlaceMembersByUserIds(
+    String placeId,
+    List<String> userIds,
+  ) {
+    if (placeId.isEmpty || userIds.isEmpty) {
+      return Stream.value([]);
+    }
+    final chunk = userIds.take(30).toList();
+    return _firestore
+        .collection('places')
+        .doc(placeId)
+        .collection('members')
+        .where(FieldPath.documentId, whereIn: chunk)
+        .snapshots()
+        .map((snapshot) {
+      final list = <PlaceMember>[];
+      for (final doc in snapshot.docs) {
+        if (doc.data().isEmpty) continue;
+        try {
+          final data = Map<String, dynamic>.from(doc.data());
+          data['userId'] = doc.id;
+          list.add(PlaceMember.fromJson(data));
+        } catch (e) {
+          debugPrint(
+            '[MemberService] watchPlaceMembersByUserIds 파싱 실패 ${doc.id}: $e',
+          );
+        }
+      }
+      return list;
+    });
+  }
+
+  /// 여러 userId에 해당하는 PlaceMember 목록 조회 (부매니저 코스별 로드용). Firestore 'in' 최대 30개씩 청크.
+  Future<List<PlaceMember>> getPlaceMembersByUserIds(
+    String placeId,
+    List<String> userIds,
+  ) async {
+    if (placeId.isEmpty || userIds.isEmpty) return [];
+    final distinct = userIds.toSet().toList();
+    final list = <PlaceMember>[];
+    const chunkSize = 30;
+    for (var i = 0; i < distinct.length; i += chunkSize) {
+      final chunk = distinct.skip(i).take(chunkSize).toList();
+      final snapshot = await _firestore
+          .collection('places')
+          .doc(placeId)
+          .collection('members')
+          .where(FieldPath.documentId, whereIn: chunk)
+          .get();
+      for (final doc in snapshot.docs) {
+        if (doc.data().isEmpty) continue;
+        try {
+          final data = Map<String, dynamic>.from(doc.data());
+          data['userId'] = doc.id;
+          list.add(PlaceMember.fromJson(data));
+        } catch (e) {
+          debugPrint('[MemberService] getPlaceMembersByUserIds 파싱 실패 ${doc.id}: $e');
+        }
+      }
+    }
+    return list;
+  }
+
   Future<PlaceMember?> getPlaceMember(String placeId, String uid) async {
     try {
       final doc =
@@ -329,6 +393,68 @@ class MemberService {
         .doc(placeId)
         .collection('pendingMembers')
         .doc(inviteId);
+  }
+
+  /// 부매니저가 관리 코스 0개일 때 일반 멤버로 전락 (서버에서 role·manageableCourseIds 갱신)
+  Future<bool> demoteSubManagerToMemberIfNoCourses(String placeId) async {
+    try {
+      final result = await FirebaseFunctions.instance
+          .httpsCallable('demoteSubManagerToMemberIfNoCourses')
+          .call({'placeId': placeId});
+      final data = result.data as Map<String, dynamic>?;
+      return data != null && data['demoted'] == true;
+    } catch (e) {
+      debugPrint('❌ [MemberService] demoteSubManagerToMemberIfNoCourses 실패: $e');
+      return false;
+    }
+  }
+
+  /// 코스별 부매니저 초대 (inviteSubManagerForCourse Callable)
+  /// 기존 pending이 subManager면 allowedCourseIds에 courseId 추가, 없으면 새 pending 생성.
+  /// 기존 일반 멤버면 부매니저로 승격(manageableCourseIds 추가, role: subManager).
+  /// 실패 시 [FirebaseFunctionsException]을 그대로 전달해 호출부에서 스낵바 등 처리 가능.
+  Future<bool> inviteSubManagerForCourse({
+    required String placeId,
+    required String courseId,
+    required String phoneNumber,
+    String? adminDisplayName,
+  }) async {
+    final normalized = _normalizePhone(phoneNumber);
+    if (normalized.length != 11) return false;
+    final result = await FirebaseFunctions.instance
+        .httpsCallable('inviteSubManagerForCourse')
+        .call({
+      'placeId': placeId,
+      'courseId': courseId,
+      'phoneNumber': normalized,
+      if (adminDisplayName != null && adminDisplayName.trim().isNotEmpty)
+        'adminDisplayName': adminDisplayName.trim(),
+    });
+    final data = result.data as Map<String, dynamic>?;
+    return data != null && data['success'] == true;
+  }
+
+  /// 코스별 부매니저 지정 취소 (manageableCourseIds / allowedCourseIds에서 해당 코스 제거)
+  /// [targetUserId] members 문서 id 또는 pending이면 'pending_${pendingDocId}'
+  Future<bool> removeSubManagerFromCourse({
+    required String placeId,
+    required String courseId,
+    required String targetUserId,
+  }) async {
+    try {
+      final result = await FirebaseFunctions.instance
+          .httpsCallable('removeSubManagerFromCourse')
+          .call({
+        'placeId': placeId,
+        'courseId': courseId,
+        'targetUserId': targetUserId,
+      });
+      final data = result.data as Map<String, dynamic>?;
+      return data != null && data['success'] == true && data['removed'] == true;
+    } catch (e) {
+      debugPrint('❌ [MemberService] removeSubManagerFromCourse 실패: $e');
+      return false;
+    }
   }
 
   /// 멤버 등록 (초대 토큰 생성 및/또는 enrollments 생성)

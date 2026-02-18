@@ -345,6 +345,7 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
                           const SizedBox(height: 12),
                           Builder(
                             builder: (context) {
+                              final auth = Provider.of<AuthProvider>(context);
                               final placeMap = <String, Place?>{
                                 for (final id in uniquePlaceIds) id: placeProvider.getPlace(id),
                               };
@@ -360,6 +361,10 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
                                       final isCurrentEntry =
                                           place.id == currentPlaceId &&
                                           entry.isAdmin == inAdminMode;
+                                      final placeMember = entry.isAdmin ? auth.getPlaceMemberForPlace(entry.placeId) : null;
+                                      final adminLabel = placeMember == null
+                                          ? '매니저'
+                                          : (placeMember.isManager ? '매니저' : '코스매니저');
 
                                       return Padding(
                                         padding: const EdgeInsets.only(
@@ -459,7 +464,7 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
 
                                                         if (entry.isAdmin)
                                                           Text(
-                                                            '관리자',
+                                                            adminLabel,
                                                             style: TextStyle(
                                                               fontSize: 15,
                                                               color:

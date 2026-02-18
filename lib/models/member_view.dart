@@ -50,14 +50,14 @@ class MemberView {
   /// 관리자 화면 표시 이름 (adminDisplayName과 동일)
   String get name => adminDisplayName;
 
-  /// 역할 한글 라벨: '대기중' | '매니저' | '부매니저' | '일반'
+  /// 역할 한글 라벨: '대기중' | '매니저' | '코스매니저' | '일반'
   String get roleDisplay =>
       isPending
           ? '가입 대기중'
           : isManager
           ? '매니저'
           : isSubManager
-          ? '부매니저'
+          ? '코스매니저'
           : '일반';
 
   /// 예약 가능 여부 (대기중이 아니고 enrollment.canReserve)

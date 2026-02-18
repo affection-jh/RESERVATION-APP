@@ -35,6 +35,25 @@ class AuthProvider with ChangeNotifier {
           .map((m) => m.placeId!)
           .toList();
 
+  /// 해당 플레이스에 대한 현재 사용자 PlaceMember (역할·manageableCourseIds 확인용)
+  PlaceMember? getPlaceMemberForPlace(String placeId) {
+    if (placeId.isEmpty) return null;
+    try {
+      return _placeMemberships.firstWhere(
+        (m) => m.placeId == placeId,
+        orElse: () => throw StateError('no membership'),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 해당 플레이스에서 현재 사용자가 부매니저인지 (매니저가 아님)
+  bool isSubManagerForPlace(String placeId) {
+    final m = getPlaceMemberForPlace(placeId);
+    return m != null && m.isSubManager;
+  }
+
   /// 관리 플레이스 ID (placeMemberships 기반, linkedAdmin일 땐 override 사용)
   List<String> get adminManagedPlaceIds =>
       _linkedAdmin != null
@@ -206,11 +225,29 @@ class AuthProvider with ChangeNotifier {
     try {
       _placeMemberships = await _memberService.getPlaceMembershipsForUser(uid);
       notifyListeners();
+      final demoted = await _maybeDemoteSubManagersWithNoCourses();
+      if (demoted) {
+        _placeMemberships = await _memberService.getPlaceMembershipsForUser(uid);
+        notifyListeners();
+      }
     } catch (e) {
       debugPrint('[AuthProvider] loadPlaceMembershipsForCurrentUser 실패: $e');
       _placeMemberships = [];
       notifyListeners();
     }
+  }
+
+  /// 부매니저인데 관리 코스가 0개면 서버에서 일반 멤버로 전락시킨 뒤 true 반환
+  Future<bool> _maybeDemoteSubManagersWithNoCourses() async {
+    bool any = false;
+    for (final m in _placeMemberships) {
+      if (m.placeId == null) continue;
+      if (!m.isSubManager) continue;
+      if (m.manageableCourseIds.isNotEmpty) continue;
+      final ok = await _memberService.demoteSubManagerToMemberIfNoCourses(m.placeId!);
+      if (ok) any = true;
+    }
+    return any;
   }
 
   void startWatchingPlaceMemberships() {
@@ -226,6 +263,12 @@ class AuthProvider with ChangeNotifier {
         .listen((list) {
           _placeMemberships = list;
           notifyListeners();
+          Future.microtask(() async {
+            final demoted = await _maybeDemoteSubManagersWithNoCourses();
+            if (demoted && uid == _currentUser?.userId) {
+              loadPlaceMembershipsForCurrentUser();
+            }
+          });
         });
   }
 
