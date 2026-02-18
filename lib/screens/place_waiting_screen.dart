@@ -512,13 +512,11 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
                       // memberships(manager+subManager)와 병합해 PlaceSwitch 토글 후보에 포함.
                       final fromMemberships =
                           authProvider.managedPlaceIdsFromMemberships;
-                      final managedIds = <String>{
-                        ...fromServer,
-                        ...fromMemberships,
-                      }.toList();
+                      final managedIds =
+                          <String>{...fromServer, ...fromMemberships}.toList();
                       authProvider.setAdminManagedPlaceIds(managedIds);
                       debugPrint(
-                        '[PlaceWaitingScreen] AuthProvider linkedAdmin + adminManagedPlaceIds: ${managedIds.length}개 (server ${fromServer.length} + memberships ${fromMemberships.length})',
+                        '[PlaceWaitingScreen] AuthProvider linkedAdmin + managedPlaceIds: ${managedIds.length}개 (server ${fromServer.length} + memberships ${fromMemberships.length})',
                       );
                     } else if (mounted) {
                       authProvider.setLinkedAdmin(null);
@@ -606,8 +604,6 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
     try {
       // 로컬 방문 기록에 추가 (비로그인 시 목록에 노출용)
       await StorageService().addPlaceToVisitHistory(place);
-      // 플레이스 선택 시 마지막 접속 플레이스로 저장
-      await _authService.setCurrentPlace(place);
       // 명시적 진입 선택 완료 → 플래그 해제
       await _authService.clearRequireManualEntrySelection();
 
@@ -642,7 +638,19 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
         authProvider.setApprovedPlaceIds(_memberPlaceIds);
       }
 
-      // ✅ 이전 place 데이터가 남아있지 않도록 클리어 후, 새 place 데이터 로드
+      // ✅ 이 플레이스에서 코스매니저/매니저면 관리자 모드로 진입 (처음 가입 후 카드 탭 시)
+      bool isAdminEntry =
+          authProvider.getPlaceMemberForPlace(place.id)?.canManagePlace ?? false;
+      // 가입 직후에는 AuthProvider의 membership 캐시가 아직 반영되지 않을 수 있으므로
+      // Firestore에서 members 문서를 직접 확인해 관리자 진입을 결정한다.
+      final uid = authProvider.currentUser?.userId;
+      if (uid != null && uid.isNotEmpty) {
+        final fresh = await _memberService.getPlaceMember(place.id, uid);
+        if (fresh != null) {
+          isAdminEntry = fresh.canManagePlace;
+        }
+      }
+
       final courseProvider = Provider.of<CourseProvider>(
         context,
         listen: false,
@@ -666,6 +674,17 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
       summaryProvider.clear();
       await reservationProvider.clear();
       await enrollmentProvider.clear();
+
+      if (isAdminEntry) {
+        await _authService.updateLastAccessedPlace(place.id);
+        courseProvider.loadCourses(place.id);
+        if (!mounted) return;
+        Navigator.of(context).pushNamedAndRemoveUntil('/admin', (route) => false);
+        return;
+      }
+
+      // 일반(멤버) 모드 진입
+      await _authService.setCurrentPlace(place);
 
       // ✅ 스플래시 동안 스토리 먼저 로드 시도 (실패해도 진입은 허용)
       storyProvider.loadStories(place.id);
@@ -921,7 +940,11 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
       SnackbarUtil.showSuccess(context, '회원탈퇴가 완료되었습니다.');
     } catch (e) {
       if (mounted) {
-        SnackbarUtil.showInfoFromError(context, e, fallback: '회원탈퇴 중 오류가 발생했습니다.');
+        SnackbarUtil.showInfoFromError(
+          context,
+          e,
+          fallback: '회원탈퇴 중 오류가 발생했습니다.',
+        );
       }
     }
   }
@@ -981,8 +1004,8 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
                   if (_authService.currentFirebaseUser != null)
                     Consumer<AuthProvider>(
                       builder: (context, authProvider, _) {
-                        final hasManagedPlaces =
-                            authProvider.adminManagedPlaceIds.isNotEmpty;
+                        final hasManagedPlaces = authProvider.placeAccessEntries
+                            .any((e) => e.isAdmin);
                         final label =
                             hasManagedPlaces ? '관리자로 접속하기' : '관리자로 시작하기';
                         return TextButton(
@@ -1207,7 +1230,7 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
                       child: TextField(
                         controller: _searchController,
                         decoration: InputDecoration(
-                          hintText: '플레이스 이름 또는 위치로 검색',
+                          hintText: '플레이스 이름으로 검색',
                           hintStyle: TextStyle(
                             color: AppColors.textSecondary.withOpacity(0.6),
                             fontSize: 16,

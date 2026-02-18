@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:top_snackbar_flutter/top_snack_bar.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../theme/app_colors.dart';
@@ -172,8 +173,13 @@ class SnackbarUtil {
     dynamic error, {
     String fallback = '오류가 발생했습니다. 잠시 후 다시 시도해주세요.',
   }) {
-    final raw = error is String ? error : error.toString();
-    final message = raw.trim().isEmpty ? fallback : ErrorMessageUtil.toUserFriendlyMessage(raw);
+    // FirebaseFunctionsException은 toString에 stack trace/기술 정보가 붙을 수 있어 message만 노출
+    final String raw =
+        error is FirebaseFunctionsException
+            ? ((error.message ?? '').trim())
+            : (error is String ? error : error.toString());
+    final message =
+        raw.trim().isEmpty ? fallback : ErrorMessageUtil.toUserFriendlyMessage(raw);
     showInfo(context, message);
   }
 

@@ -144,7 +144,14 @@ class CourseService {
         .doc(placeId)
         .collection('courses')
         .doc(courseId);
-    final doc = await docRef.get();
+    // 정책 수정 직후 복귀 시, 로컬 캐시가 이전 값을 들고 있어 주차탭/자물쇠가 불일치할 수 있음.
+    // 가능하면 서버 값을 우선 사용하고, 실패 시 캐시/기본값으로 폴백.
+    DocumentSnapshot<Map<String, dynamic>> doc;
+    try {
+      doc = await docRef.get(const GetOptions(source: Source.server));
+    } catch (_) {
+      doc = await docRef.get();
+    }
     if (!doc.exists) return CoursePolicy.defaultValue;
 
     final data = doc.data();

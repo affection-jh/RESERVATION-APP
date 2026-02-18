@@ -154,6 +154,17 @@ function formatDateTimeKr(dateStr: string, timeStr: string): string {
     return `${y}년 ${mo}월 ${d}일 ${timeStr}시`;
 }
 
+/** pendingMembers/서버 쿼리용: 숫자만 추출 후 0 선두 (010xxxxxxxx) */
+function normalizePhoneForStorage(raw: string): string {
+    const digits = String(raw ?? '').replace(/\D/g, '');
+    if (!digits) return '';
+    const out = digits.startsWith('82') ? ('0' + digits.slice(2)) : (digits.startsWith('0') ? digits : ('0' + digits));
+    if (out.length !== 11) {
+        throw new functions.https.HttpsError('invalid-argument', '전화번호 형식이 올바르지 않습니다.');
+    }
+    return out;
+}
+
 /**
  * "서울 로컬 시각"을 UTC 기반 Date로 만든다.
  * 예: 2026-01-07 10:00(서울) -> 내부적으로 UTC Date로 변환되어 비교 가능
@@ -410,20 +421,21 @@ export const createEnrollmentsFromPendingMembers = functions.https.onCall(async 
             throw new functions.https.HttpsError('unauthenticated', '로그인이 필요합니다.');
         }
         const userId = context.auth.uid;
-        const rawPhone = String(data?.phoneNumber ?? '').trim();
+        // ✅ 단일 루트: 전화번호는 서버에서 최종 결정/정규화
+        // - 클라이언트에서 전달된 phoneNumber는 힌트일 뿐
+        // - 없으면 users/{uid}.phoneNumber 사용
+        const db = admin.firestore();
+        const rawFromClient = String(data?.phoneNumber ?? '').trim();
+        let rawPhone = rawFromClient;
+        if (!rawPhone) {
+            const userDoc = await db.collection('users').doc(userId).get();
+            rawPhone = String(userDoc.data()?.phoneNumber ?? '').trim();
+        }
         if (!rawPhone) {
             throw new functions.https.HttpsError('invalid-argument', 'phoneNumber가 필요합니다.');
         }
+        const phoneNumber = normalizePhoneForStorage(rawPhone);
 
-        // pendingMembers 저장 형식과 동일하게 정규화 (registerMemberByAdmin과 동일)
-        const normalized = rawPhone.replace(/\D/g, '');
-        const phoneNumber = normalized.startsWith('82')
-            ? '0' + normalized.slice(2)
-            : normalized.startsWith('0')
-                ? normalized
-                : '0' + normalized;
-
-        const db = admin.firestore();
         const pendingSnap = await db.collectionGroup('pendingMembers')
             .where('phoneNumber', '==', phoneNumber)
             .get();
@@ -449,24 +461,14 @@ export const createEnrollmentsFromPendingMembers = functions.https.onCall(async 
             if (!placeId) continue;
 
             const courseEnrollments = pendingData.courseEnrollments as any[] | undefined;
-            const allowedIdsRaw = Array.isArray(pendingData.allowedCourseIds)
-                ? (pendingData.allowedCourseIds as string[])
-                : Array.isArray(pendingData.courseIds) ? (pendingData.courseIds as string[]) : [];
-            const allowedIds = allowedIdsRaw.map((id) => (id != null ? String(id) : '')).filter(Boolean);
+
+
             const fromEnrollments =
                 courseEnrollments != null
                     ? courseEnrollments
                         .map((e: any) => (e?.courseId != null ? String(e.courseId) : null))
                         .filter((id): id is string => Boolean(id))
                     : [];
-            // 병합: courseEnrollments + allowedCourseIds 중복 제거 (여러 코스가 1개만 등록되는 버그 방지)
-            const courseIdsSet = new Set<string>([...fromEnrollments, ...allowedIds]);
-            const courseIds = Array.from(courseIdsSet);
-            if (courseIds.length === 0) {
-                await pendingDoc.ref.delete();
-                continue;
-            }
-            console.log(`[createEnrollmentsFromPendingMembers] placeId=${placeId} courseIds=${courseIds.length} ids=${courseIds.join(',')}`);
 
             const adminDisplayName = (pendingData.adminDisplayName as string)?.trim()
                 || (pendingData.name as string)?.trim()
@@ -476,23 +478,130 @@ export const createEnrollmentsFromPendingMembers = functions.https.onCall(async 
             const pendingRole = (pendingData.role as string) || 'member';
             const isSubManager = pendingRole === 'subManager' || pendingRole === 'submanager';
             const memberRole = isSubManager ? 'submanager' : 'member';
-            const manageableCourseIds = isSubManager && Array.isArray(pendingData.allowedCourseIds)
-                ? (pendingData.allowedCourseIds as string[]).map((id: string) => String(id)).filter(Boolean)
-                : [];
+            const managedRaw = Array.isArray((pendingData as any).managedCourseIds)
+                ? ((pendingData as any).managedCourseIds as string[]).map((id: string) => String(id)).filter(Boolean)
+                : null;
+            // ✅ submanager의 관리 코스는 managedCourseIds만 사용. allowedIds 폴백 제거 — 수강 추가 시 수강 코스가 관리 코스로 섞이는 버그 방지.
+            const manageableCourseIds = isSubManager ? (managedRaw ?? []) : [];
+
+            // ✅ 수강(enrollment) 생성은 courseEnrollments만 사용. allowedIds 병합 제거 — 관리 코스가 수강으로 생성되는 역방향 버그 방지.
+            const enrollCourseIds = Array.from(new Set<string>([...fromEnrollments]));
+
+            if (enrollCourseIds.length === 0 && !isSubManager) {
+                // 수강 코스도 없고(submanager도 아님) → 의미 없는 pending, 정리
+                await pendingDoc.ref.delete();
+                continue;
+            }
+
+            console.log(
+                `[createEnrollmentsFromPendingMembers] placeId=${placeId} role=${memberRole} ` +
+                `enrollCourseIds=${enrollCourseIds.length} ids=${enrollCourseIds.join(',')} ` +
+                `manageableCourseIds=${manageableCourseIds.length}`,
+            );
 
             const memberRef = db.collection('places').doc(placeId).collection('members').doc(userId);
+            const existingMemberSnap = await memberRef.get();
+            const existingRole = String((existingMemberSnap.data() as any)?.role ?? '').toLowerCase();
+            // role 우선순위: manager > submanager > member (절대 강등 금지)
+            const nextRole =
+                existingRole === 'manager'
+                    ? 'manager'
+                    : (existingRole === 'submanager' || memberRole === 'submanager')
+                        ? 'submanager'
+                        : 'member';
+            const existingManageable =
+                Array.isArray((existingMemberSnap.data() as any)?.manageableCourseIds)
+                    ? ((existingMemberSnap.data() as any).manageableCourseIds as string[]).map(String).filter(Boolean)
+                    : [];
+            const nextManageable =
+                nextRole === 'submanager'
+                    ? Array.from(new Set<string>([...existingManageable, ...manageableCourseIds]))
+                    : [];
             const userDoc = await db.collection('users').doc(userId).get();
             const userPhone = userDoc.exists ? (userDoc.data()?.phoneNumber as string) ?? phoneNumber : phoneNumber;
 
             await memberRef.set({
                 userId,
-                role: memberRole,
+                role: nextRole,
                 adminDisplayName: adminDisplayName || null,
                 phoneNumber: userPhone,
-                manageableCourseIds,
+                manageableCourseIds: nextManageable,
                 createdAt: enrollmentTime,
                 updatedAt: enrollmentTime,
             }, { merge: true });
+
+            // ✅ pending_ 예약(userId=pending_{inviteId})을 실제 uid로 이관
+            // - 가입 직전에 관리자가 세션에 추가한 예약이 "유실"되지 않도록 방지
+            // - 중복(이미 uid로 예약이 있는 경우)은 pending 예약을 삭제하여 정리
+            try {
+                const pendingUserId = `pending_${pendingDoc.id}`;
+                const pendingResSnap = await db
+                    .collection('reservations')
+                    .where('placeId', '==', placeId)
+                    .where('userId', '==', pendingUserId)
+                    .get();
+                if (!pendingResSnap.empty) {
+                    let batch = db.batch();
+                    let writes = 0;
+                    for (const doc of pendingResSnap.docs) {
+                        const r = doc.data() as any;
+                        const rCourseId = String(r?.courseId ?? '');
+                        const rDay = Number(r?.dayOfWeek ?? 0);
+                        const rStart = String(r?.startTime ?? '');
+                        const rDate = String(r?.reservedDateString ?? '');
+                        const rEnrollmentId = String(r?.enrollmentId ?? '');
+
+                        // 동일 세션에 이미 uid 예약이 있으면 pending 예약은 제거
+                        if (rCourseId && rStart && rDate && Number.isFinite(rDay)) {
+                            const dupSnap = await db.collection('reservations')
+                                .where('placeId', '==', placeId)
+                                .where('userId', '==', userId)
+                                .where('courseId', '==', rCourseId)
+                                .where('dayOfWeek', '==', rDay)
+                                .where('startTime', '==', rStart)
+                                .where('reservedDateString', '==', rDate)
+                                .limit(1)
+                                .get();
+                            if (!dupSnap.empty) {
+                                batch.delete(doc.ref);
+                                writes++;
+                            } else {
+                                // pending 시절 정상(차감) 예약이었다면 enrollmentId를 실제 enrollmentId로 보정
+                                const shouldHaveEnrollment = fromEnrollments.includes(rCourseId);
+                                const next: Record<string, any> = { userId };
+                                if (shouldHaveEnrollment && (!rEnrollmentId || rEnrollmentId.startsWith('pending_'))) {
+                                    next.enrollmentId = `${userId}_${placeId}_${rCourseId}`;
+                                }
+                                batch.update(doc.ref, next);
+                                writes++;
+                            }
+                        } else {
+                            const shouldHaveEnrollment = fromEnrollments.includes(rCourseId);
+                            const next: Record<string, any> = { userId };
+                            if (shouldHaveEnrollment && (!rEnrollmentId || rEnrollmentId.startsWith('pending_'))) {
+                                next.enrollmentId = `${userId}_${placeId}_${rCourseId}`;
+                            }
+                            batch.update(doc.ref, next);
+                            writes++;
+                        }
+
+                        if (writes >= 400) {
+                            await batch.commit();
+                            batch = db.batch();
+                            writes = 0;
+                        }
+                    }
+                    if (writes > 0) await batch.commit();
+                }
+            } catch (e) {
+                console.error('[createEnrollmentsFromPendingMembers] pending reservations migrate error:', e);
+            }
+
+            // submanager-only(관리 코스만 있고 수강 코스 없음)면 enrollment는 만들지 않고 pending만 정리
+            if (enrollCourseIds.length === 0) {
+                await pendingDoc.ref.delete();
+                continue;
+            }
 
             const existingSnap = await db.collection('enrollments')
                 .where('userId', '==', userId)
@@ -502,24 +611,34 @@ export const createEnrollmentsFromPendingMembers = functions.https.onCall(async 
 
             const batch = db.batch();
             let batchWrites = 0;
-            for (const courseId of courseIds) {
+            for (const courseId of enrollCourseIds) {
                 if (existingCourseIds.has(courseId)) continue;
 
-                let totalReservations = 10;
-                // validFrom = 등록 시점(enrolledAt)과 동일
+                // 기본값 없음: pending의 courseEnrollments 또는 코스 defaultTotalReservations만 사용 (10회·1년 미사용)
+                let totalReservations = 0;
                 const validFrom = enrollmentTime.toDate();
                 let validUntil = new Date(validFrom);
-                validUntil.setFullYear(validUntil.getFullYear() + 1);
-                let initialRemaining = totalReservations;
+                let initialRemaining = 0;
                 if (courseEnrollments) {
                     const cfg = courseEnrollments.find((e: any) => e.courseId === courseId);
                     if (cfg?.totalReservations != null) totalReservations = Number(cfg.totalReservations);
                     if (cfg?.validUntil) validUntil = toDate(cfg.validUntil);
                     if (cfg?.remainingReservations != null) initialRemaining = Math.min(Number(cfg.remainingReservations), totalReservations);
-                } else {
+                    else if (totalReservations > 0) initialRemaining = totalReservations;
+                }
+                if (totalReservations <= 0) {
                     const courseDoc = await db.collection('places').doc(placeId).collection('courses').doc(courseId).get();
                     const course = courseDoc.exists ? courseDoc.data() : null;
-                    totalReservations = course?.defaultTotalReservations ?? 10;
+                    const fromCourse = course?.defaultTotalReservations;
+                    if (fromCourse != null && Number(fromCourse) > 0) {
+                        totalReservations = Number(fromCourse);
+                        if (initialRemaining <= 0) initialRemaining = totalReservations;
+                    }
+                }
+                // validUntil이 등록일 이전이면 당일 23:59로만 설정 (1년 기본값 없음)
+                if (validUntil.getTime() <= validFrom.getTime()) {
+                    const parts = getSeoulDateParts(validFrom);
+                    validUntil.setTime(makeSeoulEndOfDay(parts.y, parts.mo, parts.d).getTime());
                 }
                 // 수강 유효기간: validFrom = 등록 시점(enrollmentTime), validUntil = 마감일 23:59:59 (그날 전체)
                 const untilParts = getSeoulDateParts(validUntil);
@@ -736,52 +855,50 @@ export const createReservation = functions.https.onCall(async (data, context) =>
                 pendingDocForUpdate = pendingDoc;
                 pendingDataForUpdate = pendingData;
                 const courseEnrollments = pendingData?.courseEnrollments as any[] | undefined;
-                const allowedIds = Array.isArray(pendingData?.allowedCourseIds) ? (pendingData.allowedCourseIds as string[]) : null;
-                const courseIdsForCheck = courseEnrollments?.map((e: any) => e?.courseId) ?? allowedIds ?? [];
-
-                if (courseIdsForCheck.length === 0) {
-                    throw new functions.https.HttpsError('failed-precondition', '등록된 코스가 아닙니다.');
-                }
-
-                // 해당 코스의 enrollment 찾기 (courseEnrollments 또는 allowedCourseIds)
                 const courseEnrollment = courseEnrollments?.find((ce: any) => ce?.courseId === courseId);
-                if (!courseEnrollment && !allowedIds?.includes(courseId)) {
-                    throw new functions.https.HttpsError('failed-precondition', '등록된 코스가 아닙니다.');
-                }
-
-                // remainingReservations (courseEnrollments 있으면 사용, 없으면 allowedCourseIds만 있을 때 기본값 10)
-                const totalReservations = Number(courseEnrollment?.totalReservations ?? 10);
-                remainingReservations = Number(courseEnrollment?.remainingReservations ?? totalReservations);
-                const validFromRaw = courseEnrollment?.validFrom ?? null;
-                const validUntilRaw = courseEnrollment?.validUntil ?? null;
-                const createdAtRaw = pendingData?.createdAt;
-                const createdAtDate =
-                    (createdAtRaw instanceof admin.firestore.Timestamp)
-                        ? createdAtRaw.toDate()
-                        : (typeof createdAtRaw === 'string')
-                            ? new Date(createdAtRaw)
-                            : (createdAtRaw instanceof Date)
-                                ? createdAtRaw
-                                : new Date(0);
-
-                if (validFromRaw instanceof admin.firestore.Timestamp) {
-                    validFrom = validFromRaw.toDate();
-                } else if (typeof validFromRaw === 'string') {
-                    validFrom = new Date(validFromRaw);
+                if (!courseEnrollment) {
+                    // ✅ pending.allowedCourseIds는 "관리 코스"일 뿐 수강/차감 대상이 아님
+                    // 수강(courseEnrollments)이 없으면 예약 불가. 단 관리자가 1회성(더미) 예약은 허용.
+                    if (createOneTimeEnrollment && isAdminCreatingForUser) {
+                        isOneTimeDummy = true;
+                        remainingReservations = 1;
+                        validFrom = seoulDateOnly(todayString);
+                        validUntil = seoulDateOnly(todayString);
+                    } else {
+                        throw new functions.https.HttpsError('failed-precondition', '등록된 코스가 아닙니다.');
+                    }
                 } else {
-                    validFrom = createdAtDate;
-                }
+                    const totalReservations = Number(courseEnrollment?.totalReservations ?? 0);
+                    remainingReservations = Number(courseEnrollment?.remainingReservations ?? totalReservations);
+                    const validFromRaw = courseEnrollment?.validFrom ?? null;
+                    const validUntilRaw = courseEnrollment?.validUntil ?? null;
+                    const createdAtRaw = pendingData?.createdAt;
+                    const createdAtDate =
+                        (createdAtRaw instanceof admin.firestore.Timestamp)
+                            ? createdAtRaw.toDate()
+                            : (typeof createdAtRaw === 'string')
+                                ? new Date(createdAtRaw)
+                                : (createdAtRaw instanceof Date)
+                                    ? createdAtRaw
+                                    : new Date(0);
 
-                if (validUntilRaw instanceof admin.firestore.Timestamp) {
-                    validUntil = validUntilRaw.toDate();
-                } else if (typeof validUntilRaw === 'string') {
-                    validUntil = new Date(validUntilRaw);
-                } else {
-                    validUntil = new Date(createdAtDate);
-                    validUntil.setFullYear(validUntil.getFullYear() + 1);
-                }
-                if (createOneTimeEnrollment && isAdminCreatingForUser) {
-                    isOneTimeDummy = true; // 펜딩 일회성: pendingMembers 업데이트 없이 예약만 생성
+                    if (validFromRaw instanceof admin.firestore.Timestamp) {
+                        validFrom = validFromRaw.toDate();
+                    } else if (typeof validFromRaw === 'string') {
+                        validFrom = new Date(validFromRaw);
+                    } else {
+                        validFrom = createdAtDate;
+                    }
+
+                    if (validUntilRaw instanceof admin.firestore.Timestamp) {
+                        validUntil = validUntilRaw.toDate();
+                    } else if (typeof validUntilRaw === 'string') {
+                        validUntil = new Date(validUntilRaw);
+                    } else {
+                        // 레거시/누락 방어: 최소 1년 (pending.courseEnrollments가 정상적이면 이 분기 안 탐)
+                        validUntil = new Date(createdAtDate);
+                        validUntil.setFullYear(validUntil.getFullYear() + 1);
+                    }
                 }
             } else {
                 // 일반 멤버: enrollments에서 조회
@@ -1079,7 +1196,12 @@ export const createReservation = functions.https.onCall(async (data, context) =>
 
             // 8) reservation 생성 (글로벌 reservations 컬렉션)
             // 일회성 더미는 enrollment 미생성 → enrollmentId ''
-            const enrollmentId = enrollmentDoc?.ref?.id ?? '';
+            const enrollmentId = isOneTimeDummy
+                ? ''
+                : isPendingMember
+                    // pending 멤버의 "정상 수강 예약"(차감 대상) 표식: 취소/환불 로직에서 더미('')와 구분 필요
+                    ? `pending_${userId.replace('pending_', '')}_${courseId}`
+                    : (enrollmentDoc?.ref?.id ?? '');
             const sessionKey = `${courseId}_${reservedDateString}_${startTime}`;
             const reservationRef = db.collection('reservations').doc();
             tx.set(reservationRef, {
@@ -1215,6 +1337,8 @@ export const batchCreateReservations = functions.https.onCall(async (data, conte
         .map((e: any) => ({
             userId: String(e?.userId ?? '').trim(),
             force: e?.force === true || globalForce,
+            // 코스 미등록자도 관리자 1회성(더미) 예약으로 추가 가능
+            createOneTimeEnrollment: e?.createOneTimeEnrollment === true,
         }))
         .filter((e: { userId: string }) => e.userId.length > 0);
 
@@ -1354,6 +1478,7 @@ export const batchCreateReservations = functions.https.onCall(async (data, conte
                 isOneTimeDummy: boolean;
             };
             const toAdd: ToAddEntry[] = [];
+            const results: Array<{ id?: string; userId: string; success: boolean; error?: string; isOneTime?: boolean }> = [];
 
             for (const entry of entries) {
                 const userId = entry.userId;
@@ -1370,31 +1495,59 @@ export const batchCreateReservations = functions.https.onCall(async (data, conte
                     const pendingId = userId.replace('pending_', '');
                     const pendingRef = db.collection('places').doc(placeId).collection('pendingMembers').doc(pendingId);
                     const pendingDoc = await tx.get(pendingRef);
-                    if (!pendingDoc.exists) continue;
+                    if (!pendingDoc.exists) {
+                        results.push({ userId, success: false, error: '가입 대기중 멤버 정보를 찾을 수 없습니다.' });
+                        continue;
+                    }
                     const pendingData = pendingDoc.data() as any;
                     pendingDocForUpdate = pendingDoc;
                     pendingDataForUpdate = pendingData;
                     const courseEnrollments = pendingData?.courseEnrollments as any[] | undefined;
-                    const allowedIds = Array.isArray(pendingData?.allowedCourseIds) ? (pendingData.allowedCourseIds as string[]) : null;
                     const courseEnrollment = courseEnrollments?.find((ce: any) => ce?.courseId === courseId);
-                    if (!courseEnrollment && !allowedIds?.includes(courseId)) continue;
-                    const totalReservations = Number(courseEnrollment?.totalReservations ?? 10);
-                    remainingReservations = Number(courseEnrollment?.remainingReservations ?? totalReservations);
-                    const validFromRaw = courseEnrollment?.validFrom ?? null;
-                    const validUntilRaw = courseEnrollment?.validUntil ?? null;
-                    const createdAtRaw = pendingData?.createdAt;
-                    const createdAtDate = (createdAtRaw instanceof admin.firestore.Timestamp) ? createdAtRaw.toDate() : (typeof createdAtRaw === 'string') ? new Date(createdAtRaw) : (createdAtRaw instanceof Date) ? createdAtRaw : new Date(0);
-                    validFrom = validFromRaw instanceof admin.firestore.Timestamp ? validFromRaw.toDate() : (typeof validFromRaw === 'string') ? new Date(validFromRaw) : createdAtDate;
-                    validUntil = validUntilRaw instanceof admin.firestore.Timestamp ? validUntilRaw.toDate() : (typeof validUntilRaw === 'string') ? new Date(validUntilRaw) : (() => { const d = new Date(createdAtDate); d.setFullYear(d.getFullYear() + 1); return d; })();
+                    if (!courseEnrollment) {
+                        // ✅ pending에서 allowedCourseIds는 "관리 코스"일 뿐 "수강/차감 대상"이 아님.
+                        // 수강(courseEnrollments)이 없으면 기본적으로 스킵, 단 관리자 1회성(더미) 예약은 허용.
+                        if (entry.createOneTimeEnrollment === true) {
+                            isOneTimeDummy = true;
+                            remainingReservations = 1;
+                            validFrom = seoulDateOnly(todayString);
+                            validUntil = seoulDateOnly(todayString);
+                        } else {
+                            results.push({ userId, success: false, error: '코스 등록이 없어 추가할 수 없습니다.' });
+                            continue;
+                        }
+                    } else {
+                        // 이 코스에 등록된 pending → 일회성 아님. pending 문서의 남은 횟수 사용 후 -1
+                        const totalReservations = Number(courseEnrollment?.totalReservations ?? 10);
+                        remainingReservations = Number(courseEnrollment?.remainingReservations ?? totalReservations);
+                        const validFromRaw = courseEnrollment?.validFrom ?? null;
+                        const validUntilRaw = courseEnrollment?.validUntil ?? null;
+                        const createdAtRaw = pendingData?.createdAt;
+                        const createdAtDate = (createdAtRaw instanceof admin.firestore.Timestamp) ? createdAtRaw.toDate() : (typeof createdAtRaw === 'string') ? new Date(createdAtRaw) : (createdAtRaw instanceof Date) ? createdAtRaw : new Date(0);
+                        validFrom = validFromRaw instanceof admin.firestore.Timestamp ? validFromRaw.toDate() : (typeof validFromRaw === 'string') ? new Date(validFromRaw) : createdAtDate;
+                        validUntil = validUntilRaw instanceof admin.firestore.Timestamp ? validUntilRaw.toDate() : (typeof validUntilRaw === 'string') ? new Date(validUntilRaw) : (() => { const d = new Date(createdAtDate); d.setFullYear(d.getFullYear() + 1); return d; })();
+                    }
                 } else {
                     const enrollmentQuery = db.collection('enrollments').where('userId', '==', userId).where('courseId', '==', courseId).limit(1);
                     const enrollmentSnap = await tx.get(enrollmentQuery as any);
-                    if (enrollmentSnap.empty) continue;
-                    enrollmentDoc = enrollmentSnap.docs[0] as admin.firestore.QueryDocumentSnapshot;
-                    const enrollmentData = enrollmentDoc.data() as any;
-                    remainingReservations = Number(enrollmentData?.remainingReservations ?? 0);
-                    validFrom = (enrollmentData?.validFrom instanceof admin.firestore.Timestamp) ? enrollmentData.validFrom.toDate() : (enrollmentData?.validFrom ? new Date(enrollmentData.validFrom) : new Date(0));
-                    validUntil = (enrollmentData?.validUntil instanceof admin.firestore.Timestamp) ? enrollmentData.validUntil.toDate() : (enrollmentData?.validUntil ? new Date(enrollmentData.validUntil) : new Date(0));
+                    if (enrollmentSnap.empty) {
+                        // ✅ 코스 미등록자: 관리자 1회성(더미) 예약 허용
+                        if (entry.createOneTimeEnrollment) {
+                            isOneTimeDummy = true;
+                            remainingReservations = 1;
+                            validFrom = seoulDateOnly(todayString);
+                            validUntil = seoulDateOnly(todayString);
+                        } else {
+                            results.push({ userId, success: false, error: '코스 등록이 없어 추가할 수 없습니다.' });
+                            continue;
+                        }
+                    } else {
+                        enrollmentDoc = enrollmentSnap.docs[0] as admin.firestore.QueryDocumentSnapshot;
+                        const enrollmentData = enrollmentDoc.data() as any;
+                        remainingReservations = Number(enrollmentData?.remainingReservations ?? 0);
+                        validFrom = (enrollmentData?.validFrom instanceof admin.firestore.Timestamp) ? enrollmentData.validFrom.toDate() : (enrollmentData?.validFrom ? new Date(enrollmentData.validFrom) : new Date(0));
+                        validUntil = (enrollmentData?.validUntil instanceof admin.firestore.Timestamp) ? enrollmentData.validUntil.toDate() : (enrollmentData?.validUntil ? new Date(enrollmentData.validUntil) : new Date(0));
+                    }
                 }
 
                 const today = seoulDateOnly(todayString);
@@ -1410,7 +1563,10 @@ export const batchCreateReservations = functions.https.onCall(async (data, conte
                     .where('courseId', '==', courseId).where('dayOfWeek', '==', dayOfWeek)
                     .where('startTime', '==', startTime).where('reservedDateString', '==', reservedDateString).limit(1);
                 const dupSnap = await tx.get(dupQuery as any);
-                if (!dupSnap.empty) continue;
+                if (!dupSnap.empty) {
+                    results.push({ userId, success: false, error: '이미 이 세션에 예약이 있습니다.' });
+                    continue;
+                }
 
                 const overlapQuery = db.collection('reservations')
                     .where('placeId', '==', placeId).where('userId', '==', userId).where('reservedDateString', '==', reservedDateString);
@@ -1440,7 +1596,10 @@ export const batchCreateReservations = functions.https.onCall(async (data, conte
                     }
                     if (doTimesOverlap(startTime, newEndTime, rStart, rEnd)) { hasOverlap = true; break; }
                 }
-                if (hasOverlap) continue;
+                if (hasOverlap) {
+                    results.push({ userId, success: false, error: '다른 예약과 시간이 겹쳐 추가할 수 없습니다.' });
+                    continue;
+                }
 
                 // 관리자 추가 시 force이면 제한사유 조사 없이 강제 추가
                 if (!entry.force) {
@@ -1477,7 +1636,13 @@ export const batchCreateReservations = functions.https.onCall(async (data, conte
 
                 toAdd.push({
                     userId,
-                    enrollmentId: enrollmentDoc?.ref?.id ?? '',
+                    enrollmentId:
+                        isOneTimeDummy
+                            ? ''
+                            : isPendingMember
+                                // pending 멤버의 "정상 수강 예약"(차감 대상) 표식: 취소/환불 로직에서 더미('')와 구분 필요
+                                ? `pending_${userId.replace('pending_', '')}_${courseId}`
+                                : (enrollmentDoc?.ref?.id ?? ''),
                     enrollmentDoc,
                     pendingDocForUpdate,
                     pendingDataForUpdate,
@@ -1486,7 +1651,7 @@ export const batchCreateReservations = functions.https.onCall(async (data, conte
                 });
             }
 
-            const created: Array<{ id: string; userId: string }> = [];
+            const created: Array<{ id: string; userId: string; isOneTime: boolean }> = [];
             const sessionKey = `${courseId}_${reservedDateString}_${startTime}`;
 
             for (const item of toAdd) {
@@ -1504,7 +1669,7 @@ export const batchCreateReservations = functions.https.onCall(async (data, conte
                     reservedDateString,
                     sessionKey,
                 });
-                created.push({ id: reservationRef.id, userId: item.userId });
+                created.push({ id: reservationRef.id, userId: item.userId, isOneTime: item.isOneTimeDummy });
 
                 if (!item.isOneTimeDummy) {
                     if (item.pendingDocForUpdate?.exists) {
@@ -1536,10 +1701,17 @@ export const batchCreateReservations = functions.https.onCall(async (data, conte
                 }, toAdd.length, summarySnap);
             }
 
-            return { created };
+            for (const c of created) {
+                results.push({ id: c.id, userId: c.userId, success: true, isOneTime: c.isOneTime === true });
+            }
+            return { created, results };
         });
 
-        const created = (txResult as { created: Array<{ id: string; userId: string }> }).created;
+        const tx = txResult as {
+            created: Array<{ id: string; userId: string; isOneTime: boolean }>;
+            results?: Array<{ id?: string; userId: string; success: boolean; error?: string; isOneTime?: boolean }>;
+        };
+        const created = tx.created;
         for (const c of created) {
             if (c.userId.startsWith('pending_')) continue;
             try {
@@ -1560,7 +1732,7 @@ export const batchCreateReservations = functions.https.onCall(async (data, conte
         }
 
         logFunctionSuccess(functionName, { createdCount: created.length, placeId, courseId, reservedDateString });
-        const results = created.map((c) => ({ id: c.id, userId: c.userId, success: true }));
+        const results = tx.results ?? created.map((c) => ({ id: c.id, userId: c.userId, success: true, isOneTime: c.isOneTime === true }));
         return { created, results };
     } catch (error: any) {
         logFunctionError(functionName, error as Error, { placeId, courseId, reservedDateString });
@@ -2315,7 +2487,7 @@ export const deleteCourse = functions.https.onCall(async (data, context) => {
     );
     const deletedCourseMembers = 0;
 
-    // 7) places/{placeId}/pendingMembers에서 해당 course 제거 (allowedCourseIds)
+    // 7) places/{placeId}/pendingMembers에서 해당 course 제거 (managedCourseIds + allowedCourseIds + courseEnrollments)
     let updatedPendingMembers = 0;
     let lastPendingDoc: FirebaseFirestore.QueryDocumentSnapshot | null = null;
     const pendingPageSize = 300;
@@ -2330,21 +2502,25 @@ export const deleteCourse = functions.https.onCall(async (data, context) => {
         let wrote = 0;
         for (const d of snap.docs) {
             const p = d.data() as any;
+            const beforeManaged = Array.isArray(p?.managedCourseIds) ? (p.managedCourseIds as string[]) : [];
             const beforeAllowed = Array.isArray(p?.allowedCourseIds) ? (p.allowedCourseIds as string[]) : [];
             const beforeCourseIds = Array.isArray(p?.courseIds) ? (p.courseIds as string[]) : [];
             const beforeEnrollments = Array.isArray(p?.courseEnrollments) ? (p.courseEnrollments as any[]) : [];
 
             let changed = false;
+            const nextManaged = beforeManaged.filter((x) => String(x ?? '') !== courseId);
             const nextAllowed = beforeAllowed.filter((x) => String(x ?? '') !== courseId);
             const nextCourseIds = beforeCourseIds.filter((x) => String(x ?? '') !== courseId);
             const nextEnrollments = beforeEnrollments.filter((ce) => String((ce as any)?.courseId ?? '') !== courseId);
 
+            if (nextManaged.length !== beforeManaged.length) { changed = true; }
             if (nextAllowed.length !== beforeAllowed.length) { changed = true; }
             if (nextCourseIds.length !== beforeCourseIds.length) { changed = true; }
             if (nextEnrollments.length !== beforeEnrollments.length) { changed = true; }
 
             if (changed) {
                 const update: any = {};
+                if (nextManaged.length !== beforeManaged.length) update.managedCourseIds = nextManaged;
                 if (nextAllowed.length !== beforeAllowed.length) update.allowedCourseIds = nextAllowed;
                 if (nextCourseIds.length !== beforeCourseIds.length) update.courseIds = nextCourseIds;
                 if (nextEnrollments.length !== beforeEnrollments.length) update.courseEnrollments = nextEnrollments;
@@ -3938,15 +4114,7 @@ export const registerMemberByAdmin = functions.https.onCall(async (data, context
         throw new functions.https.HttpsError('invalid-argument', 'placeId와 phoneNumber가 필요합니다.');
     }
 
-    const normalizedPhone = phoneNumber.replace(/\D/g, '');
-    const koreaPhone = normalizedPhone.startsWith('82')
-        ? '0' + normalizedPhone.slice(2)
-        : normalizedPhone.startsWith('0')
-            ? normalizedPhone
-            : '0' + normalizedPhone;
-    if (koreaPhone.length !== 11) {
-        throw new functions.https.HttpsError('invalid-argument', '전화번호 형식이 올바르지 않습니다.');
-    }
+    const koreaPhone = normalizePhoneForStorage(phoneNumber);
 
     await assertAdminForPlaceUid(adminId, placeId);
 
@@ -4109,7 +4277,9 @@ export const registerMemberByAdmin = functions.https.onCall(async (data, context
             phoneNumber: koreaPhone,
             invitedBy: adminId,
             role: 'member',
-            allowedCourseIds: courseIds,
+            // ✅ allowedCourseIds는 더 이상 수강 코스 저장용으로 사용하지 않음 (관리코스 전용/레거시 제거)
+            allowedCourseIds: [],
+            managedCourseIds: [],
             courseEnrollments: pendingCourseEnrollments,
             adminDisplayName: name || null,
             createdAt: now,
@@ -4120,8 +4290,8 @@ export const registerMemberByAdmin = functions.https.onCall(async (data, context
 });
 
 /**
- * 코스별 부매니저 초대 (pendingMembers에 role: subManager, allowedCourseIds에 courseId 추가/병합)
- * - 매니저만 호출 가능. 기존 pending이 있으면 allowedCourseIds에만 courseId 추가.
+ * 코스별 부매니저 초대 (pendingMembers에 role: subManager, managedCourseIds에 courseId 추가/병합)
+ * - 매니저만 호출 가능. 기존 pending이 있으면 managedCourseIds에만 courseId 추가.
  */
 export const inviteSubManagerForCourse = functions.https.onCall(async (data, context) => {
     const functionName = 'inviteSubManagerForCourse';
@@ -4140,16 +4310,7 @@ export const inviteSubManagerForCourse = functions.https.onCall(async (data, con
         throw new functions.https.HttpsError('invalid-argument', 'placeId, courseId, phoneNumber가 필요합니다.');
     }
 
-    const normalizedPhone = phoneNumber.replace(/\D/g, '');
-    const koreaPhone = normalizedPhone.startsWith('82')
-        ? '0' + normalizedPhone.slice(2)
-        : normalizedPhone.startsWith('0')
-            ? normalizedPhone
-            : '0' + normalizedPhone;
-    if (koreaPhone.length !== 11) {
-        throw new functions.https.HttpsError('invalid-argument', '전화번호 형식이 올바르지 않습니다.');
-    }
-
+    const koreaPhone = normalizePhoneForStorage(phoneNumber);
     await assertAdminForPlaceUid(adminId, placeId);
 
     const db = admin.firestore();
@@ -4171,28 +4332,31 @@ export const inviteSubManagerForCourse = functions.https.onCall(async (data, con
     if (pendingSnap.exists) {
         const pendingData = pendingSnap.data() || {};
         const currentRole = (pendingData.role as string) || 'member';
-        if (currentRole !== 'subManager' && currentRole !== 'submanager') {
-            throw new functions.https.HttpsError(
-                'failed-precondition',
-                '이미 일반 멤버로 초대된 전화번호입니다. 부매니저는 별도 전화번호로 초대해주세요.',
-            );
-        }
-        const beforeAllowed = Array.isArray(pendingData.allowedCourseIds)
-            ? (pendingData.allowedCourseIds as string[]).map((id: string) => String(id)).filter(Boolean)
+        // ✅ 코스매니저 초대는 managedCourseIds에만 반영 (allowedCourseIds와 분리)
+        const beforeManaged = Array.isArray((pendingData as any).managedCourseIds)
+            ? ((pendingData as any).managedCourseIds as string[]).map((id: string) => String(id)).filter(Boolean)
             : [];
-        if (beforeAllowed.includes(courseId)) {
+        if (beforeManaged.includes(courseId)) {
             logFunctionSuccess(functionName, { updated: false, alreadyHasCourse: true });
             return { success: true, alreadyHasCourse: true };
         }
-        const nextAllowed = [...beforeAllowed, courseId];
+        const nextManaged = [...beforeManaged, courseId];
         await pendingRef.update({
             role: 'submanager',
-            allowedCourseIds: nextAllowed,
+            managedCourseIds: nextManaged,
             ...(adminDisplayName != null ? { adminDisplayName } : {}),
             updatedAt: now,
         });
-        logFunctionSuccess(functionName, { updated: true, allowedCourseIds: nextAllowed.length });
-        return { success: true, updated: true };
+        logFunctionSuccess(functionName, {
+            updated: true,
+            managedCourseIds: nextManaged.length,
+            promoted: currentRole !== 'subManager' && currentRole !== 'submanager',
+        });
+        return {
+            success: true,
+            updated: true,
+            promoted: currentRole !== 'subManager' && currentRole !== 'submanager',
+        };
     }
 
     const userSnap = await db.collection('users').where('phoneNumber', '==', koreaPhone).limit(1).get();
@@ -4232,7 +4396,8 @@ export const inviteSubManagerForCourse = functions.https.onCall(async (data, con
         phoneNumber: koreaPhone,
         invitedBy: adminId,
         role: 'submanager',
-        allowedCourseIds: [courseId],
+        managedCourseIds: [courseId],
+        allowedCourseIds: [],
         adminDisplayName: adminDisplayName || null,
         createdAt: now,
     });
@@ -4294,19 +4459,32 @@ export const removeSubManagerFromCourse = functions.https.onCall(async (data, co
             return { success: true, removed: false, reason: 'pending_not_found' };
         }
         const pendingData = pendingSnap.data() || {};
-        const beforeAllowed = Array.isArray(pendingData.allowedCourseIds)
+        // 관리 코스: managedCourseIds가 단일 소스, 레거시는 allowedCourseIds
+        const beforeManaged: string[] = Array.isArray((pendingData as any).managedCourseIds)
+            ? ((pendingData as any).managedCourseIds as string[]).map((id: string) => String(id)).filter(Boolean)
+            : [];
+        const beforeAllowed: string[] = Array.isArray(pendingData.allowedCourseIds)
             ? (pendingData.allowedCourseIds as string[]).map((id: string) => String(id)).filter(Boolean)
             : [];
+        const nextManaged = beforeManaged.filter((id: string) => String(id) !== courseId);
         const nextAllowed = beforeAllowed.filter((id: string) => String(id) !== courseId);
-        if (nextAllowed.length === beforeAllowed.length) {
+        const removedFromManaged = nextManaged.length < beforeManaged.length;
+        const removedFromAllowed = nextAllowed.length < beforeAllowed.length;
+        if (!removedFromManaged && !removedFromAllowed) {
             return { success: true, removed: false, reason: 'course_not_in_list' };
         }
-        await pendingRef.update({
+        const update: { managedCourseIds: string[]; allowedCourseIds: string[]; role?: string; updatedAt: admin.firestore.Timestamp } = {
+            managedCourseIds: nextManaged,
             allowedCourseIds: nextAllowed,
             updatedAt: now,
-        });
-        logFunctionSuccess(functionName, { pending: true, remainingCourses: nextAllowed.length });
-        return { success: true, removed: true, pending: true };
+        };
+        const remainingCount = Math.max(nextManaged.length, nextAllowed.length);
+        if (remainingCount === 0) {
+            update.role = 'member';
+        }
+        await pendingRef.update(update);
+        logFunctionSuccess(functionName, { pending: true, remainingCourses: remainingCount, demoted: remainingCount === 0 });
+        return { success: true, removed: true, pending: true, demoted: remainingCount === 0 };
     }
 
     const memberRef = db.collection('places').doc(placeId).collection('members').doc(targetUserId);

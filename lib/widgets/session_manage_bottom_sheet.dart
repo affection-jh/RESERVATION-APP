@@ -56,21 +56,24 @@ class _SessionManageBottomSheetState extends State<SessionManageBottomSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.backgroundWhite,
-        borderRadius: const BorderRadius.only(
-          topLeft: Radius.circular(24),
-          topRight: Radius.circular(24),
-        ),
-      ),
-      child: SafeArea(
-        bottom: false,
-        child: Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(context).padding.bottom,
+    final mq = MediaQuery.of(context);
+    final viewInsetsBottom = mq.viewInsets.bottom;
+    final paddingBottom = mq.padding.bottom;
+    return Padding(
+      padding: EdgeInsets.only(bottom: viewInsetsBottom),
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.backgroundWhite,
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(24),
+            topRight: Radius.circular(24),
           ),
-          child: Column(
+        ),
+        child: SafeArea(
+          bottom: false,
+          child: Padding(
+            padding: EdgeInsets.only(bottom: paddingBottom),
+            child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               // 핸들 바
@@ -215,11 +218,11 @@ class _SessionManageBottomSheetState extends State<SessionManageBottomSheet> {
                   ),
                 ),
               ),
-              SizedBox(height: MediaQuery.of(context).viewInsets.bottom),
             ],
           ),
         ),
       ),
+    ),
     );
   }
 

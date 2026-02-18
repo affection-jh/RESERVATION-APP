@@ -188,9 +188,13 @@ class _MyPageScreenState extends State<MyPageScreen> {
     if (currentPlace == null) {
       final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
-      final approvedPlaceIds = authProvider.approvedPlaceIds;
-      if (approvedPlaceIds.isNotEmpty) {
-        final firstPlaceId = approvedPlaceIds.first;
+      final memberPlaceIds =
+          authProvider.placeAccessEntries
+              .where((e) => e.isAdmin == false)
+              .map((e) => e.placeId)
+              .toList();
+      if (memberPlaceIds.isNotEmpty) {
+        final firstPlaceId = memberPlaceIds.first;
         await placeProvider.loadPlace(firstPlaceId);
         currentPlace = placeProvider.currentPlace;
       }

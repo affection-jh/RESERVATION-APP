@@ -137,7 +137,8 @@ class MyApp extends StatelessWidget {
       child: _AppLifecycleNotifier(
         child: MaterialApp(
           navigatorKey: navigatorKey,
-          title: '기차 예약',
+          navigatorObservers: [routeObserver],
+          title: '바로예약',
           builder: (context, child) {
             return MediaQuery(
               data: MediaQuery.of(

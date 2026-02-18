@@ -59,8 +59,9 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
   Set<String> _processedCourseIds = {}; // 재등록 또는 삭제 처리된 코스 ID들
   StreamSubscription<List<CourseEnrollment>>? _enrollmentSubscription;
   StreamSubscription<DocumentSnapshot>? _pendingMemberSubscription;
-  List<String> _allPendingCourseIds = []; // pendingMembers에서 가져온 원본 코스 ID들
-  List<String> _pendingCourseIds = []; // enrollments에 없는 pending 코스 ID들 (계산된 값)
+  /// pending 문서의 courseEnrollments에만 있는 코스 ID (관리만 하는 allowedCourseIds 제외)
+  List<String> _allPendingCourseIds = [];
+  List<String> _pendingCourseIds = []; // enrollments에 없는 pending 수강 코스 ID들 (계산된 값)
   List<CourseEnrollment> _pendingEnrollments =
       []; // pendingMembers의 courseEnrollments 파싱
   bool _enrollmentsLoaded = false;
@@ -291,7 +292,8 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
 
     setState(() {
       _pendingEnrollments = pendingEnrollments;
-      _allPendingCourseIds = foundPendingMember?.effectiveCourseIds ?? [];
+      // 등록 그리드/코스 등록 제외에는 실제 수강(courseEnrollments)만 사용. 관리만 하는 코스(allowedCourseIds) 제외
+      _allPendingCourseIds = foundPendingMember?.courseIdsFromEnrollments ?? [];
       _updatePendingCourseIds();
       _pendingMembersLoaded = true;
       _isLoading = !(_enrollmentsLoaded && _pendingMembersLoaded);
@@ -406,8 +408,9 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                           if (widget.member.isSubManager &&
                               widget.member.manageableCourseIds.isNotEmpty)
                             const SizedBox(height: 6),
-                          // 등록된 코스 목록
-                          _buildEnrollmentsSection(),
+                          // 등록된 코스 목록: 코스매니저만(수강 등록 없음)이면 섹션 자체를 숨김
+                          if (_shouldShowEnrollmentsSection())
+                            _buildEnrollmentsSection(),
                         ],
                       ],
                     ),
@@ -854,6 +857,13 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
         ),
       ],
     );
+  }
+
+  /// 등록된 코스 섹션 표시 여부.
+  /// - 일반 멤버: 항상 표시.
+  /// - 코스매니저: 수강 등록 유무와 관계없이 항상 표시 (하단 "코스 추가" 셀 노출용).
+  bool _shouldShowEnrollmentsSection() {
+    return true;
   }
 
   Widget _buildEnrollmentsSection() {

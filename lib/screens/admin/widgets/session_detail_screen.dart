@@ -432,6 +432,16 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
         setState(() {
           _selectedReservationIds.clear();
         });
+        final sessionId = SessionReservationSummary.generateSessionId(
+          widget.course.id,
+          widget.session.dayOfWeek,
+          widget.session.startTime,
+        );
+        final dateKey = _formatDate(widget.date);
+        Provider.of<ReservationSummaryProvider>(
+          context,
+          listen: false,
+        ).applyOptimisticReservedCountChange(sessionId, dateKey, -ids.length);
         SnackbarUtil.showSuccess(context, '${ids.length}명의 예약이 취소되었습니다.');
       }
     } on FirebaseFunctionsException catch (e) {
@@ -879,7 +889,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
       }
     }
     if (targetMember == null || targetMember.enrollment == null) {
-      SnackbarUtil.showInfo(context, '등록 정보를 불러올 수 없습니다.');
+      SnackbarUtil.showInfo(context, '이 코스에 등록되지 않은 멤버입니다.');
       return;
     }
     Navigator.of(context).push(
@@ -961,7 +971,9 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                 .map(
                   (m) => <String, dynamic>{
                     'userId': m.userId,
-                    'createOneTimeEnrollment': false,
+                    // 코스 미등록자만 1회성(더미). pending이라도 이 코스 등록돼 있으면 일회성 아님 → 서버에서 pending 문서 횟수 -1
+                    'createOneTimeEnrollment':
+                        !m.enrolledCourseIds.contains(widget.course.id),
                   },
                 )
                 .toList(),
@@ -990,13 +1002,17 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     final resultsList = batchResult['results'] as List<dynamic>? ?? [];
     int success = 0;
     int oneTimeCount = 0;
+    String? firstError;
     for (final r in resultsList) {
       final map = Map<String, dynamic>.from(r as Map);
       if (map['success'] == true) {
         success++;
         if (map['isOneTime'] == true) oneTimeCount++;
+      } else {
+        firstError ??= map['error']?.toString();
       }
     }
+    final failed = resultsList.length - success;
     if (mounted) {
       _clearBatchLoading(
         toAdd.map((m) => m.userId).toList(),
@@ -1006,11 +1022,19 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
         if (oneTimeCount > 0) {
           SnackbarUtil.showSuccess(
             context,
-            '일회성 추가 성공: $oneTimeCount명${success > oneTimeCount ? ' (총 $success명 추가됨)' : ''}',
+            '일회성 추가 성공: $oneTimeCount명${success > oneTimeCount ? ' (총 $success명 추가됨)' : ''}${failed > 0 ? ' (실패 $failed명)' : ''}',
           );
         } else {
-          SnackbarUtil.showSuccess(context, '$success명 예약이 추가되었습니다.');
+          SnackbarUtil.showSuccess(
+            context,
+            '$success명 예약이 추가되었습니다.${failed > 0 ? ' (실패 $failed명)' : ''}',
+          );
         }
+      } else {
+        SnackbarUtil.showInfo(
+          context,
+          firstError ?? '예약이 추가되지 않았습니다. (코스 미등록자는 일회성으로만 추가 가능)',
+        );
       }
     }
   }

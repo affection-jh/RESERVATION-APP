@@ -1259,12 +1259,7 @@ class _WeeklyOverrideScheduleScreenState
       isDismissible: true,
       enableDrag: true,
       useSafeArea: true,
-      builder:
-          (context) => Padding(
-            padding: EdgeInsets.only(
-              bottom: MediaQuery.of(context).viewInsets.bottom,
-            ),
-            child: SessionEditBottomSheet(
+      builder: (context) => SessionEditBottomSheet(
               initialStartTime: startTime,
               initialEndTime: endTime,
               initialCapacity:
@@ -1368,8 +1363,7 @@ class _WeeklyOverrideScheduleScreenState
                         _clearSelectionForDay(dayOfWeek);
                       }
                       : null,
-            ),
-          ),
+      ),
     ).then((_) {
       setState(() {
         _previewStartTime = null;

@@ -597,11 +597,13 @@ class AuthService {
 
   /// 최근 접속한 플레이스 업데이트 (User.currentPlaceId + 로컬 저장소)
   /// AppStartup에서 getLastAccessedPlaceId()로 복원하므로 로컬 저장 필수
+  /// 코스매니저 등 첫 가입 시 getAdminUserId가 없어도 currentUser로 저장
   Future<void> updateLastAccessedPlace(String placeId) async {
     await _storageService.saveLastAccessedPlaceId(placeId);
     final savedUserId = await _storageService.getAdminUserId();
-    if (savedUserId != null) {
-      await _userService.updateCurrentPlaceId(savedUserId, placeId);
+    final userId = savedUserId ?? _userService.currentUser?.userId;
+    if (userId != null) {
+      await _userService.updateCurrentPlaceId(userId, placeId);
     }
     await _storageService.saveLastEntryMode('admin');
   }
@@ -887,13 +889,7 @@ class AuthService {
     }
 
     final now = TimezoneUtils.getSeoulDateTime();
-    final normalizedPhone = phoneNumber.replaceAll(RegExp(r'[^\d]'), '');
-    final normalized =
-        normalizedPhone.startsWith('82')
-            ? '0${normalizedPhone.substring(2)}'
-            : normalizedPhone.startsWith('0')
-            ? normalizedPhone
-            : '0$normalizedPhone';
+    final normalized = PhoneUtils.normalizeForStorage(phoneNumber);
     final pendingId = '${placeId}_$normalized';
     final pendingRef = firestore
         .collection('places')

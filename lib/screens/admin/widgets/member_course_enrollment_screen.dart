@@ -328,9 +328,9 @@ class _MemberCourseEnrollmentScreenState
         }
       },
       child: Scaffold(
-        backgroundColor: AppColors.backgroundLight,
+        backgroundColor: AppColors.backgroundWhite,
         appBar: AppBar(
-          backgroundColor: AppColors.backgroundLight,
+          backgroundColor: AppColors.backgroundWhite,
           elevation: 0,
           toolbarHeight: 100,
           leading: IconButton(

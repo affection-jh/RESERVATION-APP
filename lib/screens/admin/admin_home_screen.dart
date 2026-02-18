@@ -25,6 +25,7 @@ import '../../utils/local_storage_util.dart';
 import '../../utils/timezone_utils.dart';
 import '../../utils/reservation_policy_engine.dart';
 import '../../models/course_policy.dart';
+import '../../utils/navigator_key.dart';
 
 class AdminHomeScreen extends StatefulWidget {
   const AdminHomeScreen({super.key});
@@ -34,7 +35,7 @@ class AdminHomeScreen extends StatefulWidget {
 }
 
 class _AdminHomeScreenState extends State<AdminHomeScreen>
-    with AutomaticKeepAliveClientMixin {
+    with AutomaticKeepAliveClientMixin, RouteAware {
   int _selectedTab = 0; // 0: 스토리, 1: 프로모션
   int _selectedWeekTab = 0; // 0: 이번주, 1: 다음주, 2: 다다음주
   int _storyPageIndex = 0;
@@ -67,8 +68,30 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    routeObserver.unsubscribe(this);
+    final route = ModalRoute.of(context);
+    if (route is ModalRoute<void>) {
+      routeObserver.subscribe(this, route);
+    }
+  }
+
+  @override
   void dispose() {
+    routeObserver.unsubscribe(this);
     super.dispose();
+  }
+
+  @override
+  void didPopNext() {
+    // 코스 등록 등에서 복귀 시 주차 탭을 예약 정책에 맞게 다시 계산
+    if (!mounted) return;
+    _loadedPlaceId = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _loadDataIfNeeded();
+    });
   }
 
   /// 데이터가 로드되지 않았으면 로드
@@ -84,9 +107,10 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
     if (_loadedPlaceId == currentPlace.id) return;
 
     try {
-      // StoryProvider에서 중복 로드 방지하므로 항상 호출해도 됨
+      // 복귀 시(예: 예약 정책 수정 후) 코스 목록·정책을 다시 가져와야 compact_calendar 자물쇠가 갱신됨.
+      // 주차 탭은 getCoursePolicy()로 직접 읽어서 반영되지만, 캘린더는 widget.courses 내 Course.policy 사용.
       await Future.wait([
-        courseProvider.loadCourses(currentPlace.id),
+        courseProvider.loadCourses(currentPlace.id, forceRefresh: true),
         storyProvider.loadStories(currentPlace.id),
       ]);
 
@@ -165,6 +189,9 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
         placeId: placeId,
       );
       _currentCoursePolicy = policy;
+      // 주차 탭과 동일한 최신 정책을 캘린더에도 반영 → 마지막 주차에 자물쇠가 잘못 생기지 않음
+      Provider.of<CourseProvider>(context, listen: false)
+          .applyCoursePolicy(course.id, policy);
       _updateAvailableWeekOffsets(
         policy,
         placeId: placeId,
@@ -421,12 +448,10 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
     return Consumer2<PlaceProvider, AuthProvider>(
       builder: (context, placeProvider, authProvider, _) {
         final place = placeProvider.currentPlace;
-        final memberIds = authProvider.approvedPlaceIds;
-        final adminIds = authProvider.adminManagedPlaceIds;
         final isUnregistered =
             place != null &&
-            !memberIds.contains(place.id) &&
-            !adminIds.contains(place.id);
+            !authProvider.hasMemberAccessToPlace(place.id) &&
+            !authProvider.hasAdminAccessToPlace(place.id);
         final isLoggedIn =
             authProvider.currentUser != null ||
             authProvider.currentManagerUser != null;

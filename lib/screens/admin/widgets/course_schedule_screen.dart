@@ -508,13 +508,8 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
       isDismissible: true,
       enableDrag: true,
       useSafeArea: true,
-      builder:
-          (context) => Padding(
-            padding: EdgeInsets.only(
-              bottom: MediaQuery.of(context).viewInsets.bottom,
-            ),
-            child: SessionEditBottomSheet(
-              initialStartTime: startTime,
+      builder: (context) => SessionEditBottomSheet(
+        initialStartTime: startTime,
               initialEndTime: endTime,
               initialCapacity:
                   existingSession?.capacity ??
@@ -686,8 +681,7 @@ class _CourseScheduleScreenState extends State<CourseScheduleScreen> {
                         _clearSelectionForDay(dayOfWeek);
                       }
                       : null,
-            ),
-          ),
+      ),
     ).then((_) {
       // 바텀시트가 닫힐 때 (dismissed) 미리보기 및 선택 영역 초기화
       setState(() {

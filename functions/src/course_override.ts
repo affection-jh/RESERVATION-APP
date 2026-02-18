@@ -2,6 +2,7 @@ import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 import { logFunctionStart, logFunctionSuccess, logFunctionError } from './logger';
 import { assertAdminForPlaceUid, demoteSubManagerToMemberIfNoCoursesInternal, getManagerUidsForPlaceAndCourse } from './admin_auth';
+import { getCourseName } from './course_catalog';
 
 /** 알림 본문용 날짜 포맷: "2026년 2월 17일" */
 function formatDateKr(dateStr: string): string {
@@ -222,12 +223,14 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
         // 알림 전송 (예약자가 있었고, sendNotification이 true일 때만)
         if (reservationIds.length > 0 && sendNotification) {
             try {
+                const courseName = await getCourseName(placeId, courseId).catch(() => '코스');
+                const bodyWithCourse = `[${courseName}] ${formatDateTimeKr(effDate, effStartTime)} 세션이 취소되었습니다`;
                 for (const userId of userIds) {
                     await createNotification({
                         userId,
                         type: 'reservation',
                         title: '세션 취소',
-                        body: `${formatDateTimeKr(effDate, effStartTime)} 세션이 취소되었습니다`,
+                        body: bodyWithCourse,
                         placeId,
                         data: {
                             courseId,
@@ -247,7 +250,7 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
                         userId: uid,
                         type: 'system',
                         title: '비정기 일정 변경',
-                        body: `${formatDateTimeKr(effDate, effStartTime)} 세션이 취소되었습니다`,
+                        body: bodyWithCourse,
                         placeId,
                         data: { courseId, placeId, date: effDate, startTime: effStartTime, kind: 'override-delete' },
                         isAdmin: true,
@@ -367,12 +370,14 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
         // 알림 전송 (트랜잭션 외부, sendNotification이 true일 때만)
         if (reservationIds.length > 0 && sendNotification) {
             try {
+                const courseName = await getCourseName(placeId, courseId).catch(() => '코스');
+                const bodyWithCourse = `[${courseName}] ${formatDateTimeKr(date, startTime)} 세션이 취소되었습니다`;
                 for (const userId of userIds) {
                     await createNotification({
                         userId,
                         type: 'reservation',
                         title: '세션 취소',
-                        body: `${formatDateTimeKr(date, startTime)} 세션이 취소되었습니다`,
+                        body: bodyWithCourse,
                         placeId,
                         data: {
                             courseId,
@@ -392,7 +397,7 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
                         userId: uid,
                         type: 'system',
                         title: '비정기 일정 변경',
-                        body: `${formatDateTimeKr(date, startTime)} 세션이 취소되었습니다`,
+                        body: bodyWithCourse,
                         placeId,
                         data: { courseId, placeId, date, startTime, kind: 'override-cancel' },
                         isAdmin: true,
@@ -440,6 +445,8 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
     // 매니저·코스매니저에게는 비정기 일정 추가 알림 전송 (푸시 수신)
     if (sendNotification && !isCancelled) {
         try {
+            const courseName = await getCourseName(placeId, courseId).catch(() => '코스');
+            const bodyWithCourse = `[${courseName}] ${formatDateTimeKr(date, startTime)} 세션이 추가되었습니다`;
             const adminUids = await getManagerUidsForPlaceAndCourse(placeId, courseId);
             for (const uid of adminUids) {
                 if (uid === callerId) continue;
@@ -447,7 +454,7 @@ export const upsertCourseOverride = functions.https.onCall(async (data, context)
                     userId: uid,
                     type: 'system',
                     title: '비정기 일정 추가',
-                    body: `${formatDateTimeKr(date, startTime)} 세션이 추가되었습니다`,
+                    body: bodyWithCourse,
                     placeId,
                     data: { courseId, placeId, date, startTime, kind: 'override-add' },
                     isAdmin: true,

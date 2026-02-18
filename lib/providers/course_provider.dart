@@ -214,6 +214,32 @@ class CourseProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  /// 이미 가져온 정책을 해당 코스에 즉시 반영 (네트워크 없음).
+  /// 주차 탭 계산 등에서 서버 정책을 가져온 뒤 캘린더 자물쇠가 같은 정책으로 평가되도록 할 때 사용.
+  void applyCoursePolicy(String courseId, CoursePolicy policy) {
+    _coursePolicies[courseId] = policy;
+    final index = _courses.indexWhere((c) => c.id == courseId);
+    if (index != -1) {
+      final old = _courses[index];
+      _courses[index] = Course(
+        id: old.id,
+        placeId: old.placeId,
+        name: old.name,
+        description: old.description,
+        color: old.color,
+        imageUrl: old.imageUrl,
+        defaultTotalReservations: old.defaultTotalReservations,
+        defaultPeriodType: old.defaultPeriodType,
+        defaultPeriodValue: old.defaultPeriodValue,
+        sessions: old.sessions,
+        policy: policy,
+        createdAt: old.createdAt,
+        updatedAt: old.updatedAt,
+      );
+      notifyListeners();
+    }
+  }
+
   /// 모든 코스 정책 캐시 동기화 (코스에 embed된 policy로 채움)
   void _syncCoursePoliciesFromCourses() {
     for (final course in _courses) {

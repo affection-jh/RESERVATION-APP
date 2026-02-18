@@ -9,7 +9,6 @@ import '../../../theme/app_colors.dart';
 import '../../../utils/navigator_key.dart';
 import '../../../utils/snackbar_util.dart';
 import '../../../widgets/common_dialog.dart';
-import '../../../utils/timezone_utils.dart';
 
 /// 코스 예약 정책 설정 화면
 class CoursePolicyEditScreen extends StatefulWidget {
@@ -53,10 +52,6 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
   int _releaseDayOfWeek = 1;
   TimeOfDay _releaseTime = const TimeOfDay(hour: 9, minute: 0);
   int _weeksAhead = 1;
-
-  // effectiveFrom scheduling
-  bool _scheduleForFuture = false;
-  DateTime _effectiveFrom = TimezoneUtils.getSeoulToday();
 
   @override
   void initState() {
@@ -106,9 +101,6 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
         minute: int.tryParse(parts[1]) ?? 0,
       );
       _weeksAhead = weekly?.weeksAhead ?? 1;
-
-      _scheduleForFuture = false;
-      _effectiveFrom = TimezoneUtils.getSeoulToday();
     } catch (e) {
       _original = null;
       _type = BookingOpenStrategyType.rollingWindow;
@@ -119,8 +111,6 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
       _releaseDayOfWeek = 1;
       _releaseTime = const TimeOfDay(hour: 10, minute: 0);
       _weeksAhead = 1;
-      _scheduleForFuture = false;
-      _effectiveFrom = TimezoneUtils.getSeoulToday();
     }
 
     try {
@@ -703,115 +693,6 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                     ),
                   ),
 
-                  // 적용 시점 옵션은 기존 코스 수정 시에만 표시 (새로 등록할 때는 숨김)
-                  // 변경사항이 있을 때만 표시
-                  // 맨 아래로 이동
-                  if (!widget.requireSave && _hasChanges) ...[
-                    const SizedBox(height: 30),
-                    Text(
-                      '이 정책을 언제부터 적용할까요?',
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: AppColors.textSecondary,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    _card(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      '나중에 적용하기',
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              Switch(
-                                value: _scheduleForFuture,
-                                activeColor: courseColor,
-                                inactiveThumbColor: Colors.grey[600],
-                                activeTrackColor: courseColor.withOpacity(0.3),
-                                inactiveTrackColor: Colors.grey[100],
-                                onChanged: (v) {
-                                  setState(() {
-                                    _scheduleForFuture = v;
-                                    if (_scheduleForFuture) {
-                                      // 내일 00:00으로 설정 (서울 타임존 기준)
-                                      final seoulToday =
-                                          TimezoneUtils.getSeoulToday();
-                                      _effectiveFrom = seoulToday.add(
-                                        const Duration(days: 1),
-                                      );
-                                    }
-                                  });
-                                },
-                              ),
-                            ],
-                          ),
-                          if (_scheduleForFuture) ...[
-                            const SizedBox(height: 10),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    '${_effectiveFrom.year}-${_effectiveFrom.month.toString().padLeft(2, '0')}-${_effectiveFrom.day.toString().padLeft(2, '0')}부터',
-                                    style: TextStyle(
-                                      fontSize: 15,
-                                      color: AppColors.textSecondary,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ),
-                                _styledButton(
-                                  onPressed: () async {
-                                    final seoulToday =
-                                        TimezoneUtils.getSeoulToday();
-                                    final pickedDate = await showDatePicker(
-                                      context: context,
-                                      initialDate: _effectiveFrom,
-                                      firstDate: seoulToday,
-                                      lastDate: seoulToday.add(
-                                        const Duration(days: 365),
-                                      ),
-                                    );
-                                    if (pickedDate == null) return;
-                                    setState(() {
-                                      // 날짜만 선택하고 시간은 항상 00:00으로 설정 (서울 타임존 기준)
-                                      _effectiveFrom = DateTime(
-                                        pickedDate.year,
-                                        pickedDate.month,
-                                        pickedDate.day,
-                                        0,
-                                        0,
-                                      );
-                                    });
-                                  },
-                                  child: const Text(
-                                    '변경',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ],
                 ],
               ),
             ),

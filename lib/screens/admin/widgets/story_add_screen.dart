@@ -379,8 +379,8 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
     // 선택한 로컬 이미지들을 저장 시에만 업로드 (병렬로)
     if (_selectedImages.isNotEmpty) {
       // 모든 이미지를 병렬로 업로드
-        final uploadFutures =
-            _selectedImages.asMap().entries.map((entry) async {
+      final uploadFutures =
+          _selectedImages.asMap().entries.map((entry) async {
             final index = entry.key;
             final file = entry.value;
 

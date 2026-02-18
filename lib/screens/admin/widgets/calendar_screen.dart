@@ -28,7 +28,6 @@ import '../../../utils/week_range_calculator.dart';
 import '../../../utils/session_slot_builder.dart';
 import '../../../widgets/week_tab_bar.dart';
 import '../../../widgets/common_dialog.dart';
-import 'package:flutter/scheduler.dart';
 
 class CalendarScreen extends StatefulWidget {
   final Course course;
@@ -95,9 +94,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
   static int _ceilToHour(int minutes) =>
       ((minutes + 59) ~/ 60) * 60; // 올림(1~59분 포함)
 
-  DateTime? _lastPolicyLoadTime;
-  static const _policyReloadInterval = Duration(seconds: 2);
-
   @override
   void initState() {
     super.initState();
@@ -144,24 +140,24 @@ class _CalendarScreenState extends State<CalendarScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // CourseProvider에 최신 정기일정이 있으면 반영 (요일/세션 변경 시)
+    // CourseProvider 기준으로 코스·정책 동기화 (정책 편집 복귀 시 자물쇠/주차 탭 즉시 반영)
     final fromProvider = Provider.of<CourseProvider>(
       context,
       listen: false,
     ).getCourse(widget.course.id);
-    if (fromProvider != null && fromProvider != _effectiveCourse) {
-      setState(() => _effectiveCourse = fromProvider);
-    }
-    // 화면이 다시 포커스될 때 정책을 다시 로드
-    // (예: 정책 편집 화면에서 돌아왔을 때)
-    // 중복 호출 방지를 위해 최근 로드 시간 확인
-    final now = TimezoneUtils.getSeoulDateTime();
-    if (_lastPolicyLoadTime == null ||
-        now.difference(_lastPolicyLoadTime!) > _policyReloadInterval) {
-      SchedulerBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        _lastPolicyLoadTime = TimezoneUtils.getSeoulDateTime();
-        _loadCoursePolicy();
+    if (fromProvider == null) return;
+    final policy = fromProvider.policy;
+    final needUpdate =
+        fromProvider != _effectiveCourse || _coursePolicy != policy;
+    if (needUpdate) {
+      setState(() {
+        _effectiveCourse = fromProvider;
+        _coursePolicy = policy;
+        _updateAvailableWeekOffsets(policy);
+        if (_availableWeekOffsets.isNotEmpty &&
+            _weekOffset >= _availableWeekOffsets.length) {
+          _weekOffset = _availableWeekOffsets.length - 1;
+        }
       });
     }
   }
@@ -465,17 +461,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
     }
   }
 
-  void _loadCoursePolicy() {
-    setState(() {
-      _coursePolicy = course.policy;
-      _updateAvailableWeekOffsets(course.policy);
-      if (_availableWeekOffsets.isNotEmpty &&
-          _weekOffset >= _availableWeekOffsets.length) {
-        _weekOffset = _availableWeekOffsets.length - 1;
-      }
-    });
-  }
-
   String _formatCloseBefore(int minutes) {
     if (minutes >= 60) {
       final h = minutes ~/ 60;
@@ -492,9 +477,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
         Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
 
     final now = TimezoneUtils.getSeoulDateTime();
-    final maxOffset = _availableWeekOffsets.isNotEmpty
-        ? _availableWeekOffsets.last
-        : 2;
+    final maxOffset =
+        _availableWeekOffsets.isNotEmpty ? _availableWeekOffsets.last : 2;
     // 전체 주차 범위 (이번주 월 ~ 마지막주 일) 한 번에 구독 → 처음 열 때부터 모든 주차/세션 채움
     final firstWeekStart = CalendarUtils.weekStartFrom(now, 0);
     final lastWeekStart = CalendarUtils.weekStartFrom(now, maxOffset);
@@ -504,7 +488,9 @@ class _CalendarScreenState extends State<CalendarScreen> {
       firstWeekStart.day,
     );
     final endDate = lastWeekStart.add(const Duration(days: 6));
-    final firstWeekStartDateString = CalendarUtils.formatDateYMD(firstWeekStart);
+    final firstWeekStartDateString = CalendarUtils.formatDateYMD(
+      firstWeekStart,
+    );
 
     final summaryProvider = Provider.of<ReservationSummaryProvider>(
       context,
@@ -525,11 +511,14 @@ class _CalendarScreenState extends State<CalendarScreen> {
         context,
         listen: false,
       );
-      final weekStartDates = _availableWeekOffsets
-          .map((o) => CalendarUtils.formatDateYMD(
-                CalendarUtils.weekStartFrom(now, o),
-              ))
-          .toList();
+      final weekStartDates =
+          _availableWeekOffsets
+              .map(
+                (o) => CalendarUtils.formatDateYMD(
+                  CalendarUtils.weekStartFrom(now, o),
+                ),
+              )
+              .toList();
       courseProvider.subscribeToOverrides(placeId, weekStartDates);
 
       for (final wo in _availableWeekOffsets) {
@@ -566,6 +555,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
       return error.code;
     }
     final errorString = error.toString().toLowerCase();
+    if (errorString.contains('permission-denied') ||
+        errorString.contains('permission_denied')) {
+      return 'permission-denied';
+    }
     if (errorString.contains('network') || errorString.contains('connection')) {
       return 'network';
     }
@@ -617,10 +610,12 @@ class _CalendarScreenState extends State<CalendarScreen> {
     // 세션 박스·그리드 UI는 ReservationSummaryProvider 단일 구독 (setContext·overrides 갱신은 initState postFrameCallback·주차 변경 시 _updateProviderContext()에서만 호출)
     final srProvider = context.watch<ReservationSummaryProvider>();
 
-    // context 설정 + overrides/slots 반영. 첫 빌드뿐 아니라 매 빌드 후 실행해 관리자 정원 변경 시 N/M 실시간 반영
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _updateProviderContext();
-    });
+    // context 설정 + overrides/slots 반영. 에러 UI일 때는 호출하지 않음 → 무한 리빌드 방지
+    if (_errorMessage == null && _errorType == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _updateProviderContext();
+      });
+    }
 
     final overridesByDate = srProvider.overridesByDate;
     final providerLoading = srProvider.isLoading;
@@ -657,10 +652,15 @@ class _CalendarScreenState extends State<CalendarScreen> {
       (index) => weekStart.add(Duration(days: index)),
     );
 
-    // 세션이 있는 날짜만 필터링 (정기 요일 + 비정기 추가 세션이 있는 날짜)
+    // 월~금은 항상 표시, 토·일은 세션이 있을 때만 동적 추가
     final sessionDates =
         weekDates.where((date) {
-          return availableDays.contains(date.weekday) ||
+          final w = date.weekday;
+          if (w >= DateTime.monday && w <= DateTime.friday) {
+            return true; // 월화수목금 항상
+          }
+          // 토(6), 일(7): 정기 또는 비정기 세션이 있는 경우만
+          return availableDays.contains(w) ||
               _hasAddedOverrideSessionsForDate(date, overridesByDate);
         }).toList();
 
@@ -1444,8 +1444,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
       fallback: session.capacity,
     );
     final reservedCount = sr?.reservedCount ?? 0;
-    final reservedCountDisplay =
-        srProvider.getReservedCountDisplayString(sessionId, dateString);
+    final reservedCountDisplay = srProvider.getReservedCountDisplayString(
+      sessionId,
+      dateString,
+    );
     final remainingSeats = (totalSeats - reservedCount).clamp(0, 1 << 30);
 
     final eligibility = ReservationPolicyEngine.evaluateReservation(
@@ -1496,10 +1498,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
     final isProcessing =
         processingKey != null &&
         reservationProvider.isOperationInFlightByKey(processingKey);
-    final operationType =
-        processingKey != null
-            ? reservationProvider.getOperationTypeByKey(processingKey)
-            : null;
 
     final blockType =
         isProcessing
@@ -1513,6 +1511,17 @@ class _CalendarScreenState extends State<CalendarScreen> {
       blockType,
       courseColor: course.colorValue,
     );
+
+    // 예약 불가(잠긴) 세션은 박스 숨김 — 세션 칸만 유지
+    if (isLocked && !isBookingWeekOpened) {
+      return Positioned(
+        top: topPosition,
+        left: _sessionPadding,
+        right: _sessionPadding,
+        height: sessionHeightPx,
+        child: const SizedBox.shrink(),
+      );
+    }
 
     return Positioned(
       top: topPosition,
@@ -1579,7 +1588,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
             final rp = Provider.of<ReservationProvider>(context, listen: false);
             final isAdminForPlace =
                 placeId != null &&
-                authProvider.adminManagedPlaceIds.contains(placeId);
+                authProvider.hasAdminAccessToPlace(placeId);
 
             try {
               await SessionReservationBottomSheet.show(
@@ -1836,11 +1845,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
 
   // 에러 UI 위젯 (애플 스타일)
   Widget _buildErrorWidget() {
-    // 디버그: 에러 상태 확인
-    debugPrint('[CalendarScreen] _buildErrorWidget 호출');
-    debugPrint('[CalendarScreen] _errorMessage: $_errorMessage');
-    debugPrint('[CalendarScreen] _errorType: $_errorType');
-
     final isNetworkError =
         _errorType == 'network' ||
         _errorType == 'unavailable' ||

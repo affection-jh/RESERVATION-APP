@@ -7,6 +7,8 @@ class DefaultTapbar extends StatelessWidget {
   final Function(int) onTabChanged;
   final Widget? trailing;
   final double tabSpacing;
+  /// true면 선택 탭 아래에 점 표시, false면 닷 없음(텍스트만)
+  final bool showIndicator;
 
   const DefaultTapbar({
     super.key,
@@ -15,6 +17,7 @@ class DefaultTapbar extends StatelessWidget {
     required this.onTabChanged,
     this.trailing,
     this.tabSpacing = 24,
+    this.showIndicator = true,
   });
 
   @override
@@ -59,29 +62,30 @@ class DefaultTapbar extends StatelessWidget {
             ),
             child: Text(label),
           ),
-          const SizedBox(height: 4),
-          // 고정 높이로 UI 흔들림 방지
-          SizedBox(
-            height: 10,
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 200),
-              child: isSelected
-                  ? Container(
-                      key: const ValueKey('dot'),
-                      width: 10,
-                      height: 10,
-                      decoration: BoxDecoration(
-                        color: AppColors.primaryGreen,
-                        shape: BoxShape.circle,
+          if (showIndicator) ...[
+            const SizedBox(height: 4),
+            SizedBox(
+              height: 10,
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                child: isSelected
+                    ? Container(
+                        key: const ValueKey('dot'),
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          color: AppColors.primaryGreen,
+                          shape: BoxShape.circle,
+                        ),
+                      )
+                    : const SizedBox(
+                        key: ValueKey('empty'),
+                        width: 10,
+                        height: 10,
                       ),
-                    )
-                  : const SizedBox(
-                      key: ValueKey('empty'),
-                      width: 10,
-                      height: 10,
-                    ),
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );

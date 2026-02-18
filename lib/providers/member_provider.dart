@@ -97,34 +97,14 @@ class MemberProvider with ChangeNotifier {
     List<PlaceMember> members,
     Map<String, List<String>> byUser,
   ) {
-    return members.map((m) {
-      final adminName = (m.adminDisplayName ?? '').trim();
-      return MemberView(
-        userId: m.userId,
-        adminDisplayName: adminName.isEmpty ? '이름 없음' : adminName,
-        phoneNumber: m.phoneNumber ?? '',
-        role: m.role,
-        manageableCourseIds: m.manageableCourseIds,
-        enrolledCourseIds: byUser[m.userId] ?? [],
-        isPending: false,
-      );
-    }).toList();
+    return members
+        .map((m) => MemberView.fromPlaceMember(m, enrolledCourseIds: byUser[m.userId] ?? const []))
+        .toList();
   }
 
   List<MemberView> _pendingToViews() {
     final list = _pendingMembers;
-    return list.map((p) {
-      final pendingName = (p.adminDisplayName ?? '').trim();
-      return MemberView(
-        userId: 'pending_${p.id}',
-        adminDisplayName: pendingName.isEmpty ? '이름 없음' : pendingName,
-        phoneNumber: p.phoneNumber,
-        role: p.role,
-        manageableCourseIds: p.effectiveCourseIds,
-        enrolledCourseIds: const [],
-        isPending: true,
-      );
-    }).toList();
+    return list.map(MemberView.fromPendingMember).toList();
   }
 
   bool get isSubManagerForPlace => _isSubManagerForPlace;
@@ -148,11 +128,14 @@ class MemberProvider with ChangeNotifier {
       final courseIds = _selectedCourseIds.toList();
       final pendingForCourse = _pendingToViews().where(
         (v) => courseIds.isEmpty ||
-            v.manageableCourseIds.any((id) => courseIds.contains(id)),
+            v.relatedCourseIds.any((id) => courseIds.contains(id)),
       ).toList();
       final combined = [...placeViews, ...pendingForCourse];
       return combined
-          .map((v) => v.copyWith(enrolledCourseIds: byUser[v.userId] ?? []))
+          .map((v) => v.copyWith(
+                enrolledCourseIds:
+                    v.isPending ? v.enrolledCourseIds : (byUser[v.userId] ?? []),
+              ))
           .toList();
     }
     final byUser = <String, List<String>>{};
@@ -167,7 +150,10 @@ class MemberProvider with ChangeNotifier {
     final pendingViews = _pendingToViews();
     final combined = [...placeViews, ...pendingViews];
     return combined
-        .map((v) => v.copyWith(enrolledCourseIds: byUser[v.userId] ?? []))
+        .map((v) => v.copyWith(
+              enrolledCourseIds:
+                  v.isPending ? v.enrolledCourseIds : (byUser[v.userId] ?? []),
+            ))
         .toList();
   }
 
@@ -253,7 +239,7 @@ class MemberProvider with ChangeNotifier {
       final pending =
           allMembers
               .where(
-                (v) => v.isPending && v.manageableCourseIds.contains(courseId),
+                (v) => v.isPending && v.relatedCourseIds.contains(courseId),
               )
               .toList();
       list = [...list, ...pending];
@@ -265,7 +251,7 @@ class MemberProvider with ChangeNotifier {
         allMembers.where((v) {
           final hasCourse =
               v.isPending
-                  ? v.manageableCourseIds.any(
+                  ? v.relatedCourseIds.any(
                     (id) => _selectedCourseIds.contains(id),
                   )
                   : v.enrolledCourseIds.any(
@@ -287,7 +273,7 @@ class MemberProvider with ChangeNotifier {
 
   static bool _isCountKeyword(String s) => RegExp(r'^\d{1,4}회?$').hasMatch(s);
 
-  /// 이름, 전화번호, 과목 키워드, '대기중'/'가입 대기중', N회(남은 횟수)로 검색. 공백 구분 시 모든 키워드 일치.
+  /// 이름, 전화번호, 과목 키워드, '가입 대기중', '매니저', '코스 매니저', N회(남은 횟수)로 검색. 공백 구분 시 모든 키워드 일치.
   List<MemberView> _filteredBySearch(List<MemberView> views) {
     final q = _searchQuery.trim();
     if (q.isEmpty) return views;
@@ -306,13 +292,23 @@ class MemberProvider with ChangeNotifier {
           !excludePhoneForFull &&
           digitsOnly.isNotEmpty &&
           phone.contains(digitsOnly);
-      // '대기중' / '가입 대기중' 키워드: '대', '대기', '가입', '가입 대기중' 등 매칭
+      // '대기중' / '가입 대기중' 키워드 (부분 일치: '대기', '가입' 등)
       final pendingMatch =
           v.isPending &&
           ('대기중'.contains(lower) ||
               lower.contains('대기중') ||
               pendingLabel.contains(lower) ||
               lower.contains(pendingLabel));
+      // '매니저' 키워드 (부분 일치: '매니', '저' 등). '코스' 포함 시 코스 매니저로 한정
+      final managerMatch =
+          v.isManager &&
+          ('매니저'.contains(lower) || lower.contains('매니저')) &&
+          !lower.contains('코스');
+      // '코스 매니저' 키워드 (부분 일치: '코스', '매니', '코스매니' 등)
+      const subManagerLabel = '코스매니저';
+      final subManagerMatch =
+          v.isSubManager &&
+          (subManagerLabel.contains(lower) || lower.contains(subManagerLabel));
       // 과목 키워드: 등록/관리 코스명에 포함되면 매칭
       bool courseMatch = false;
       if (_courseIdToNameForSearch != null &&
@@ -334,7 +330,13 @@ class MemberProvider with ChangeNotifier {
           _selectedTab == 1 &&
           _matchRemainingCount(lower, v.userId, _selectedCourseIds);
       final matchFull =
-          nameMatch || phoneMatch || pendingMatch || courseMatch || countMatch;
+          nameMatch ||
+          phoneMatch ||
+          pendingMatch ||
+          managerMatch ||
+          subManagerMatch ||
+          courseMatch ||
+          countMatch;
       if (keywords.isEmpty) return matchFull;
       final matchKeywords = keywords.every((kw) {
         final isCountKw = _selectedTab == 1 && _isCountKeyword(kw);
@@ -348,6 +350,13 @@ class MemberProvider with ChangeNotifier {
                 kw.contains('대기중') ||
                 pendingLabel.contains(kw) ||
                 kw.contains(pendingLabel));
+        final kManager =
+            v.isManager &&
+            ('매니저'.contains(kw) || kw.contains('매니저')) &&
+            !kw.contains('코스');
+        final kSubManager =
+            v.isSubManager &&
+            (subManagerLabel.contains(kw) || kw.contains(subManagerLabel));
         bool kCourse = false;
         if (_courseIdToNameForSearch != null &&
             _courseIdToNameForSearch!.isNotEmpty) {
@@ -366,7 +375,7 @@ class MemberProvider with ChangeNotifier {
         final kCount =
             _selectedTab == 1 &&
             _matchRemainingCount(kw, v.userId, _selectedCourseIds);
-        return kn || kp || kPending || kCourse || kCount;
+        return kn || kp || kPending || kManager || kSubManager || kCourse || kCount;
       });
       return matchFull || matchKeywords;
     }).toList();
@@ -392,21 +401,40 @@ class MemberProvider with ChangeNotifier {
     return memberEnrollments.any((e) => e.remainingReservations == count);
   }
 
+  /// 역할 순서: 매니저(0) → 코스 매니저(1) → 일반 멤버(2) → 가입 대기중(3)
+  static int _roleOrder(MemberView v) {
+    if (v.isPending) return 3;
+    if (v.isManager) return 0;
+    if (v.isSubManager) return 1;
+    return 2;
+  }
+
   List<MemberView> _sortAllMembers(List<MemberView> list) {
-    if (_sortBy == 0) return list;
+    list = List.from(list);
     final byUser = <String, List<CourseEnrollment>>{};
     for (final e in _enrollments) {
       byUser.putIfAbsent(e.userId, () => []).add(e);
     }
     list.sort((a, b) {
-      if (a.isPending && b.isPending) return 0;
+      final roleA = _roleOrder(a);
+      final roleB = _roleOrder(b);
+      if (roleA != roleB) return roleA.compareTo(roleB);
+      // 같은 역할 내: _sortBy == 0 이면 이름순, 아니면 기존 로직
+      if (a.isPending && b.isPending) {
+        return a.adminDisplayName.compareTo(b.adminDisplayName);
+      }
       if (a.isPending) return 1;
       if (b.isPending) return -1;
       final aEnrollments = byUser[a.userId] ?? [];
       final bEnrollments = byUser[b.userId] ?? [];
-      if (aEnrollments.isEmpty && bEnrollments.isEmpty) return 0;
+      if (aEnrollments.isEmpty && bEnrollments.isEmpty) {
+        return a.adminDisplayName.compareTo(b.adminDisplayName);
+      }
       if (aEnrollments.isEmpty) return 1;
       if (bEnrollments.isEmpty) return -1;
+      if (_sortBy == 0) {
+        return a.adminDisplayName.compareTo(b.adminDisplayName);
+      }
       if (_sortBy == 1) {
         final aMin = aEnrollments
             .map((e) => e.validUntil)
@@ -776,8 +804,16 @@ class MemberProvider with ChangeNotifier {
 
   /// placeId 설정 시 멤버/등록 구독 시작.
   /// [isSubManagerForPlace] true면 전체 멤버 스트림 미구독, enrollments만 구독 후 코스별로만 로드.
-  void setPlaceId(String? placeId, {bool isSubManagerForPlace = false}) {
-    if (_placeId == placeId && _isSubManagerForPlace == isSubManagerForPlace) return;
+  void setPlaceId(
+    String? placeId, {
+    bool isSubManagerForPlace = false,
+    bool force = false,
+  }) {
+    if (!force &&
+        _placeId == placeId &&
+        _isSubManagerForPlace == isSubManagerForPlace) {
+      return;
+    }
     _placeId = placeId;
     _isSubManagerForPlace = isSubManagerForPlace;
     _placeMembersSegmentSub?.cancel();
@@ -973,7 +1009,7 @@ class MemberProvider with ChangeNotifier {
         final start = alreadyLoaded;
         final segmentUserIds =
             _courseOnlyUserIds.skip(start).take(_segmentSize).toList();
-        final list = await _service.getPlaceMembersByUserIds(placeId!, segmentUserIds);
+        final list = await _service.getPlaceMembersByUserIds(placeId, segmentUserIds);
         _courseOnlyLoadedAfter = [..._courseOnlyLoadedAfter, ...list];
       } finally {
         _isLoadingMore = false;

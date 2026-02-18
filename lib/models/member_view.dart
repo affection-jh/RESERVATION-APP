@@ -1,5 +1,6 @@
 import 'course_enrollment.dart';
 import 'place_member.dart';
+import 'pending_member.dart';
 
 /// 멤버관리 화면용 통합 읽기 전용 View 모델
 ///
@@ -39,6 +40,38 @@ class MemberView {
     this.isPending = false,
   });
 
+  static MemberView fromPlaceMember(
+    PlaceMember m, {
+    List<String> enrolledCourseIds = const [],
+  }) {
+    final adminName = (m.adminDisplayName ?? '').trim();
+    return MemberView(
+      userId: m.userId,
+      adminDisplayName: adminName.isEmpty ? '이름 없음' : adminName,
+      phoneNumber: m.phoneNumber ?? '',
+      role: m.role,
+      manageableCourseIds: m.manageableCourseIds,
+      enrolledCourseIds: enrolledCourseIds,
+      isPending: false,
+    );
+  }
+
+  static MemberView fromPendingMember(PendingMember p) {
+    final pendingName = (p.adminDisplayName ?? '').trim();
+    return MemberView(
+      userId: 'pending_${p.id}',
+      adminDisplayName: pendingName.isEmpty ? '이름 없음' : pendingName,
+      phoneNumber: p.phoneNumber,
+      role: p.role,
+      // pending 의미 분리:
+      // - manageableCourseIds: 관리코스(managedCourseIds 우선, 없으면 allowedCourseIds)만 — 코스매니저 권한 단일 소스
+      // - enrolledCourseIds: 수강코스(courseEnrollments)만 — 수강/차감/일회성 판단용
+      manageableCourseIds: p.derivedCourseIds,
+      enrolledCourseIds: p.courseIdsFromEnrollments,
+      isPending: true,
+    );
+  }
+
   bool get isManager => role == PlaceMemberRole.manager;
   bool get isSubManager => role == PlaceMemberRole.subManager;
   bool get isMember => role == PlaceMemberRole.member;
@@ -69,6 +102,14 @@ class MemberView {
 
   /// 재등록 필요 (등록은 있으나 예약 불가, e.g. 기간 만료)
   bool get needsReenrollment => enrollment != null && !(enrollment!.canReserve);
+
+  /// 이 멤버와 연관된 코스 ID 목록 (관리 코스 + 수강 코스).
+  /// - pending: (managed/allowed) + courseEnrollments
+  /// - 일반: manageableCourseIds + enrollments
+  List<String> get relatedCourseIds {
+    final set = <String>{...manageableCourseIds, ...enrolledCourseIds};
+    return set.toList();
+  }
 
   MemberView copyWith({
     String? userId,

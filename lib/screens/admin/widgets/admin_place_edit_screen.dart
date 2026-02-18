@@ -943,9 +943,14 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         authProvider.addAdminManagedPlace(newPlace.id);
 
         // PlaceSwitch에서 "일반 모드" 진입용: approvedPlaceIds에 새 플레이스 추가
-        final currentApproved = authProvider.approvedPlaceIds;
-        if (!currentApproved.contains(newPlace.id)) {
-          authProvider.setApprovedPlaceIds([...currentApproved, newPlace.id]);
+        final memberPlaceIds =
+            authProvider.placeAccessEntries
+                .where((e) => e.isAdmin == false)
+                .map((e) => e.placeId)
+                .toSet()
+                .toList();
+        if (!memberPlaceIds.contains(newPlace.id)) {
+          authProvider.setApprovedPlaceIds([...memberPlaceIds, newPlace.id]);
         }
         if (_leaveRequested) return;
 

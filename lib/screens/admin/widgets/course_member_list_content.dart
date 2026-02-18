@@ -158,7 +158,7 @@ class CourseMemberListContent extends StatelessWidget {
               memberProvider.allMembers
                   .where(
                     (v) =>
-                        v.isPending && v.manageableCourseIds.contains(courseId),
+                        v.isPending && v.relatedCourseIds.contains(courseId),
                   )
                   .toList();
           var all = <MemberView>[...enrolled, ...pendingForCourse];

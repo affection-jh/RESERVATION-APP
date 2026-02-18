@@ -5,18 +5,25 @@ import '../theme/app_colors.dart';
 enum SessionBlockType {
   /// 예약 가능
   available,
+
   /// 내 예약됨
   reserved,
+
   /// 잠김 (만석/정책/미오픈 등)
   locked,
+
   /// 예약/취소/변경 처리 중
   processing,
+
   /// 정기 일정 (편집 UI용)
   regularSchedule,
+
   /// 비정기 일정 (편집 UI용)
   overrideSchedule,
+
   /// 드래그 미리보기
   preview,
+
   /// 코스 상세용 단순 블록
   courseDetail,
 }
@@ -65,9 +72,9 @@ class SessionBlockStyle {
           showShadow: true,
         );
       case SessionBlockType.locked:
-        // 색상은 available과 동일, 자물쇠 아이콘으로만 구분
+        // 비활성(잠김) — 연한 회색이지만 구분이 되도록 충분히 진하게
         return SessionBlockStyle(
-          backgroundColor: AppColors.reservedGrey,
+          backgroundColor: const Color.fromARGB(223, 231, 231, 231),
           textColor: AppColors.textPrimary,
           iconColor: AppColors.textPrimary,
           borderRadius: 12,
@@ -131,15 +138,16 @@ class SessionBlockStyle {
     return BoxDecoration(
       color: backgroundColor,
       borderRadius: BorderRadius.circular(borderRadius),
-      boxShadow: showShadow
-          ? [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.1),
-                blurRadius: 4,
-                offset: const Offset(0, 2),
-              ),
-            ]
-          : null,
+      boxShadow:
+          showShadow
+              ? [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ]
+              : null,
     );
   }
 }

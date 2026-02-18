@@ -7,6 +7,14 @@ import '../services/member_service.dart';
 import '../models/user.dart';
 import '../models/place_member.dart';
 
+@immutable
+class PlaceAccessEntry {
+  final String placeId;
+  final bool isAdmin;
+
+  const PlaceAccessEntry({required this.placeId, required this.isAdmin});
+}
+
 /// 인증 상태 Provider
 /// User 단일 모델 + places/{placeId}/members 기반 PlaceMember로 관리자/멤버 구분
 class AuthProvider with ChangeNotifier {
@@ -59,7 +67,27 @@ class AuthProvider with ChangeNotifier {
       _linkedAdmin != null
           ? _adminManagedPlaceIdsOverride
           : managedPlaceIdsFromMemberships;
-  List<String> get approvedPlaceIds => _approvedPlaceIds;
+  /// 멤버(일반) 접근 플레이스 ID
+  /// - PlaceWaitingScreen에서는 pending 포함 목록을 setApprovedPlaceIds로 주입할 수 있음
+  /// - 그 외 화면에서는 placeMemberships 기반 값이 항상 정답이므로, 둘을 union해서 누락을 방지한다.
+  List<String> get approvedPlaceIds {
+    final set = <String>{..._approvedPlaceIds, ...placeIdsFromPlaceMemberships};
+    return set.toList();
+  }
+
+  /// ✅ PlaceSwitch 단일 소스: (일반/관리) 진입 후보 엔트리 목록
+  /// - 같은 placeId라도 (일반, 관리) 2개 엔트리를 유지한다.
+  List<PlaceAccessEntry> get placeAccessEntries {
+    final memberIds = approvedPlaceIds.toSet().toList();
+    final adminIds = adminManagedPlaceIds.toSet().toList();
+    return <PlaceAccessEntry>[
+      ...memberIds.map((id) => PlaceAccessEntry(placeId: id, isAdmin: false)),
+      ...adminIds.map((id) => PlaceAccessEntry(placeId: id, isAdmin: true)),
+    ];
+  }
+
+  bool hasMemberAccessToPlace(String placeId) => approvedPlaceIds.contains(placeId);
+  bool hasAdminAccessToPlace(String placeId) => adminManagedPlaceIds.contains(placeId);
   User? get linkedAdmin => _linkedAdmin;
   bool get isLoading => _isLoading;
   String? get error => _error;
@@ -219,20 +247,26 @@ class AuthProvider with ChangeNotifier {
     final uid = _currentUser?.userId;
     if (uid == null || uid.isEmpty) {
       _placeMemberships = [];
+      _approvedPlaceIds = [];
       notifyListeners();
       return;
     }
     try {
       _placeMemberships = await _memberService.getPlaceMembershipsForUser(uid);
+      // ✅ PlaceSwitchWidget에서 (멤버 entry) 노출을 위해 memberships 기반으로 항상 동기화
+      // PlaceWaitingScreen을 거치지 않고 바로 진입하는 케이스(예: 코스매니저 초대 후 가입)도 커버
+      _approvedPlaceIds = placeIdsFromPlaceMemberships;
       notifyListeners();
       final demoted = await _maybeDemoteSubManagersWithNoCourses();
       if (demoted) {
         _placeMemberships = await _memberService.getPlaceMembershipsForUser(uid);
+        _approvedPlaceIds = placeIdsFromPlaceMemberships;
         notifyListeners();
       }
     } catch (e) {
       debugPrint('[AuthProvider] loadPlaceMembershipsForCurrentUser 실패: $e');
       _placeMemberships = [];
+      _approvedPlaceIds = [];
       notifyListeners();
     }
   }
@@ -255,6 +289,7 @@ class AuthProvider with ChangeNotifier {
     _placeMembershipsSubscription?.cancel();
     if (uid == null || uid.isEmpty) {
       _placeMemberships = [];
+      _approvedPlaceIds = [];
       notifyListeners();
       return;
     }
@@ -262,6 +297,8 @@ class AuthProvider with ChangeNotifier {
         .watchPlaceMembershipsForUser(uid)
         .listen((list) {
           _placeMemberships = list;
+          // ✅ memberships 변경 시에도 approvedPlaceIds를 동기화 (PlaceSwitch 멤버/관리자 토글 안정화)
+          _approvedPlaceIds = placeIdsFromPlaceMemberships;
           notifyListeners();
           Future.microtask(() async {
             final demoted = await _maybeDemoteSubManagersWithNoCourses();
@@ -276,6 +313,7 @@ class AuthProvider with ChangeNotifier {
     _placeMembershipsSubscription?.cancel();
     _placeMembershipsSubscription = null;
     _placeMemberships = [];
+    _approvedPlaceIds = [];
     notifyListeners();
   }
 

@@ -62,7 +62,7 @@ class PlaceSwitchWidget extends StatefulWidget {
   /// 일반 홈/관리자 홈: false, 마이페이지: true
   final bool enabled;
 
-  /// 설명 표시 여부 (PlaceSelector 호환성)
+  /// 설명 표시 여부
   final bool showDescription;
 
   /// 알림 아이콘 표시 여부 (홈 화면에서 사용)
@@ -94,13 +94,6 @@ class PlaceSwitchWidget extends StatefulWidget {
 
   @override
   State<PlaceSwitchWidget> createState() => _PlaceSwitchWidgetState();
-}
-
-class _PlaceAccessEntry {
-  final String placeId;
-  final bool isAdmin;
-
-  const _PlaceAccessEntry({required this.placeId, required this.isAdmin});
 }
 
 class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
@@ -160,23 +153,17 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
 
     // ✅ 플레이스 목록 구성 (멤버/관리자를 "독립 엔트리"로 유지)
     // 같은 placeId라도 (멤버, 관리자) 2개로 노출되어야 하므로 Set으로 합치지 않는다.
-    final memberPlaceIds = authProvider.approvedPlaceIds;
-    final adminPlaceIds = authProvider.adminManagedPlaceIds;
-
-    final accessEntries = <_PlaceAccessEntry>[
-      ...memberPlaceIds.map(
-        (id) => _PlaceAccessEntry(placeId: id, isAdmin: false),
-      ),
-      ...adminPlaceIds.map(
-        (id) => _PlaceAccessEntry(placeId: id, isAdmin: true),
-      ),
-    ];
+    final accessEntries = authProvider.placeAccessEntries;
 
     final uniquePlaceIds = accessEntries.map((e) => e.placeId).toSet().toList();
 
     final hasMultiplePlaces = accessEntries.length > 1;
     final currentPlaceId = currentPlace.id;
-    final canSwitch = widget.enabled && hasMultiplePlaces;
+    final placeMember = authProvider.getPlaceMemberForPlace(currentPlaceId);
+    final isSubManagerHere = placeMember?.isSubManager ?? false;
+    // 전환할 대상이 있을 때만 화살표 표시 (플레이스가 2개 이상일 때만; 서브매니저 단일 플레이스는 화살표 숨김)
+    final showChevron = widget.enabled && hasMultiplePlaces;
+    final canSwitch = widget.enabled && (hasMultiplePlaces || isSubManagerHere);
 
     return Padding(
       padding: EdgeInsets.only(top: 10, bottom: 10, left: 20, right: 10),
@@ -304,8 +291,8 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
                   },
                 ),
               ),
-              // 토글 모드일 때만 화살표 표시 (홈에서는 hideChevron으로 숨김)
-              if (!widget.hideChevron && widget.enabled && hasMultiplePlaces)
+              // 전환할 플레이스가 2개 이상일 때만 화살표 표시
+              if (!widget.hideChevron && showChevron)
                 InkWell(
                   onTap: () {
                     setState(() {
@@ -548,15 +535,13 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
 
     if (switchToAdminMode) {
       // 관리 권한: linkedAdmin(연동 관리자) 또는 places/.../members(본인 매니저) 둘 다 허용
-      final adminPlaceIds = authProvider.adminManagedPlaceIds;
-      if (!adminPlaceIds.contains(newPlace.id)) {
+      if (!authProvider.hasAdminAccessToPlace(newPlace.id)) {
         SnackbarUtil.showInfo(context, '해당 플레이스에 대한 관리자 권한이 없습니다.');
         return;
       }
     } else {
       // 멤버(일반) 권한 확인
-      final memberPlaceIds = authProvider.approvedPlaceIds;
-      if (!memberPlaceIds.contains(newPlace.id)) {
+      if (!authProvider.hasMemberAccessToPlace(newPlace.id)) {
         SnackbarUtil.showInfo(context, '해당 플레이스에 접근 권한이 없습니다.');
         return;
       }

@@ -337,32 +337,25 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
     }
   }
 
-  /// 이미지 삭제 (Storage에서도 삭제)
+  /// 이미지 제거 (UI에서만 제거). 이미 등록된 코스의 기존 이미지는 Storage 삭제하지 않음 → 저장 시에만 삭제.
   Future<void> _deleteImage() async {
-    // Storage에서 삭제할 URL 결정
-    String? urlToDelete;
-    if (_uploadedImageUrl != null) {
-      urlToDelete = _uploadedImageUrl;
-    } else if (_existingImageUrl != null) {
-      urlToDelete = _existingImageUrl;
-    }
-
-    // Storage에서 삭제
+    // 새로 올린 이미지만 Storage에서 즉시 삭제 (기존 코스 이미지 X 누른 경우는 저장 시에만 삭제)
+    final urlToDelete = _uploadedImageUrl != null && _uploadedImageUrl != _existingImageUrl
+        ? _uploadedImageUrl
+        : null;
     if (urlToDelete != null) {
       try {
         final storageService = StorageService();
         await storageService.deleteImage(urlToDelete);
       } catch (e) {
-        // 삭제 실패는 무시하되 로그는 남김
         debugPrint('이미지 삭제 실패: $e');
       }
     }
 
-    // 로컬 상태 초기화
     setState(() {
       _selectedImage = null;
       _uploadedImageUrl = null;
-      _existingImageUrl = null;
+      // _existingImageUrl는 유지 → 저장 시 "이미지 제거"로 저장되면 그때 Storage 삭제
     });
   }
 
@@ -436,6 +429,15 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
 
       await courseProvider.updateCourse(updatedCourse);
       if (_leaveRequested) return;
+
+      // 이미 등록된 코스에서 이미지 X 누른 뒤 저장한 경우: 저장 시점에 Storage에서 삭제
+      if (_uploadedImageUrl == null && _existingImageUrl != null) {
+        try {
+          await StorageService().deleteImage(_existingImageUrl!);
+        } catch (e) {
+          debugPrint('저장 후 기존 이미지 Storage 삭제 실패: $e');
+        }
+      }
 
       if (mounted) {
         SnackbarUtil.showSuccess(context, '코스 정보가 저장되었습니다.');
@@ -1055,20 +1057,32 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
         });
         final courseId = widget.course.id;
         final all = memberProvider.allMembers;
-        final subManagersForCourse =
-            all.where((v) {
-              if (v.isPending) {
-                return v.manageableCourseIds.contains(courseId);
-              }
-              return v.isSubManager && v.manageableCourseIds.contains(courseId);
-            }).toList();
-        final pendingIds = memberProvider.getPendingSubManagerUserIds(courseId);
-        final pendingMembers =
-            all.where((v) => pendingIds.contains(v.userId)).toList();
-        final combined = <MemberView>[...subManagersForCourse];
-        for (final p in pendingMembers) {
+        // 실제 코스매니저 + 가입 대기중 코스매니저(pendingMembers)까지 모두 표시
+        final managersForCourse =
+            all
+                .where(
+                  (v) => v.isSubManager && v.manageableCourseIds.contains(courseId),
+                )
+                .toList();
+
+        // 네트워크 반영 전 UI 즉시 표시용(추가 진행중): 로컬 pending add 목록도 포함
+        final pendingAddIds = memberProvider.getPendingSubManagerUserIds(courseId);
+        final pendingAddMembers =
+            all.where((v) => pendingAddIds.contains(v.userId)).toList();
+
+        final combined = <MemberView>[...managersForCourse];
+        for (final p in pendingAddMembers) {
           if (!combined.any((c) => c.userId == p.userId)) combined.add(p);
         }
+        // 같은 사람이 place 멤버 + pending 양쪽에 있으면 카드가 2개 보였다가 1개로 바뀌는 깜빡임 방지: 전화번호 기준 1명만 표시(place 우선)
+        final seenPhones = <String>{};
+        final deduped = combined.where((v) {
+          final key = v.phoneNumber.trim();
+          if (key.isEmpty) return true;
+          if (seenPhones.contains(key)) return false;
+          seenPhones.add(key);
+          return true;
+        }).toList();
 
         return SizedBox(
           width: double.infinity,
@@ -1104,21 +1118,25 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                 ],
               ),
               const SizedBox(height: 12),
-              if (combined.isEmpty)
-                Container(
-                  decoration: BoxDecoration(
-                    color: AppColors.backgroundLight.withOpacity(0.9),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                  child: Text(
-                    '아직 코스 매니저가 없어요',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: AppColors.textSecondary,
+              if (deduped.isEmpty)
+                GestureDetector(
+                  onTap:
+                      () => _openSubManagerAddPanel(context, placeId, courseId),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: AppColors.backgroundLight.withOpacity(0.9),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    child: Text(
+                      '아직 코스 매니저가 없어요',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: AppColors.textSecondary,
+                      ),
                     ),
                   ),
                 )
@@ -1126,7 +1144,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    for (final v in combined)
+                    for (final v in deduped)
                       MemberCard(
                         backgroundColor: AppColors.backgroundLight.withOpacity(
                           0.5,

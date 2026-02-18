@@ -118,7 +118,7 @@ class _SubManagerActionBottomSheetState
         context,
         listen: false,
       );
-      memberProvider.setPlaceId(widget.placeId);
+      memberProvider.setPlaceId(widget.placeId, force: true);
       Future.delayed(const Duration(milliseconds: 600), () {
         if (!mounted) return;
         final list =
@@ -181,7 +181,7 @@ class _SubManagerActionBottomSheetState
       } finally {
         if (ctx.mounted) {
           memberProvider.finishProcessingMember(targetUserId);
-          memberProvider.setPlaceId(placeId);
+          memberProvider.setPlaceId(placeId, force: true);
         }
       }
     });
@@ -190,7 +190,6 @@ class _SubManagerActionBottomSheetState
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
-    final bottomPadding = mq.padding.bottom;
     final viewInsetsBottom = mq.viewInsets.bottom;
 
     // 키보드 올라올 때 시트 전체를 viewInsets만큼 위로 밀어 입력란 가림 방지 (member_detail과 동일)

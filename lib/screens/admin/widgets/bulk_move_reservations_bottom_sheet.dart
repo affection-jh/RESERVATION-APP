@@ -128,18 +128,23 @@ class _BulkMoveReservationsBottomSheetState
 
   @override
   Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    final viewInsetsBottom = mq.viewInsets.bottom;
+    final paddingBottom = mq.padding.bottom;
     final maxHeight = MediaQuery.sizeOf(context).height * 0.88;
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.backgroundWhite,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
-      ),
-      padding: EdgeInsets.only(
-        left: 0,
-        right: 0,
-        top: 32,
-        bottom: 32 + MediaQuery.of(context).padding.bottom,
-      ),
+    return Padding(
+      padding: EdgeInsets.only(bottom: viewInsetsBottom),
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.backgroundWhite,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+        ),
+        padding: EdgeInsets.only(
+          left: 0,
+          right: 0,
+          top: 32,
+          bottom: 32 + paddingBottom,
+        ),
       child: ConstrainedBox(
         constraints: BoxConstraints(maxHeight: maxHeight),
         child: SingleChildScrollView(
@@ -526,6 +531,7 @@ class _BulkMoveReservationsBottomSheetState
           ),
         ),
       ),
+    ),
     );
   }
 

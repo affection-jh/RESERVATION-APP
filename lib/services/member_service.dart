@@ -7,6 +7,7 @@ import '../models/member_view.dart';
 import '../models/pending_member.dart';
 import '../models/place_member.dart';
 import '../models/user.dart';
+import '../utils/phone_utils.dart';
 import '../utils/timezone_utils.dart';
 import 'firestore_service.dart';
 import 'auth_service.dart';
@@ -303,32 +304,10 @@ class MemberService {
     void emit() {
       final views = <MemberView>[];
       for (final m in lastMembers) {
-        final adminName = (m.adminDisplayName ?? '').trim();
-        views.add(
-          MemberView(
-            userId: m.userId,
-            adminDisplayName: adminName.isEmpty ? '이름 없음' : adminName,
-            phoneNumber: m.phoneNumber ?? '',
-            role: m.role,
-            manageableCourseIds: m.manageableCourseIds,
-            enrollment: null,
-            isPending: false,
-          ),
-        );
+        views.add(MemberView.fromPlaceMember(m));
       }
       for (final p in lastPending) {
-        final pendingName = (p.adminDisplayName ?? '').trim();
-        views.add(
-          MemberView(
-            userId: 'pending_${p.id}',
-            adminDisplayName: pendingName.isEmpty ? '이름 없음' : pendingName,
-            phoneNumber: p.phoneNumber,
-            role: p.role,
-            manageableCourseIds: p.effectiveCourseIds,
-            enrollment: null,
-            isPending: true,
-          ),
-        );
+        views.add(MemberView.fromPendingMember(p));
       }
       if (!controller.isClosed) controller.add(views);
     }
@@ -375,14 +354,7 @@ class MemberService {
 
   /// 전화번호 정규화 (숫자만 추출, 82로 시작하면 0으로 변환)
   String _normalizePhone(String phoneNumber) {
-    var digits = phoneNumber.replaceAll(RegExp(r'[^\d]'), '');
-    if (digits.startsWith('82')) {
-      digits = '0${digits.substring(2)}';
-    }
-    if (!digits.startsWith('0')) {
-      digits = '0$digits';
-    }
-    return digits;
+    return PhoneUtils.normalizeForStorage(phoneNumber);
   }
 
   /// places/{placeId}/pendingMembers/{inviteId} 참조. inviteId = placeId_normalizedPhone
@@ -410,7 +382,7 @@ class MemberService {
   }
 
   /// 코스별 부매니저 초대 (inviteSubManagerForCourse Callable)
-  /// 기존 pending이 subManager면 allowedCourseIds에 courseId 추가, 없으면 새 pending 생성.
+  /// 기존 pending이 subManager면 managedCourseIds에 courseId 추가, 없으면 새 pending 생성.
   /// 기존 일반 멤버면 부매니저로 승격(manageableCourseIds 추가, role: subManager).
   /// 실패 시 [FirebaseFunctionsException]을 그대로 전달해 호출부에서 스낵바 등 처리 가능.
   Future<bool> inviteSubManagerForCourse({
@@ -981,7 +953,7 @@ class MemberService {
     }
   }
 
-  /// pendingMembers에서 특정 코스 제거 (플레이스 전체). allowedCourseIds + courseEnrollments에서 제거.
+  /// pendingMembers에서 특정 코스 제거 (플레이스 전체). managedCourseIds + allowedCourseIds + courseEnrollments에서 제거.
   Future<int> removeCourseFromAllPendingMembers({
     required String placeId,
     required String courseId,
@@ -998,6 +970,12 @@ class MemberService {
       final batch = _firestore.batch();
       for (final doc in snapshot.docs) {
         final data = doc.data();
+        final rawManaged = data['managedCourseIds'];
+        final managedList =
+            rawManaged is List ? rawManaged.map((e) => e.toString()).toList() : <String>[];
+        final hasInManaged = managedList.contains(courseId);
+        final nextManaged = managedList.where((e) => e != courseId).toList();
+
         final raw = data['allowedCourseIds'];
         final list =
             raw is List ? raw.map((e) => e.toString()).toList() : <String>[];
@@ -1017,9 +995,10 @@ class MemberService {
         final hasInEnrollments = rawEnrollments is List &&
             rawEnrollments.length != nextEnrollments.length;
 
-        if (!hasInAllowed && !hasInEnrollments) continue;
+        if (!hasInManaged && !hasInAllowed && !hasInEnrollments) continue;
 
         final updates = <String, dynamic>{};
+        if (hasInManaged) updates['managedCourseIds'] = nextManaged;
         if (hasInAllowed) updates['allowedCourseIds'] = nextAllowed;
         if (hasInEnrollments) {
           updates['courseEnrollments'] = nextEnrollments
@@ -1038,7 +1017,7 @@ class MemberService {
     }
   }
 
-  /// pendingMembers에서 특정 코스 제거 (allowedCourseIds + courseEnrollments에서 제거)
+  /// pendingMembers에서 특정 코스 제거 (managedCourseIds + allowedCourseIds + courseEnrollments에서 제거)
   Future<bool> removeCourseFromPendingMembers({
     required String placeId,
     required String phoneNumber,
@@ -1053,10 +1032,17 @@ class MemberService {
       final data = snap.data() as Map<String, dynamic>?;
       if (data == null) return true;
 
+      final rawManaged = data['managedCourseIds'];
+      final managedList =
+          rawManaged is List ? rawManaged.map((e) => e.toString()).toList() : <String>[];
+      final hasInManaged = managedList.contains(courseId);
+      final nextManaged = managedList.where((e) => e != courseId).toList();
+
       final raw = data['allowedCourseIds'];
       final allowedList =
           raw is List ? raw.map((e) => e.toString()).toList() : <String>[];
       final hasInAllowed = allowedList.contains(courseId);
+      final nextAllowed = allowedList.where((e) => e != courseId).toList();
 
       final rawEnrollments = data['courseEnrollments'];
       List<dynamic> nextEnrollments;
@@ -1073,13 +1059,11 @@ class MemberService {
       }
       final hasInEnrollments = originalCount != nextEnrollments.length;
 
-      if (!hasInAllowed && !hasInEnrollments) return true;
+      if (!hasInManaged && !hasInAllowed && !hasInEnrollments) return true;
 
       final updates = <String, dynamic>{};
-      if (hasInAllowed) {
-        updates['allowedCourseIds'] =
-            allowedList.where((e) => e != courseId).toList();
-      }
+      if (hasInManaged) updates['managedCourseIds'] = nextManaged;
+      if (hasInAllowed) updates['allowedCourseIds'] = nextAllowed;
       if (hasInEnrollments) {
         updates['courseEnrollments'] =
             nextEnrollments.map((e) => e is Map ? Map<String, dynamic>.from(e) : e).toList();
@@ -1122,7 +1106,7 @@ class MemberService {
       final isPending = userId.startsWith('pending_');
 
       if (isPending) {
-        // 초대 토큰: allowedCourseIds에 코스 ID만 추가 (설정은 가입 후)
+        // pending: courseEnrollments에 수강 설정 저장 (관리코스(managedCourseIds)와 분리)
         final normalizedPhone = _normalizePhone(phoneNumber);
         final ref = _pendingRef(placeId, normalizedPhone);
         final snap = await ref.get();
@@ -1132,23 +1116,29 @@ class MemberService {
         }
         final data = snap.data() as Map<String, dynamic>?;
         if (data == null) return false;
-        final raw = data['allowedCourseIds'];
-        final current =
-            raw is List ? raw.map((e) => e.toString()).toList() : <String>[];
-        final toAdd =
-            courseEnrollments
-                .map((e) => e['courseId'] as String?)
-                .whereType<String>()
-                .where((e) => e.isNotEmpty && !current.contains(e))
-                .toList();
-        if (toAdd.isEmpty) {
-          debugPrint('✅ [MemberService] pending 이미 해당 코스 포함');
-          return true;
+        final existingRaw = data['courseEnrollments'];
+        final existing =
+            existingRaw is List
+                ? existingRaw
+                    .whereType<dynamic>()
+                    .map((e) => e is Map ? Map<String, dynamic>.from(e) : <String, dynamic>{})
+                    .where((m) => (m['courseId'] as String?)?.trim().isNotEmpty == true)
+                    .toList()
+                : <Map<String, dynamic>>[];
+
+        final byCourse = <String, Map<String, dynamic>>{
+          for (final e in existing) (e['courseId'] as String).trim(): e,
+        };
+        for (final ce in courseEnrollments) {
+          final id = (ce['courseId'] as String?)?.trim();
+          if (id == null || id.isEmpty) continue;
+          byCourse[id] = {
+            ...byCourse[id] ?? <String, dynamic>{'courseId': id},
+            ...ce,
+          };
         }
-        await ref.update({
-          'allowedCourseIds': [...current, ...toAdd],
-        });
-        debugPrint('✅ [MemberService] pending allowedCourseIds 추가 완료');
+        await ref.update({'courseEnrollments': byCourse.values.toList()});
+        debugPrint('✅ [MemberService] pending courseEnrollments 업데이트 완료');
         return true;
       } else {
         // 일반 멤버: Cloud Function으로 enrollment 생성 (클라이언트 permission-denied 회피)

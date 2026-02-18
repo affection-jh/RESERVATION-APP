@@ -440,11 +440,13 @@ class _ReservationScreenState extends State<ReservationScreen> {
 
     final isLoadingButton = _loadingCourseId == course.id;
 
+    final canReserve = isEnrolled && !isLoadingButton;
+
     return Material(
       color: Colors.transparent,
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
-        onTap: openCalendar, // ✅ 카드 전체 탭으로도 예약 화면 이동
+        onTap: canReserve ? openCalendar : null, // 비활성일 때는 카드 탭 무시
         child: Container(
           margin: const EdgeInsets.only(bottom: 16),
           decoration: BoxDecoration(
@@ -571,9 +573,9 @@ class _ReservationScreenState extends State<ReservationScreen> {
                                 ),
                               ),
                               const SizedBox(width: 12),
-                              // 오른쪽: 예약하기 버튼 (로딩 중에도 너비 유지)
+                              // 오른쪽: 예약하기 버튼 (비활성·로딩 중에는 탭 무시)
                               GestureDetector(
-                                onTap: isLoadingButton ? null : openCalendar,
+                                onTap: canReserve ? openCalendar : null,
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(
                                     horizontal: 26,

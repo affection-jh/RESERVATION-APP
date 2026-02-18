@@ -26,15 +26,7 @@ class NameEditBottomSheet extends StatefulWidget {
       isDismissible: true,
       enableDrag: true,
       useSafeArea: true,
-      builder:
-          (context) => Padding(
-            padding: EdgeInsets.only(
-              bottom:
-                  MediaQuery.of(context).padding.bottom +
-                  MediaQuery.of(context).viewInsets.bottom,
-            ),
-            child: NameEditBottomSheet(initialName: initialName),
-          ),
+      builder: (context) => NameEditBottomSheet(initialName: initialName),
     );
   }
 
@@ -134,34 +126,41 @@ class _NameEditBottomSheetState extends State<NameEditBottomSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(color: Colors.transparent),
-      child: Stack(
-        children: [
-          // 배경 탭 시 닫기
-          Positioned.fill(
-            child: GestureDetector(
-              onTap: () => Navigator.of(context).pop(),
-              child: Container(color: Colors.transparent),
+    final mq = MediaQuery.of(context);
+    final viewInsetsBottom = mq.viewInsets.bottom;
+    final paddingBottom = mq.padding.bottom;
+    return Padding(
+      padding: EdgeInsets.only(bottom: viewInsetsBottom),
+      child: Container(
+        decoration: const BoxDecoration(color: Colors.transparent),
+        child: Stack(
+          children: [
+            // 배경 탭 시 닫기
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: () => Navigator.of(context).pop(),
+                child: Container(color: Colors.transparent),
+              ),
             ),
-          ),
-          // 바텀시트 컨텐츠
-          Align(
-            alignment: Alignment.bottomCenter,
-            child: GestureDetector(
-              onTap: () {},
-              child: Container(
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.of(context).size.height * 0.9,
-                ),
-                decoration: BoxDecoration(
-                  color: AppColors.backgroundWhite,
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-                ),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 12,
-                ),
+            // 바텀시트 컨텐츠
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: GestureDetector(
+                onTap: () {},
+                child: Container(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(context).size.height * 0.9,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.backgroundWhite,
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                  ),
+                  padding: EdgeInsets.only(
+                    left: 24,
+                    right: 24,
+                    top: 12,
+                    bottom: 12 + paddingBottom,
+                  ),
                 child: SingleChildScrollView(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -269,6 +268,7 @@ class _NameEditBottomSheetState extends State<NameEditBottomSheet> {
           ),
         ],
       ),
+    ),
     );
   }
 }

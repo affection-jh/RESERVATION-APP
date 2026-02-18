@@ -70,7 +70,10 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
         await courseProvider.loadCourses(currentPlace.id);
       }
       final isSubManager = authProvider.isSubManagerForPlace(currentPlace.id);
-      memberProvider.setPlaceId(currentPlace.id, isSubManagerForPlace: isSubManager);
+      memberProvider.setPlaceId(
+        currentPlace.id,
+        isSubManagerForPlace: isSubManager,
+      );
       if (isSubManager && memberProvider.selectedTab == 0) {
         memberProvider.setSelectedTab(1);
       }
@@ -93,20 +96,27 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
     final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final placeId = placeProvider.currentPlace?.id;
-    final isSubManager = placeId != null && authProvider.isSubManagerForPlace(placeId);
+    final isSubManager =
+        placeId != null && authProvider.isSubManagerForPlace(placeId);
     final showCourseTab = memberProvider.selectedTab == 1 || isSubManager;
-    final placeMember = placeId != null ? authProvider.getPlaceMemberForPlace(placeId) : null;
-    final coursesForTab = isSubManager && placeMember != null
-        ? courseProvider.courses.where((c) => placeMember.manageableCourseIds.contains(c.id)).toList()
-        : courseProvider.courses;
+    final placeMember =
+        placeId != null ? authProvider.getPlaceMemberForPlace(placeId) : null;
+    final coursesForTab =
+        isSubManager && placeMember != null
+            ? courseProvider.courses
+                .where((c) => placeMember.manageableCourseIds.contains(c.id))
+                .toList()
+            : courseProvider.courses;
 
     // 과목 키워드 검색용 코스명 맵 동기화 (빌드 중 notifyListeners 금지 → 프레임 후 실행)
     if (courseProvider.courses.isNotEmpty) {
       final courseMap = {for (var c in courseProvider.courses) c.id: c.name};
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!context.mounted) return;
-        Provider.of<MemberProvider>(context, listen: false)
-            .setCourseNamesForSearch(courseMap);
+        Provider.of<MemberProvider>(
+          context,
+          listen: false,
+        ).setCourseNamesForSearch(courseMap);
       });
     }
 
@@ -147,10 +157,7 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
         Expanded(
           child:
               showCourseTab && memberProvider.selectedCourseIds.isNotEmpty
-                  ? _buildCourseMemberList(
-                    memberProvider,
-                    coursesForTab,
-                  )
+                  ? _buildCourseMemberList(memberProvider, coursesForTab)
                   : memberProvider.isLoading
                   ? const Center(
                     child: CircularProgressIndicator(
@@ -168,7 +175,7 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
     final mp = Provider.of<MemberProvider>(context);
     _syncSearchFromProvider(mp);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      padding: const EdgeInsets.only(left: 20, right: 20, top: 2, bottom: 12),
       child: Row(
         children: [
           Expanded(
@@ -247,18 +254,21 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
     final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final placeId = placeProvider.currentPlace?.id;
-    final isSubManager = placeId != null && authProvider.isSubManagerForPlace(placeId);
+    final isSubManager =
+        placeId != null && authProvider.isSubManagerForPlace(placeId);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
       child: DefaultTapbar(
         labels: isSubManager ? ['코스별'] : ['전체', '코스별'],
         selectedIndex: isSubManager ? 0 : memberProvider.selectedTab,
-        onTabChanged: isSubManager
-            ? (_) {}
-            : (index) {
-                memberProvider.setSelectedTab(index);
-              },
+        onTabChanged:
+            isSubManager
+                ? (_) {}
+                : (index) {
+                  memberProvider.setSelectedTab(index);
+                },
+        showIndicator: false,
         trailing: IconButton(
           icon: Icon(Icons.add_circle, color: AppColors.primaryGreen, size: 34),
           onPressed: () => _showMemberEditor(context),
@@ -485,8 +495,9 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
         onNotification: (n) {
           if (n is ScrollUpdateNotification) {
             final m = n.metrics;
-            final firstVisible =
-                (m.pixels / _estimatedItemHeight).floor().clamp(0, 99999);
+            final firstVisible = (m.pixels / _estimatedItemHeight)
+                .floor()
+                .clamp(0, 99999);
             memberProvider.setVisibleRange(firstVisible);
             if (m.pixels >= m.maxScrollExtent - _loadMoreThreshold &&
                 memberProvider.hasMoreMembers &&
@@ -551,14 +562,17 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
             onNotification: (notification) {
               if (notification is ScrollUpdateNotification) {
                 final m = notification.metrics;
-                final firstVisible =
-                    (m.pixels / _estimatedItemHeight).floor().clamp(0, 99999);
+                final firstVisible = (m.pixels / _estimatedItemHeight)
+                    .floor()
+                    .clamp(0, 99999);
                 memberProvider.setVisibleRange(firstVisible);
                 if (m.pixels >= m.maxScrollExtent - _loadMoreThreshold &&
                     memberProvider.hasMoreMembers &&
                     !memberProvider.isLoadingMore) {
-                  Provider.of<MemberProvider>(context, listen: false)
-                      .loadMoreMembers();
+                  Provider.of<MemberProvider>(
+                    context,
+                    listen: false,
+                  ).loadMoreMembers();
                 }
               }
               return false;
@@ -721,7 +735,8 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
       for (final memberData in memberList) {
         try {
           final name = (memberData['name'] as String? ?? '').trim();
-          final phoneNumber = (memberData['phoneNumber'] as String? ?? '').trim();
+          final phoneNumber =
+              (memberData['phoneNumber'] as String? ?? '').trim();
 
           debugPrint('📥 [멤버 데이터 수신] 이름: $name, 전화번호: $phoneNumber');
           debugPrint('📥 [멤버 데이터 전체] $memberData');
@@ -735,12 +750,13 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
 
           // courseEnrollments 추출 (null이면 빈 리스트로 처리)
           final rawEnrollments = memberData['courseEnrollments'];
-          final courseEnrollments = rawEnrollments is List<dynamic>
-              ? rawEnrollments
-                  .whereType<Map<String, dynamic>>()
-                  .cast<Map<String, dynamic>>()
-                  .toList()
-              : <Map<String, dynamic>>[];
+          final courseEnrollments =
+              rawEnrollments is List<dynamic>
+                  ? rawEnrollments
+                      .whereType<Map<String, dynamic>>()
+                      .cast<Map<String, dynamic>>()
+                      .toList()
+                  : <Map<String, dynamic>>[];
 
           // MemberService를 사용하여 멤버 등록
           final success = await memberService.registerMember(
@@ -748,7 +764,8 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
             adminId: adminId,
             name: name,
             phoneNumber: phoneNumber,
-            courseEnrollments: courseEnrollments.isEmpty ? null : courseEnrollments,
+            courseEnrollments:
+                courseEnrollments.isEmpty ? null : courseEnrollments,
             courses: courseProvider.courses,
           );
 
@@ -774,7 +791,10 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
         if (failCount == 0) {
           SnackbarUtil.showSuccess(context, '${successCount}명의 멤버가 등록되었습니다.');
         } else {
-          SnackbarUtil.showInfo(context, '${successCount}명 성공, ${failCount}명 실패');
+          SnackbarUtil.showInfo(
+            context,
+            '${successCount}명 성공, ${failCount}명 실패',
+          );
         }
         if (!mounted) return;
         final memberProvider = Provider.of<MemberProvider>(

@@ -38,6 +38,9 @@ class ReservationSummaryProvider with ChangeNotifier {
   /// reservations 스트림에서 집계한 (sessionId_date) → 예약 인원 수
   final Map<String, int> _reservedCountByKey = {};
 
+  /// 일괄 취소/추가 시 스트림 도착 전 표시용 보정 (sessionId_date → 증감). 스트림 적용 시 해당 키 제거.
+  final Map<String, int> _optimisticDeltaByKey = {};
+
   /// sessionId_date → 정원 (courseOverride type=capacity / type=add 에서만 파생)
   final Map<String, int> _capacityOverridesByKey = {};
   final Map<String, List<CourseOverride>> _overridesByDate = {};
@@ -46,8 +49,8 @@ class ReservationSummaryProvider with ChangeNotifier {
   Timer? _loadingTimeout;
   Timer? _notifyDebounceTimer;
   Map<String, int>? _pendingReservedCounts;
-  /// 배치 추가/삭제/이동 시 연속 emit 대비 디바운스
-  static const _notifyDebounceDuration = Duration(milliseconds: 350);
+  /// 배치 추가/삭제/이동 시 연속 emit 대비 디바운스 (일괄 취소 시 N/M이 한 번에 갱신되도록)
+  static const _notifyDebounceDuration = Duration(milliseconds: 700);
 
   bool _isLoading = true;
   bool _reservationsLoaded = false;
@@ -224,6 +227,7 @@ class ReservationSummaryProvider with ChangeNotifier {
           _reservedCountByKey.clear();
           _reservedCountByKey.addAll(_pendingReservedCounts!);
           _pendingReservedCounts = null;
+          _optimisticDeltaByKey.clear();
           _reservationsLoaded = true; // 병합 완료 후에만 true (디바운스 동안 isLoading 유지)
           debugPrint(
             '[ReservationSummaryProvider] reservationSummary emit → ${_reservedCountByKey.length} 세션키',
@@ -267,9 +271,11 @@ class ReservationSummaryProvider with ChangeNotifier {
       final key = e.key;
       final slot = e.value;
       final count = _reservedCountByKey[key] ?? 0;
+      final delta = _optimisticDeltaByKey[key] ?? 0;
       final capacity = _capacityOverridesByKey[key] ?? slot.capacity;
+      final effectiveCount = (count + delta).clamp(0, capacity);
       _sessionReservationsByKey[key] = slot.copyWith(
-        reservedCount: count,
+        reservedCount: effectiveCount,
         capacity: capacity,
       );
     }
@@ -335,11 +341,13 @@ class ReservationSummaryProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  /// N/M 표시용 예약 인원 문자열. UI는 이 값만 사용하면 됨.
+  /// N/M 표시용 예약 인원 문자열. UI는 이 값만 사용하면 됨. (낙관적 보정 포함)
   String getReservedCountDisplayString(String sessionId, String date) {
     final key = '${sessionId}_$date';
     if (_isLoading) return ' ';
-    return '${_reservedCountByKey[key] ?? 0}';
+    final count = _reservedCountByKey[key] ?? 0;
+    final delta = _optimisticDeltaByKey[key] ?? 0;
+    return '${(count + delta).clamp(0, 1 << 30)}';
   }
 
   /// 특정 세션/날짜의 SessionReservationSummary
@@ -361,6 +369,14 @@ class ReservationSummaryProvider with ChangeNotifier {
     if (override != null) return override;
     final sr = _sessionReservationsByKey['${sessionId}_$date'];
     return sr?.capacity ?? fallback;
+  }
+
+  /// 일괄 취소/추가 직후 N/M을 즉시 반영 (스트림이 한 건씩 올라오는 동안 한 번에 표시)
+  void applyOptimisticReservedCountChange(String sessionId, String date, int delta) {
+    final key = '${sessionId}_$date';
+    _optimisticDeltaByKey[key] = (_optimisticDeltaByKey[key] ?? 0) + delta;
+    _mergeSlotsWithReservedCounts();
+    notifyListeners();
   }
 
   /// capacity override 설정 후 로컬 반영 (실제 저장은 FirestoreService)
@@ -392,6 +408,7 @@ class ReservationSummaryProvider with ChangeNotifier {
     _sessionReservationsByKey.clear();
     _sessionSlotsByKey.clear();
     _reservedCountByKey.clear();
+    _optimisticDeltaByKey.clear();
     _capacityOverridesByKey.clear();
     _overridesByDate.clear();
     _reservationsLoaded = false;

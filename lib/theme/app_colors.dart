@@ -96,8 +96,10 @@ class AppColors {
   static const Color textSecondary = Color(0xFF666666);
   static const Color textLight = Color(0xFF999999);
 
-  // Reserved Colors (예약 완료 색상)
+  // Reserved Colors (예약 가능/완료 등)
   static const Color reservedGrey = Color.fromARGB(255, 226, 226, 226);
+  /// 자물쇠(잠김) 세션 전용 — 예약가능 박스보다 더 연한 회색
+  static const Color sessionLockedGrey = Color.fromARGB(255, 240, 240, 240);
   static const Color reservedTextGrey = Color.fromARGB(255, 44, 44, 44);
   static const Color reservedIconGrey = Color.fromARGB(255, 60, 60, 60);
 

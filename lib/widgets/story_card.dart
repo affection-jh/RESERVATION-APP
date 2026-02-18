@@ -66,13 +66,9 @@ class _StoryCardState extends State<StoryCard> {
                   CachedNetworkImage(
                     imageUrl: widget.backgroundImageUrl!,
                     fit: BoxFit.cover,
-                    cacheKey: widget.backgroundImageUrl,
-                    maxWidthDiskCache: 1000,
-                    maxHeightDiskCache: 1000,
-                    memCacheWidth: 1000,
-                    memCacheHeight: 1000,
+                    memCacheWidth: MediaQuery.of(context).size.width.toInt(),
+                    filterQuality: FilterQuality.low,
                     fadeInDuration: const Duration(milliseconds: 150),
-                    fadeOutDuration: const Duration(milliseconds: 0),
                     imageBuilder: (context, imageProvider) {
                       if (!_backgroundImageLoaded && mounted) {
                         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -85,14 +81,9 @@ class _StoryCardState extends State<StoryCard> {
                         image: imageProvider,
                         fit: BoxFit.cover,
                         gaplessPlayback: true,
+                        filterQuality: FilterQuality.low,
                       );
                     },
-                    placeholder:
-                        (context, url) =>
-                            Container(color: AppColors.backgroundWhite),
-                    errorWidget:
-                        (context, url, error) =>
-                            Container(color: AppColors.backgroundWhite),
                   )
                 else
                   Container(color: AppColors.backgroundWhite),
@@ -171,7 +162,7 @@ class _StoryCardState extends State<StoryCard> {
                                   Text(
                                     widget.title,
                                     style: const TextStyle(
-                                      fontSize: 22,
+                                      fontSize: 24,
                                       fontWeight: FontWeight.bold,
                                       color: Colors.white,
                                     ),

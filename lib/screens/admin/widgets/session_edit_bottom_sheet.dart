@@ -417,20 +417,26 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final screenHeight = MediaQuery.of(context).size.height;
+    final mq = MediaQuery.of(context);
+    final viewInsetsBottom = mq.viewInsets.bottom;
+    final paddingBottom = mq.padding.bottom;
+    final screenHeight = mq.size.height;
     final maxHeight = screenHeight * 0.95; // 화면 높이의 90%로 제한
 
-    return Container(
-      constraints: BoxConstraints(maxHeight: maxHeight),
-      decoration: BoxDecoration(
-        color: AppColors.backgroundWhite,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      child: SafeArea(
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
+    return Padding(
+      padding: EdgeInsets.only(bottom: viewInsetsBottom),
+      child: Container(
+        constraints: BoxConstraints(maxHeight: maxHeight),
+        decoration: BoxDecoration(
+          color: AppColors.backgroundWhite,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: SafeArea(
+          bottom: false,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
               // 헤더
               Container(
                 padding: const EdgeInsets.symmetric(
@@ -474,39 +480,44 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
                                   ),
                                 ),
                               ),
-                              const SizedBox(height: 12),
+                              // 일괄 적용 영역: 숨겨지면 높이 0으로 완전 제거
                               Builder(
                                 builder: (context) {
-                                  // 일괄 적용 버튼 표시 여부 확인
-                                  if (!_shouldShowBulkUi())
-                                    return const SizedBox();
-
-                                  return Row(
+                                  if (!_shouldShowBulkUi()) {
+                                    return const SizedBox.shrink();
+                                  }
+                                  return Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      Padding(
-                                        padding: const EdgeInsets.only(top: 3),
-                                        child: Text(
-                                          '일괄 적용',
-                                          style: const TextStyle(
-                                            fontSize: 18,
-                                            fontWeight: FontWeight.w500,
-                                            color: AppColors.textPrimary,
+                                      const SizedBox(height: 12),
+                                      Row(
+                                        children: [
+                                          Padding(
+                                            padding: const EdgeInsets.only(top: 3),
+                                            child: Text(
+                                              '일괄 적용',
+                                              style: const TextStyle(
+                                                fontSize: 18,
+                                                fontWeight: FontWeight.w500,
+                                                color: AppColors.textPrimary,
+                                              ),
+                                            ),
                                           ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      CustomCheckbox(
-                                        value: _isBulkRegistration,
-                                        onChanged: (value) {
-                                          setState(() {
-                                            _isBulkRegistration =
-                                                value ?? false;
-                                          });
-                                          // 일괄등록 변경 시 실시간 미리보기 업데이트
-                                          widget.onBulkRegistrationChanged
-                                              ?.call(_isBulkRegistration);
-                                        },
-                                        activeColor: widget.courseColor,
+                                          const SizedBox(width: 8),
+                                          CustomCheckbox(
+                                            value: _isBulkRegistration,
+                                            onChanged: (value) {
+                                              setState(() {
+                                                _isBulkRegistration =
+                                                    value ?? false;
+                                              });
+                                              widget.onBulkRegistrationChanged
+                                                  ?.call(_isBulkRegistration);
+                                            },
+                                            activeColor: widget.courseColor,
+                                          ),
+                                        ],
                                       ),
                                     ],
                                   );
@@ -814,10 +825,12 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
                 ),
               ),
               const SizedBox(height: 20),
+              SizedBox(height: paddingBottom),
             ],
           ),
         ),
       ),
+    ),
     );
   }
 
@@ -1001,7 +1014,6 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
                       : const SizedBox.shrink(),
             ),
           ),
-          SizedBox(height: MediaQuery.of(context).padding.bottom),
         ],
       ),
     );

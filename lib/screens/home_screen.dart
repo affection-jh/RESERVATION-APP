@@ -175,12 +175,10 @@ class _HomeScreenState extends State<HomeScreen> {
     return Consumer2<PlaceProvider, AuthProvider>(
       builder: (context, placeProvider, authProvider, _) {
         final place = placeProvider.currentPlace;
-        final memberIds = authProvider.approvedPlaceIds;
-        final adminIds = authProvider.adminManagedPlaceIds;
         final isUnregistered =
             place != null &&
-            !memberIds.contains(place.id) &&
-            !adminIds.contains(place.id);
+            !authProvider.hasMemberAccessToPlace(place.id) &&
+            !authProvider.hasAdminAccessToPlace(place.id);
         final isLoggedIn =
             authProvider.currentUser != null ||
             authProvider.currentAdmin != null;

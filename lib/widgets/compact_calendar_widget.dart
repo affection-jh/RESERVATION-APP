@@ -723,10 +723,11 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     setState(() => _currentWeekStartDate = weekStartDate);
   }
 
-  /// CourseProvider에서 해당 날짜의 override만 반환 (override는 Provider에서만 관리)
+  /// CourseProvider에서 해당 날짜·코스의 override만 반환 (다른 코스 오염 방지)
   List<CourseOverride> _getOverridesForDate(
     BuildContext context,
     DateTime date,
+    String courseId,
   ) {
     final dateKey = CalendarUtils.formatDateYMD(date);
     final weekStartDate = TimezoneUtils.formatDateToSeoul(
@@ -734,16 +735,22 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     );
     return Provider.of<CourseProvider>(context, listen: false)
         .getOverridesForWeek(weekStartDate)
-        .where((o) => o.date == dateKey)
+        .where((o) => o.date == dateKey && o.courseId == courseId)
         .toList();
   }
 
   Future<void> _loadCoursePolicy() async {
     final course = _selectedCourse;
     if (course == null) return;
-    setState(() {
-      _coursePolicy = course.policy;
-    });
+    // Provider에서 최신 코스 가져와서 정책 동기화 (admin_home_screen에서 applyCoursePolicy로 갱신된 정책 반영)
+    final courseProvider = Provider.of<CourseProvider>(context, listen: false);
+    final latestCourse = courseProvider.getCourse(course.id);
+    final policy = latestCourse?.policy ?? course.policy;
+    if (_coursePolicy != policy) {
+      setState(() {
+        _coursePolicy = policy;
+      });
+    }
   }
 
   @override
@@ -804,6 +811,16 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
             _selectedCourse = match;
             _coursePolicy = match.policy;
           });
+        } else if (match != null) {
+          // 코스 인스턴스는 같지만 Provider에서 정책이 갱신되었을 수 있음 (applyCoursePolicy)
+          final courseProvider = Provider.of<CourseProvider>(context, listen: false);
+          final latestCourse = courseProvider.getCourse(match.id);
+          final latestPolicy = latestCourse?.policy;
+          if (latestPolicy != null && _coursePolicy != latestPolicy) {
+            setState(() {
+              _coursePolicy = latestPolicy;
+            });
+          }
         }
       }
       // 코스가 비어있다가 채워졌거나(place 로드 타이밍), 아직 복원 못 했으면 1회 복원 시도
@@ -1184,10 +1201,9 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     bool hasSaturdayOverride = false;
     bool hasSundayOverride = false;
     for (final date in allWeekDates) {
-      final dayOverrides = _getOverridesForDate(context, date);
+      final dayOverrides = _getOverridesForDate(context, date, _selectedCourse!.id);
       for (final o in dayOverrides) {
-        if (o.courseId != _selectedCourse!.id || o.isCancelled == true)
-          continue;
+        if (o.isCancelled == true) continue;
         if (o.dayOfWeek == 6) hasSaturdayOverride = true;
         if (o.dayOfWeek == 7) hasSundayOverride = true;
       }
@@ -2130,7 +2146,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                     color:
                         isActiveSlot
                             ? AppColors.textSecondary
-                            : AppColors.textSecondary.withOpacity(0.4),
+                            : AppColors.textSecondary.withOpacity(0.6),
                     height: 1.0,
                   ),
                 ),
@@ -3371,8 +3387,9 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     // 정기 일정 가져오기
     final regularSessions = _selectedCourse!.getSessionsByDay(date.weekday);
 
-    // 비정기 일정 확인 (CourseProvider에서만 조회)
-    final dayOverrides = _getOverridesForDate(context, date);
+    // 비정기 일정 확인 (CourseProvider에서만 조회, 코스별 필터는 _getOverridesForDate 내부)
+    final dayOverrides =
+        _getOverridesForDate(context, date, _selectedCourse!.id);
 
     // 취소된 정기 일정 필터링
     final cancelledStartTimes =
@@ -3792,8 +3809,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     final srProvider = context.watch<ReservationSummaryProvider>();
     final sr = srProvider.getSessionReservationSummary(sessionId, dateString);
 
-    // 비정기 일정인지 확인 (CourseProvider에서만 조회)
-    final dayOverrides = _getOverridesForDate(context, date);
+    // 비정기 일정인지 확인 (CourseProvider에서만 조회, 코스별 필터는 _getOverridesForDate 내부)
+    final dayOverrides = _getOverridesForDate(context, date, courseId);
     final isOverrideSession = dayOverrides.any(
       (o) =>
           !o.isCancelled &&

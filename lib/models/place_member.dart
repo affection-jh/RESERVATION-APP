@@ -78,20 +78,24 @@ class PlaceMember {
         : roleRaw == 'submanager'
             ? PlaceMemberRole.subManager
             : PlaceMemberRole.member;
+    // List<String> 보장 (Firestore null/비리스트 시 빈 리스트)
+    List<String> manageableCourseIds = const [];
+    final rawManageable = json['manageableCourseIds'];
+    if (rawManageable is List) {
+      manageableCourseIds = rawManageable.map((e) => e.toString()).where((s) => s.isNotEmpty).toList();
+    } else {
+      final rawCourseIds = json['courseIds'];
+      if (rawCourseIds is List) {
+        manageableCourseIds = rawCourseIds.map((e) => e.toString()).where((s) => s.isNotEmpty).toList();
+      }
+    }
     return PlaceMember(
       userId: json['userId'] as String,
       placeId: json['placeId'] as String?,
       role: role,
       adminDisplayName: (json['adminDisplayName'] as String?) ?? (json['displayName'] as String?),
       phoneNumber: json['phoneNumber'] as String?,
-      manageableCourseIds:
-          ((json['manageableCourseIds'] as List<dynamic>?)
-                  ?.map((e) => e.toString())
-                  .toList() ??
-              (json['courseIds'] as List<dynamic>?)
-                  ?.map((e) => e.toString())
-                  .toList()) ??
-          [], // 하위 호환: null이면 []
+      manageableCourseIds: manageableCourseIds,
       createdAt:
           json['createdAt'] != null
               ? FirestoreUtils.timestampToDateTime(json['createdAt'])

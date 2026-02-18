@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../providers/reservation_provider.dart';
 import '../providers/enrollment_provider.dart';
 import '../utils/snackbar_util.dart';
+import '../utils/error_message_util.dart';
 
 /// 예약 취소 성공/실패 스낵바를 단일 구독으로 처리
 /// MyPageScreen/CalendarScreen 등 여러 화면에서 중복 구독하지 않도록
@@ -52,7 +53,14 @@ class _ReservationFeedbackListenerState extends State<ReservationFeedbackListene
         if (!mounted) return;
         SnackbarUtil.showSuccess(context, '예약이 취소되었습니다.');
       } else if (event.success == false) {
-        SnackbarUtil.showInfo(context, '예약 취소에 실패했습니다.');
+        final raw = event.error?.toString() ?? '';
+        final friendly =
+            raw.trim().isEmpty ? '' : ErrorMessageUtil.toUserFriendlyMessage(raw);
+        if (friendly.contains('네트워크') || friendly.contains('인터넷')) {
+          SnackbarUtil.showInfo(context, '네트워크 연결을 확인해주세요.');
+        } else {
+          SnackbarUtil.showInfo(context, '예약 취소에 실패했습니다.');
+        }
       }
     });
   }

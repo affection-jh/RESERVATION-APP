@@ -599,20 +599,10 @@ class _UserReservationManageBottomSheetState
       // 성공 피드백은 CalendarScreen/MyPageScreen의 operationEvents에서 처리됨
     } on FirebaseFunctionsException catch (e) {
       debugPrint('[UserReservationManageBottomSheet] 예약 취소 실패: $e');
-      final ctx = navigatorKey.currentContext;
-      if (ctx != null) {
-        final msg =
-            e.code == 'permission-denied'
-                ? '예약 취소에 대한 권한이 없습니다.'
-                : '예약 취소 중 오류가 발생했습니다.';
-        SnackbarUtil.showInfo(ctx, msg);
-      }
+      // 실패 피드백은 전역 ReservationFeedbackListener에서 단일 스낵바로 처리
     } catch (e) {
       debugPrint('[UserReservationManageBottomSheet] 예약 취소 실패: $e');
-      final ctx = navigatorKey.currentContext;
-      if (ctx != null) {
-        SnackbarUtil.showInfo(ctx, '예약 취소 중 오류가 발생했습니다.');
-      }
+      // 실패 피드백은 전역 ReservationFeedbackListener에서 단일 스낵바로 처리
     }
   }
 }

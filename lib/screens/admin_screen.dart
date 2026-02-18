@@ -50,13 +50,19 @@ class _AdminScreenState extends State<AdminScreen> {
 
     try {
       await authProvider.loadPlaceMembershipsForCurrentUser();
-      final placeIds = authProvider.adminManagedPlaceIds;
+      final placeIds =
+          authProvider.placeAccessEntries
+              .where((e) => e.isAdmin)
+              .map((e) => e.placeId)
+              .toSet()
+              .toList();
       if (placeIds.isEmpty) return;
 
       // PlaceSwitch 전환 시 이미 설정된 currentPlace 우선 (마지막 접속으로 롤백 방지)
       final existingPlace = placeProvider.currentPlace;
       String placeId;
-      if (existingPlace != null && placeIds.contains(existingPlace.id)) {
+      if (existingPlace != null &&
+          authProvider.hasAdminAccessToPlace(existingPlace.id)) {
         placeId = existingPlace.id;
       } else {
         final lastPlaceId = await AuthService().getLastAccessedPlaceId();
