@@ -1,8 +1,5 @@
 import 'dart:io';
-import 'dart:typed_data';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:image/image.dart' as img;
 import 'package:flutter_svg/svg.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -11,25 +8,6 @@ import '../../../theme/app_colors.dart';
 import '../../../utils/snackbar_util.dart';
 import '../../../services/storage_service.dart' as firebase_storage;
 import '../../../widgets/common_dialog.dart';
-
-/// Isolate에서 실행: 메인 스레드 블로킹 없이 리사이즈 (로딩 UI 지연 완화)
-/// 모든 이미지를 quality 98 + yuv444로 재인코딩해 파란/빨간 점 아티팩트 최소화
-Uint8List? _resizeStoryImageInIsolate(Uint8List bytes) {
-  try {
-    final image = img.decodeImage(bytes);
-    if (image == null) return null;
-    final toEncode =
-        image.width > 1920 ? img.copyResize(image, width: 1920) : image;
-    final encoded = img.encodeJpg(
-      toEncode,
-      quality: 98,
-      chroma: img.JpegChroma.yuv444,
-    );
-    return Uint8List.fromList(encoded);
-  } catch (_) {
-    return null;
-  }
-}
 
 // 이미지 데이터 타입
 enum _ImageType { uploaded, selected }
@@ -129,9 +107,7 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
     }
 
     try {
-      final List<XFile> images = await _imagePicker.pickMultiImage(
-        imageQuality: 90, // 고품질로 선택 후 스토리 인코딩에서 일괄 처리 (파란/빨간 점 방지)
-      );
+      final List<XFile> images = await _imagePicker.pickMultiImage();
 
       if (images.isNotEmpty) {
         final List<File> newFiles = [];
@@ -166,54 +142,19 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
     }
   }
 
-  /// 이미지 리사이징 (최대 너비 1920px). Isolate에서 수행해 UI 지연 최소화.
-  Future<File?> _resizeImageIfNeeded(File imageFile) async {
-    try {
-      final bytes = await imageFile.readAsBytes();
-      final resizedBytes = await compute(_resizeStoryImageInIsolate, bytes);
-      if (resizedBytes == null) return imageFile;
-
-      final originalPath = imageFile.path;
-      final extension =
-          originalPath.contains('.')
-              ? originalPath.substring(originalPath.lastIndexOf('.'))
-              : '.jpg';
-      final resizedFile = File('${originalPath}_resized$extension');
-      await resizedFile.writeAsBytes(resizedBytes);
-      return resizedFile;
-    } catch (e) {
-      debugPrint('이미지 리사이징 실패: $e');
-      return imageFile;
-    }
-  }
-
-  /// 업로드 성공 시 URL 반환, 실패 시 null
+  /// 업로드 성공 시 URL 반환, 실패 시 null. 원본 그대로 업로드 (리사이즈/재인코딩 없음).
   Future<String?> _uploadImageByFile(File file) async {
     final filePath = file.path;
 
-    // 파일이 _selectedImages에 있는지 확인하고 인덱스 찾기
     final index = _selectedImages.indexWhere((f) => f.path == filePath);
-    if (index == -1) return null; // 파일이 이미 제거되었거나 없음
+    if (index == -1) return null;
 
     try {
-      // 이미지 리사이징 (필요한 경우)
-      final resizedFile = await _resizeImageIfNeeded(file);
-      final fileToUpload = resizedFile ?? file;
-
       final storageService = firebase_storage.StorageService();
       final imageUrl = await storageService.uploadImage(
-        imageFile: fileToUpload,
+        imageFile: file,
         folder: 'stories',
       );
-
-      // 리사이징된 임시 파일 삭제
-      if (resizedFile != null && resizedFile.path != file.path) {
-        try {
-          await resizedFile.delete();
-        } catch (e) {
-          debugPrint('임시 파일 삭제 실패: $e');
-        }
-      }
 
       if (!mounted) return imageUrl;
       // 업로드 완료 전에 사용자가 삭제한 경우: Storage에서 삭제하고 목록에 넣지 않음
@@ -438,30 +379,17 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
     // 선택한 로컬 이미지들을 저장 시에만 업로드 (병렬로)
     if (_selectedImages.isNotEmpty) {
       // 모든 이미지를 병렬로 업로드
-      final uploadFutures =
-          _selectedImages.asMap().entries.map((entry) async {
+        final uploadFutures =
+            _selectedImages.asMap().entries.map((entry) async {
             final index = entry.key;
             final file = entry.value;
 
             try {
-              // 이미지 리사이징 (필요한 경우)
-              final resizedFile = await _resizeImageIfNeeded(file);
-              final fileToUpload = resizedFile ?? file;
-
               final storageService = firebase_storage.StorageService();
               final imageUrl = await storageService.uploadImage(
-                imageFile: fileToUpload,
+                imageFile: file,
                 folder: 'stories',
               );
-
-              // 리사이징된 임시 파일 삭제
-              if (resizedFile != null && resizedFile.path != file.path) {
-                try {
-                  await resizedFile.delete();
-                } catch (e) {
-                  debugPrint('임시 파일 삭제 실패: $e');
-                }
-              }
               return {
                 'success': true,
                 'url': imageUrl,
