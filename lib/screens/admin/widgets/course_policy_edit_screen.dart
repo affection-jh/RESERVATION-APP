@@ -8,6 +8,7 @@ import '../../../services/firestore_service.dart';
 import '../../../theme/app_colors.dart';
 import '../../../utils/navigator_key.dart';
 import '../../../utils/snackbar_util.dart';
+import '../../../widgets/common_dialog.dart';
 import '../../../utils/timezone_utils.dart';
 
 /// 코스 예약 정책 설정 화면
@@ -33,6 +34,7 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
   final FirestoreService _firestoreService = FirestoreService();
   bool _isLoading = true;
   bool _isSaving = false;
+  bool _leaveRequested = false;
   bool _hasReservations = false;
 
   CoursePolicy? _original;
@@ -189,6 +191,17 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
     });
   }
 
+  Future<void> _handleBackDuringSave() async {
+    if (!_isSaving) return;
+    final leave = await CommonDialog.showSavingLeaveConfirm(
+      context: context,
+      onLeave: () => _leaveRequested = true,
+    );
+    if (leave && mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
   Future<bool> _savePolicy({
     required bool popAfterSave,
     bool isInternalCall = false,
@@ -219,6 +232,7 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
 
     setState(() => _isSaving = true);
     try {
+      if (_leaveRequested) return false;
       final openStrategy =
           _type == BookingOpenStrategyType.rollingWindow
               ? BookingOpenStrategy.rollingWindow(
@@ -243,7 +257,7 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
         courseId: widget.courseId,
         policy: policy,
       );
-      if (!mounted) return false;
+      if (_leaveRequested || !mounted) return false;
 
       final courseProvider = Provider.of<CourseProvider>(
         context,
@@ -259,14 +273,20 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
       // 정책 저장 후 콜백 호출
       widget.onPolicySaved?.call();
 
+      if (_leaveRequested) return false;
       if (popAfterSave) {
         Navigator.of(context).pop();
       }
       return true;
     } catch (e) {
+      if (_leaveRequested) return false;
       if (mounted) {
         debugPrint('저장 중 오류가 발생했습니다: $e');
-        SnackbarUtil.showInfo(context, '저장 중 오류가 발생했습니다');
+        SnackbarUtil.showInfoFromError(
+          context,
+          e,
+          fallback: '저장 중 오류가 발생했습니다.',
+        );
       }
       return false;
     } finally {
@@ -292,24 +312,25 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
 
     setState(() => _isSaving = true);
     try {
+      if (_leaveRequested) return;
       // 동일 장소에 같은 이름 코스가 있으면 중복 등록 방지 (1회 조회로 검사)
-      final existingCourses =
-          await _firestoreService.getCoursesByPlace(currentPlace.id);
+      final existingCourses = await _firestoreService.getCoursesByPlace(
+        currentPlace.id,
+      );
       if (!mounted) return;
-      final hasDuplicate = existingCourses.any((c) =>
-          c.name.trim().toLowerCase() == course.name.trim().toLowerCase());
+      final hasDuplicate = existingCourses.any(
+        (c) => c.name.trim().toLowerCase() == course.name.trim().toLowerCase(),
+      );
       if (hasDuplicate) {
         if (mounted) setState(() => _isSaving = false);
-        SnackbarUtil.showInfo(
-          context,
-          '같은 이름의 코스가 이미 있습니다. 코스 이름을 변경해 주세요.',
-        );
+        SnackbarUtil.showInfo(context, '같은 이름의 코스가 이미 있습니다. 코스 이름을 변경해 주세요.');
         return;
       }
 
+      if (_leaveRequested) return;
       // 1) 코스 등록: 먼저 코스를 생성해야 정책(upsertCoursePolicy) 저장이 가능함
       await courseProvider.saveCourse(placeId: currentPlace.id, course: course);
-      if (!mounted) return;
+      if (_leaveRequested || !mounted) return;
 
       // 2) 정책 저장 (isInternalCall: true로 _isSaving 체크 스킵)
       final ok = await _savePolicy(popAfterSave: false, isInternalCall: true);
@@ -326,8 +347,9 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
         ).pushNamedAndRemoveUntil('/admin', (route) => false);
       }
     } catch (e) {
+      if (_leaveRequested) return;
       if (mounted) {
-        SnackbarUtil.showInfo(context, '코스 저장에 실패했습니다: ${e.toString()}');
+        SnackbarUtil.showInfoFromError(context, e, fallback: '코스 저장에 실패했습니다.');
       }
     } finally {
       if (mounted) {
@@ -367,7 +389,14 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
         course != null ? Color(course.color) : AppColors.primaryGreen;
 
     return PopScope(
-      canPop: true, // 뒤로가기 허용 (시간표나 코스 설정 수정 가능하도록)
+      canPop: !_isSaving,
+      onPopInvokedWithResult: (bool didPop, dynamic result) async {
+        if (didPop) return;
+        if (_isSaving)
+          await _handleBackDuringSave();
+        else if (mounted)
+          Navigator.of(context).pop();
+      },
       child: Scaffold(
         backgroundColor: AppColors.backgroundLight,
         appBar: AppBar(
@@ -380,7 +409,13 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
               Icons.arrow_back_ios_rounded,
               color: AppColors.textPrimary,
             ),
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: () async {
+              if (_isSaving) {
+                await _handleBackDuringSave();
+              } else if (mounted) {
+                Navigator.of(context).pop();
+              }
+            },
           ),
         ),
         body: Column(
@@ -794,30 +829,31 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primaryGreen,
                       foregroundColor: Colors.white,
-                      disabledBackgroundColor: _isSaving
-                          ? AppColors.primaryGreen
-                          : AppColors.borderLight,
-                      disabledForegroundColor: _isSaving
-                          ? Colors.white
-                          : AppColors.textSecondary,
+                      disabledBackgroundColor:
+                          _isSaving
+                              ? AppColors.primaryGreen
+                              : AppColors.borderLight,
+                      disabledForegroundColor:
+                          _isSaving ? Colors.white : AppColors.textSecondary,
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(20),
                       ),
                       elevation: 0,
                     ),
-                    child: _isSaving
-                        ? const SizedBox(
-                            width: 24,
-                            height: 24,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(
-                                Colors.white,
+                    child:
+                        _isSaving
+                            ? const SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  Colors.white,
+                                ),
                               ),
-                            ),
-                          )
-                        : Text(
+                            )
+                            : Text(
                               widget.requireSave ? '저장 및 코스 등록' : '정책 수정',
                               style: const TextStyle(
                                 fontSize: 16,

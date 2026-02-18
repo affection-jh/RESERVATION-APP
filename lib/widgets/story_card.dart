@@ -87,12 +87,12 @@ class _StoryCardState extends State<StoryCard> {
                         gaplessPlayback: true,
                       );
                     },
-                    placeholder: (context, url) => Container(
-                      color: AppColors.backgroundWhite,
-                    ),
-                    errorWidget: (context, url, error) => Container(
-                      color: AppColors.backgroundWhite,
-                    ),
+                    placeholder:
+                        (context, url) =>
+                            Container(color: AppColors.backgroundWhite),
+                    errorWidget:
+                        (context, url, error) =>
+                            Container(color: AppColors.backgroundWhite),
                   )
                 else
                   Container(color: AppColors.backgroundWhite),
@@ -158,8 +158,8 @@ class _StoryCardState extends State<StoryCard> {
                                   end: Alignment.bottomCenter,
                                   colors: [
                                     Colors.transparent,
-                                    Colors.black.withOpacity(0.65),
-                                    Colors.black.withOpacity(0.75),
+                                    Colors.black.withOpacity(0.4),
+                                    Colors.black.withOpacity(0.6),
                                   ],
                                 ),
                               ),
@@ -179,16 +179,17 @@ class _StoryCardState extends State<StoryCard> {
                                     overflow: TextOverflow.ellipsis,
                                   ),
                                   const SizedBox(height: 2),
-                                  Text(
-                                    widget.content,
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      color: Colors.white.withOpacity(0.9),
-                                      height: 1.5,
+                                  if (widget.content.isNotEmpty)
+                                    Text(
+                                      widget.content,
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        color: Colors.white.withOpacity(0.9),
+                                        height: 1.5,
+                                      ),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
                                     ),
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
                                 ],
                               ),
                             ),
@@ -210,16 +211,17 @@ class _StoryCardState extends State<StoryCard> {
                                   overflow: TextOverflow.ellipsis,
                                 ),
                                 const SizedBox(height: 2),
-                                Text(
-                                  widget.content,
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    color: AppColors.textPrimary,
-                                    height: 1.5,
+                                if (widget.content.isNotEmpty)
+                                  Text(
+                                    widget.content,
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      color: AppColors.textPrimary,
+                                      height: 1.5,
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
                               ],
                             ),
                           ),

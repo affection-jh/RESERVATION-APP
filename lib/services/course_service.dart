@@ -77,6 +77,30 @@ class CourseService {
     return course;
   }
 
+  /// 리버트 시 Firestore 로컬 캐시·펜딩 큐를 원래 코스로 덮어씁니다.
+  Future<void> overwriteCourseForRevert(String placeId, Course oldCourse) async {
+    final docRef = _firestore
+        .collection('places')
+        .doc(placeId)
+        .collection('courses')
+        .doc(oldCourse.id);
+    await FirestoreUtils.overwritePendingWrite(docRef, oldCourse.toJson());
+  }
+
+  /// 리버트 시 courseOverrides 문서를 원래 값으로 덮어쓰거나 삭제합니다.
+  /// [oldOverride] null이면 문서 삭제(생성 취소), 아니면 해당 값으로 덮어쓰기.
+  Future<void> overwriteOverrideForRevert(
+    String overrideId,
+    CourseOverride? oldOverride,
+  ) async {
+    final docRef = _firestore.collection('courseOverrides').doc(overrideId);
+    if (oldOverride == null) {
+      await FirestoreUtils.deletePendingWrite(docRef);
+    } else {
+      await FirestoreUtils.overwritePendingWrite(docRef, oldOverride.toJson());
+    }
+  }
+
   Future<void> updateCourseSchedule({
     required String placeId,
     required String courseId,
@@ -208,6 +232,7 @@ class CourseService {
           'capacity': capacity,
           'updatedAt': FirestoreUtils.dateTimeToTimestamp(DateTime.now()),
         });
+        await FirestoreUtils.waitForServerAck();
         return;
       }
     }
@@ -225,6 +250,7 @@ class CourseService {
       if (weekStartDate != null) 'weekStartDate': weekStartDate,
       'updatedAt': FirestoreUtils.dateTimeToTimestamp(DateTime.now()),
     }, SetOptions(merge: true));
+    await FirestoreUtils.waitForServerAck();
   }
 
   /// "YYYY-MM-DD" → 해당 주 월요일 "YYYY-MM-DD" (streamCourseOverrides 쿼리용)

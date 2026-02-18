@@ -64,6 +64,14 @@ class PlaceFirestoreService {
     return place;
   }
 
+  /// 리버트 시 Firestore 로컬 캐시·펜딩 큐를 원래 플레이스로 덮어씁니다.
+  Future<void> overwritePlaceForRevert(Place oldPlace) async {
+    final docRef = _firestore.collection('places').doc(oldPlace.id);
+    final data = Map<String, dynamic>.from(oldPlace.toJson());
+    data.remove('courses');
+    await FirestoreUtils.overwritePendingWrite(docRef, data);
+  }
+
   Future<void> deletePlace(String placeId) async {
     final callable = FirebaseFunctions.instance.httpsCallable('deletePlace');
     try {

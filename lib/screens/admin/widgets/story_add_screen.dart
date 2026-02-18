@@ -47,8 +47,8 @@ class _ImageData {
 class StoryAddScreen extends StatefulWidget {
   static const int maxImageCount = 6;
   final StoryData? existingStory;
-  final Function(StoryData) onSave;
-  final Function()? onDelete;
+  final Future<void> Function(StoryData) onSave;
+  final Future<void> Function()? onDelete;
 
   const StoryAddScreen({
     super.key,
@@ -73,6 +73,8 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
   // 각 이미지의 업로드 상태를 추적 (파일 경로 -> 업로드 중 여부)
   Map<String, bool> _uploadingStatus = {};
   bool _isSaving = false; // 게시 중 여부
+  bool _isDeleting = false; // 삭제 중 여부
+  bool _leaveRequested = false;
   // 업로드 중 뒤로갈 때 완료 후 삭제용
   final List<Future<String?>> _uploadFutures = [];
   // 업로드 중 사용자가 삭제한 파일 경로 → 완료 시 Storage에서 삭제하고 목록에 넣지 않음
@@ -382,6 +384,40 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
     setState(() {});
   }
 
+  void _cleanupAndPop() {
+    // 이미 업로드된 URL 중 초기값이 아닌 것 → Storage 삭제
+    final orphans =
+        _uploadedImageUrls
+            .where((url) => !_initialImageUrls.contains(url))
+            .toList();
+    if (orphans.isNotEmpty) {
+      firebase_storage.StorageService.deleteImagesInBackground(orphans);
+    }
+    // 업로드 중인 이미지: 완료 시 목록에 넣지 않고 Storage만 삭제
+    _deletedPathsWhileUploading.addAll(_uploadingStatus.keys);
+    final futures = List<Future<String?>>.from(_uploadFutures);
+    _uploadFutures.clear();
+    for (final f in futures) {
+      f.then((url) {
+        if (url != null && url.isNotEmpty) {
+          firebase_storage.StorageService.deleteImagesInBackground([url]);
+        }
+      });
+    }
+    Navigator.of(context).pop();
+  }
+
+  Future<void> _handleBackDuringSave() async {
+    if (!_isSaving) return;
+    final leave = await CommonDialog.showSavingLeaveConfirm(
+      context: context,
+      onLeave: () => _leaveRequested = true,
+    );
+    if (leave && mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
   void _handleSave() async {
     final title = _titleController.text.trim();
     final content = _contentController.text.trim();
@@ -395,6 +431,7 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
       _isSaving = true;
     });
 
+    if (_leaveRequested) return;
     // 모든 이미지 URL 리스트 (기존 업로드된 것 + 새로 업로드할 것)
     final List<String> allImageUrls = List<String>.from(_uploadedImageUrls);
 
@@ -457,6 +494,7 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
         final failedUploads =
             results.where((r) => r['success'] == false).toList();
 
+        if (_leaveRequested) return;
         if (failedUploads.isNotEmpty) {
           // 일부만 업로드된 경우 성공한 URL은 Storage에서 삭제 (고아 이미지 방지)
           final orphanUrls =
@@ -488,7 +526,9 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
                 .map((r) => r['url'] as String)
                 .toList();
         allImageUrls.addAll(uploadedUrls);
+        if (_leaveRequested) return;
       } catch (e) {
+        if (_leaveRequested) return;
         // 모든 이미지 파일 삭제 시도
         for (final file in _selectedImages) {
           try {
@@ -512,6 +552,7 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
     final String? finalBackgroundImageUrl =
         allImageUrls.isNotEmpty ? allImageUrls[0] : null;
 
+    if (_leaveRequested) return;
     final story = StoryData(
       title: title,
       content: content,
@@ -520,16 +561,15 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
       backgroundImageUrl: finalBackgroundImageUrl,
     );
 
-    widget.onSave(story);
-
-    // 스토리가 홈에 반영될 시간 + 로딩 2바퀴 정도 (약 1.5초)
-    await Future.delayed(const Duration(milliseconds: 1500));
-
-    if (mounted) {
-      setState(() {
-        _isSaving = false;
-      });
+    try {
+      await widget.onSave(story);
+      if (_leaveRequested || !mounted) return;
+      setState(() => _isSaving = false);
       Navigator.of(context).pop();
+    } catch (e) {
+      if (_leaveRequested || !mounted) return;
+      setState(() => _isSaving = false);
+      SnackbarUtil.showInfo(context, '저장에 실패했습니다. 다시 시도해 주세요.');
     }
   }
 
@@ -537,334 +577,383 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
   Widget build(BuildContext context) {
     return Theme(
       data: Theme.of(context).copyWith(),
-      child: Scaffold(
-        backgroundColor: AppColors.backgroundWhite,
-        appBar: AppBar(
-          scrolledUnderElevation: 0,
+      child: PopScope(
+        canPop: !_isSaving && !_isDeleting && !_hasChanges(),
+        onPopInvokedWithResult: (bool didPop, dynamic result) async {
+          if (didPop) return;
+          if (_isSaving || _isDeleting) {
+            await _handleBackDuringSave();
+          } else if (_hasChanges()) {
+            final confirmed = await CommonDialog.show(
+              context: context,
+              title: '변경사항이 있습니다',
+              message: '변경된 내용이 사라집니다.\n정말 나가시겠습니까?',
+              cancelText: '취소',
+              confirmText: '나가기',
+              confirmButtonColor: Colors.red,
+            );
+            if (confirmed == true && mounted) {
+              _cleanupAndPop();
+            }
+          } else if (mounted) {
+            Navigator.of(context).pop();
+          }
+        },
+        child: Scaffold(
           backgroundColor: AppColors.backgroundWhite,
-          elevation: 0,
-          leading: IconButton(
-            icon: Icon(Icons.arrow_back_ios, color: AppColors.textPrimary),
-            onPressed: () async {
-              if (_hasChanges()) {
-                final confirmed = await CommonDialog.show(
-                  context: context,
-                  title: '변경사항이 있습니다',
-                  message: '변경된 내용이 사라집니다.\n정말 나가시겠습니까?',
-                  cancelText: '취소',
-                  confirmText: '나가기',
-                  confirmButtonColor: Colors.red,
-                );
-                if (confirmed == true && mounted) {
-                  // 이미 업로드된 URL 중 초기값이 아닌 것 → Storage 삭제
-                  final orphans =
-                      _uploadedImageUrls
-                          .where((url) => !_initialImageUrls.contains(url))
-                          .toList();
-                  if (orphans.isNotEmpty) {
-                    firebase_storage.StorageService.deleteImagesInBackground(
-                      orphans,
-                    );
+          appBar: AppBar(
+            scrolledUnderElevation: 0,
+            backgroundColor: AppColors.backgroundWhite,
+            elevation: 0,
+            leading: IconButton(
+              icon: Icon(Icons.arrow_back_ios, color: AppColors.textPrimary),
+              onPressed: () async {
+                if (_isSaving || _isDeleting) {
+                  await _handleBackDuringSave();
+                  return;
+                }
+                if (_hasChanges()) {
+                  final confirmed = await CommonDialog.show(
+                    context: context,
+                    title: '변경사항이 있습니다',
+                    message: '변경된 내용이 사라집니다.\n정말 나가시겠습니까?',
+                    cancelText: '취소',
+                    confirmText: '나가기',
+                    confirmButtonColor: Colors.red,
+                  );
+                  if (confirmed == true && mounted) {
+                    _cleanupAndPop();
                   }
-                  // 업로드 중인 이미지: 완료 시 목록에 넣지 않고 Storage만 삭제
-                  _deletedPathsWhileUploading.addAll(_uploadingStatus.keys);
-                  final futures = List<Future<String?>>.from(_uploadFutures);
-                  _uploadFutures.clear();
-                  for (final f in futures) {
-                    f.then((url) {
-                      if (url != null && url.isNotEmpty) {
-                        firebase_storage
-                            .StorageService.deleteImagesInBackground([url]);
-                      }
-                    });
-                  }
+                } else if (mounted) {
                   Navigator.of(context).pop();
                 }
-              } else {
-                Navigator.of(context).pop();
-              }
-            },
-          ),
+              },
+            ),
 
-          centerTitle: false,
-          actions: [
-            // 수정 모드일 때 삭제 버튼
-            if (widget.existingStory != null && widget.onDelete != null)
+            centerTitle: false,
+            actions: [
+              // 수정 모드일 때 삭제 버튼
+              if (widget.existingStory != null && widget.onDelete != null)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: OutlinedButton(
+                    onPressed:
+                        (_isSaving || _isDeleting)
+                            ? null
+                            : () async {
+                              final confirmed = await CommonDialog.show(
+                                context: context,
+                                title: '스토리 삭제',
+                                message: '이 스토리를 삭제할까요?',
+                                cancelText: '취소',
+                                confirmText: '삭제',
+                                confirmButtonColor: Colors.red,
+                              );
+                              if (confirmed != true ||
+                                  !mounted ||
+                                  widget.onDelete == null)
+                                return;
+                              setState(() => _isDeleting = true);
+                              try {
+                                await widget.onDelete!();
+                                if (!mounted) return;
+                                await Future.delayed(
+                                  const Duration(milliseconds: 1500),
+                                );
+                                if (!mounted) return;
+                                setState(() => _isDeleting = false);
+                                Navigator.of(context).pop();
+                              } catch (e) {
+                                if (!mounted) return;
+                                setState(() => _isDeleting = false);
+                                SnackbarUtil.showInfo(
+                                  context,
+                                  '삭제에 실패했습니다. 다시 시도해 주세요.',
+                                );
+                              }
+                            },
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.red,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      side: BorderSide(
+                        color: Colors.red.withOpacity(0.3),
+                        width: 1.5,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (_isDeleting)
+                          SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.red,
+                              ),
+                            ),
+                          )
+                        else ...[
+                          SvgPicture.asset(
+                            'assets/icons/delete.svg',
+                            width: 20,
+                            height: 20,
+                            colorFilter: const ColorFilter.mode(
+                              Colors.red,
+                              BlendMode.srcIn,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          const Text(
+                            '삭제',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.red,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              // 저장/수정 버튼
               Padding(
                 padding: const EdgeInsets.only(right: 8),
-                child: OutlinedButton(
-                  onPressed: () async {
-                    final confirmed = await CommonDialog.show(
-                      context: context,
-                      title: '스토리 삭제',
-                      message: '이 스토리를 삭제할까요?',
-                      cancelText: '취소',
-                      confirmText: '삭제',
-                      confirmButtonColor: Colors.red,
-                    );
-                    if (confirmed == true && mounted) {
-                      widget.onDelete?.call();
-                      Navigator.of(context).pop();
-                    }
-                  },
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.red,
+                child: FilledButton(
+                  onPressed:
+                      (_canSave() && !_isSaving && !_isDeleting)
+                          ? _handleSave
+                          : null,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.primaryGreen,
+                    disabledBackgroundColor: AppColors.borderLight,
+                    disabledForegroundColor: AppColors.textSecondary,
+                    foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
+                      horizontal: 20,
                       vertical: 8,
-                    ),
-                    side: BorderSide(
-                      color: Colors.red.withOpacity(0.3),
-                      width: 1.5,
                     ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
+                    elevation: 0,
                   ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      SvgPicture.asset(
-                        'assets/icons/delete.svg',
-                        width: 20,
-                        height: 20,
-                        colorFilter: const ColorFilter.mode(
-                          Colors.red,
-                          BlendMode.srcIn,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      const Text(
-                        '삭제',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.red,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            // 저장/수정 버튼
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: FilledButton(
-                onPressed: (_canSave() && !_isSaving) ? _handleSave : null,
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppColors.primaryGreen,
-                  disabledBackgroundColor: AppColors.borderLight,
-                  disabledForegroundColor: AppColors.textSecondary,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 8,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  elevation: 0,
-                ),
-                child: SizedBox(
-                  width: 88,
-                  height: 24,
-                  child: Center(
-                    child:
-                        _isSaving
-                            ? SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation<Color>(
-                                  AppColors.primaryGreen,
-                                ),
-                              ),
-                            )
-                            : Text(
-                              widget.existingStory == null ? '게시하기' : '수정하기',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-        body: Stack(
-          children: [
-            SafeArea(
-              child: ListView(
-                children: [
-                  // 이미지 리스트 (상단) - AnimatedSize로 부드러운 전환
-                  AnimatedSize(
-                    duration: const Duration(milliseconds: 300),
-                    curve: Curves.easeInOut,
-                    child:
-                        (_uploadedImageUrls.isNotEmpty ||
-                                _selectedImages.isNotEmpty)
-                            ? Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Container(
-                                  height: 204, // 180 + padding
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 12,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: AppColors.backgroundWhite,
-                                  ),
-                                  child: ReorderableListView.builder(
-                                    scrollDirection: Axis.horizontal,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 16,
-                                    ),
-                                    onReorder: _reorderImages,
-                                    buildDefaultDragHandles: false,
-                                    proxyDecorator: (child, index, animation) {
-                                      return AnimatedBuilder(
-                                        animation: animation,
-                                        builder: (context, _) {
-                                          final t = Curves.easeOut.transform(
-                                            animation.value,
-                                          );
-                                          final scale = 1.0 + (0.1 * t);
-                                          return Transform.scale(
-                                            scale: scale,
-                                            child: Material(
-                                              color: Colors.transparent,
-                                              elevation: 8 * t,
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                              shadowColor: Colors.black
-                                                  .withOpacity(0.2),
-                                              child: child,
-                                            ),
-                                          );
-                                        },
-                                      );
-                                    },
-                                    itemCount:
-                                        _uploadedImageUrls.length +
-                                        _selectedImages.length,
-                                    itemBuilder: (contxt, index) {
-                                      final isUploaded =
-                                          index < _uploadedImageUrls.length;
-                                      return _buildImageItem(index, isUploaded);
-                                    },
+                  child: SizedBox(
+                    width: 88,
+                    height: 24,
+                    child: Center(
+                      child:
+                          _isSaving
+                              ? SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    AppColors.primaryGreen,
                                   ),
                                 ),
-                              ],
-                            )
-                            : const SizedBox.shrink(),
-                  ),
-                  // 텍스트 입력 부분
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 16,
+                              )
+                              : Text(
+                                widget.existingStory == null ? '게시하기' : '수정하기',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const SizedBox(height: 16),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          body: Stack(
+            children: [
+              SafeArea(
+                child: ListView(
+                  children: [
+                    // 이미지 리스트 (상단) - AnimatedSize로 부드러운 전환
+                    AnimatedSize(
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeInOut,
+                      child:
+                          (_uploadedImageUrls.isNotEmpty ||
+                                  _selectedImages.isNotEmpty)
+                              ? Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    height: 204, // 180 + padding
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 12,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.backgroundWhite,
+                                    ),
+                                    child: ReorderableListView.builder(
+                                      scrollDirection: Axis.horizontal,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 16,
+                                      ),
+                                      onReorder: _reorderImages,
+                                      buildDefaultDragHandles: false,
+                                      proxyDecorator: (
+                                        child,
+                                        index,
+                                        animation,
+                                      ) {
+                                        return AnimatedBuilder(
+                                          animation: animation,
+                                          builder: (context, _) {
+                                            final t = Curves.easeOut.transform(
+                                              animation.value,
+                                            );
+                                            final scale = 1.0 + (0.1 * t);
+                                            return Transform.scale(
+                                              scale: scale,
+                                              child: Material(
+                                                color: Colors.transparent,
+                                                elevation: 8 * t,
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
+                                                shadowColor: Colors.black
+                                                    .withOpacity(0.2),
+                                                child: child,
+                                              ),
+                                            );
+                                          },
+                                        );
+                                      },
+                                      itemCount:
+                                          _uploadedImageUrls.length +
+                                          _selectedImages.length,
+                                      itemBuilder: (contxt, index) {
+                                        final isUploaded =
+                                            index < _uploadedImageUrls.length;
+                                        return _buildImageItem(
+                                          index,
+                                          isUploaded,
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ],
+                              )
+                              : const SizedBox.shrink(),
+                    ),
+                    // 텍스트 입력 부분
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 16,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const SizedBox(height: 16),
 
-                        // 제목 입력
-                        TextField(
-                          controller: _titleController,
-                          focusNode: _titleFocusNode,
+                          // 제목 입력
+                          TextField(
+                            controller: _titleController,
+                            focusNode: _titleFocusNode,
 
-                          style: TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.textPrimary,
-                            height: 1.3,
-                          ),
-                          decoration: InputDecoration(
-                            hintText: '제목을 입력하세요',
-                            hintStyle: TextStyle(
-                              color: AppColors.textSecondary.withOpacity(0.4),
+                            style: TextStyle(
                               fontSize: 24,
                               fontWeight: FontWeight.w700,
+                              color: AppColors.textPrimary,
                               height: 1.3,
                             ),
-                            border: InputBorder.none,
-                            enabledBorder: InputBorder.none,
-                            focusedBorder: InputBorder.none,
-                            contentPadding: EdgeInsets.zero,
+                            decoration: InputDecoration(
+                              hintText: '제목을 입력하세요',
+                              hintStyle: TextStyle(
+                                color: AppColors.textSecondary.withOpacity(0.4),
+                                fontSize: 24,
+                                fontWeight: FontWeight.w700,
+                                height: 1.3,
+                              ),
+                              border: InputBorder.none,
+                              enabledBorder: InputBorder.none,
+                              focusedBorder: InputBorder.none,
+                              contentPadding: EdgeInsets.zero,
+                            ),
                           ),
-                        ),
 
-                        const SizedBox(height: 12),
+                          const SizedBox(height: 12),
 
-                        // 내용 입력
-                        TextField(
-                          controller: _contentController,
-                          focusNode: _contentFocusNode,
+                          // 내용 입력
+                          TextField(
+                            controller: _contentController,
+                            focusNode: _contentFocusNode,
 
-                          maxLines: null,
-                          minLines: 1,
-                          style: TextStyle(
-                            fontSize: 18,
-                            color: AppColors.textPrimary.withOpacity(0.9),
-                            height: 1.8,
-                            letterSpacing: 0.2,
-                          ),
-                          decoration: InputDecoration(
-                            hintText: '내용을 입력하세요...',
-                            hintStyle: TextStyle(
-                              color: AppColors.textSecondary.withOpacity(0.4),
+                            maxLines: null,
+                            minLines: 1,
+                            style: TextStyle(
                               fontSize: 18,
+                              color: AppColors.textPrimary.withOpacity(0.9),
                               height: 1.8,
                               letterSpacing: 0.2,
                             ),
-                            border: InputBorder.none,
-                            enabledBorder: InputBorder.none,
-                            focusedBorder: InputBorder.none,
-                            contentPadding: EdgeInsets.zero,
+                            decoration: InputDecoration(
+                              hintText: '내용을 입력하세요...',
+                              hintStyle: TextStyle(
+                                color: AppColors.textSecondary.withOpacity(0.4),
+                                fontSize: 18,
+                                height: 1.8,
+                                letterSpacing: 0.2,
+                              ),
+                              border: InputBorder.none,
+                              enabledBorder: InputBorder.none,
+                              focusedBorder: InputBorder.none,
+                              contentPadding: EdgeInsets.zero,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 40),
-                      ],
+                          const SizedBox(height: 40),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Positioned(
+                bottom: 24 + MediaQuery.of(context).padding.bottom,
+                right: 24,
+                child: FloatingActionButton(
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(50),
+                  ),
+                  onPressed: () {
+                    if ((_uploadedImageUrls.length + _selectedImages.length) >=
+                        StoryAddScreen.maxImageCount) {
+                      SnackbarUtil.showInfo(
+                        context,
+                        '이미지는 최대 ${StoryAddScreen.maxImageCount}개까지 추가할 수 있습니다.',
+                      );
+                      return;
+                    }
+                    _pickImage();
+                  },
+                  backgroundColor: AppColors.primaryGreen,
+                  child: SvgPicture.asset(
+                    'assets/icons/gallery-icon.svg',
+                    width: 34,
+                    height: 34,
+                    colorFilter: const ColorFilter.mode(
+                      Colors.white,
+                      BlendMode.srcIn,
                     ),
                   ),
-                ],
-              ),
-            ),
-            Positioned(
-              bottom: 24 + MediaQuery.of(context).padding.bottom,
-              right: 24,
-              child: FloatingActionButton(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(50),
-                ),
-                onPressed: () {
-                  if ((_uploadedImageUrls.length + _selectedImages.length) >=
-                      StoryAddScreen.maxImageCount) {
-                    SnackbarUtil.showInfo(
-                      context,
-                      '이미지는 최대 ${StoryAddScreen.maxImageCount}개까지 추가할 수 있습니다.',
-                    );
-                    return;
-                  }
-                  _pickImage();
-                },
-                backgroundColor: AppColors.primaryGreen,
-                child: SvgPicture.asset(
-                  'assets/icons/gallery-icon.svg',
-                  width: 34,
-                  height: 34,
-                  colorFilter: const ColorFilter.mode(
-                    Colors.white,
-                    BlendMode.srcIn,
-                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

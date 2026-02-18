@@ -6,6 +6,7 @@ import '../../../providers/place_provider.dart';
 import '../../../services/user_service.dart';
 import '../../../utils/navigator_key.dart';
 import '../../../utils/snackbar_util.dart';
+import '../../../utils/firestore_utils.dart';
 import '../../../models/place.dart';
 import '../../../utils/text_field_decoration_util.dart';
 import '../../../widgets/common_dialog.dart';
@@ -72,6 +73,16 @@ class _PlaceDeleteConfirmScreenState extends State<PlaceDeleteConfirmScreen> {
     FocusScope.of(context).unfocus();
 
     try {
+      if (!await FirestoreUtils.canReachFirestoreForSave(
+        probeCollection: 'places',
+        probeDocId: widget.place.id,
+      )) {
+        if (mounted) {
+          setState(() => _isLoading = false);
+          SnackbarUtil.showInfo(context, '네트워크 연결을 확인해주세요. ');
+        }
+        return;
+      }
       final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
       final userService = UserService();
@@ -112,7 +123,11 @@ class _PlaceDeleteConfirmScreenState extends State<PlaceDeleteConfirmScreen> {
         setState(() {
           _isLoading = false;
         });
-        SnackbarUtil.showInfoFromError(context, e, fallback: '플레이스 삭제에 실패했습니다. 잠시 후 다시 시도해주세요.');
+        SnackbarUtil.showInfoFromError(
+          context,
+          e,
+          fallback: '플레이스 삭제에 실패했습니다. 잠시 후 다시 시도해주세요.',
+        );
       }
     }
   }

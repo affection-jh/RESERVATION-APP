@@ -16,6 +16,7 @@ import '../../../widgets/course_color_picker_bottom_sheet.dart';
 import '../../../widgets/common_dialog.dart';
 import '../../../providers/course_provider.dart';
 import '../../../providers/place_provider.dart';
+import '../../../utils/firestore_utils.dart';
 import 'course_schedule_edit_screen.dart';
 
 /// 코스 정보 수정 화면 (한 페이지)
@@ -42,6 +43,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
   final ImagePicker _imagePicker = ImagePicker();
   bool _isSaving = false; // 저장 중 여부
   bool _isDeleting = false; // 삭제 중 여부
+  bool _leaveRequested = false;
 
   // 에러 메시지
   String? _nameErrorText;
@@ -220,7 +222,23 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
     return false;
   }
 
+  Future<void> _handleBackDuringSaveOrDelete() async {
+    if (!_isSaving && !_isDeleting) return;
+    final leave = await CommonDialog.showSavingLeaveConfirm(
+      context: context,
+      title: _isDeleting ? '삭제 중입니다' : '저장 중입니다',
+      onLeave: () => _leaveRequested = true,
+    );
+    if (leave && mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
   Future<void> _handleBack() async {
+    if (_isSaving || _isDeleting) {
+      await _handleBackDuringSaveOrDelete();
+      return;
+    }
     if (!_hasChanges()) {
       Navigator.of(context).pop();
       return;
@@ -359,6 +377,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
     });
 
     try {
+      if (_leaveRequested) return;
       final courseProvider = Provider.of<CourseProvider>(
         context,
         listen: false,
@@ -370,6 +389,15 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
       if (currentPlace == null) {
         if (mounted) {
           SnackbarUtil.showInfo(context, '플레이스 정보를 찾을 수 없습니다.');
+        }
+        return;
+      }
+      if (!await FirestoreUtils.canReachFirestoreForSave(
+        probeCollection: 'places',
+        probeDocId: widget.course.placeId,
+      )) {
+        if (mounted) {
+          SnackbarUtil.showInfo(context, '네트워크 연결을 확인해 주세요.');
         }
         return;
       }
@@ -399,16 +427,17 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
         updatedAt: DateTime.now(),
       );
 
-      // CourseProvider의 updateCourse 사용
       await courseProvider.updateCourse(updatedCourse);
+      if (_leaveRequested) return;
 
       if (mounted) {
         SnackbarUtil.showSuccess(context, '코스 정보가 저장되었습니다.');
         Navigator.of(context).pop(true); // true를 반환하여 상위 화면에서 새로고침 가능하도록
       }
     } catch (e) {
+      if (_leaveRequested) return;
       if (mounted) {
-        SnackbarUtil.showInfo(context, '저장에 실패했습니다: ${e.toString()}');
+        SnackbarUtil.showInfoFromError(context, e, fallback: '저장에 실패했습니다.');
       }
     } finally {
       if (mounted) {
@@ -453,6 +482,17 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
     SnackbarUtil.showLoading(ctx, '코스 삭제중');
 
     try {
+      if (_leaveRequested) return;
+      if (!await FirestoreUtils.canReachFirestoreForSave(
+        probeCollection: 'places',
+        probeDocId: widget.course.placeId,
+      )) {
+        if (mounted) {
+          setState(() => _isDeleting = false);
+          SnackbarUtil.showInfo(context, '네트워크 연결을 확인해 주세요.');
+        }
+        return;
+      }
       final courseProvider = Provider.of<CourseProvider>(
         context,
         listen: false,
@@ -483,12 +523,14 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
             if (mounted) setState(() => _isDeleting = false);
             return;
           }
+          if (_leaveRequested) return;
 
           await courseProvider.deleteCourse(widget.course.id, cascade: true);
         } else {
           rethrow;
         }
       }
+      if (_leaveRequested) return;
 
       // 삭제 완료 - navigatorKey 사용 (사용자가 뒤로가기로 나갔어도 동작)
       // 상세 화면 제거로 코스 탭 시 바로 편집 화면으로 가므로 1번만 pop
@@ -504,9 +546,14 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
         });
       }
     } catch (e) {
+      if (_leaveRequested) return;
       final navCtx = navigatorKey.currentContext;
       if (navCtx != null) {
-        SnackbarUtil.showInfo(navCtx, '코스 삭제 중 문제가 발생했어요.\n잠시 후 다시 시도해주세요.');
+        SnackbarUtil.showInfoFromError(
+          navCtx,
+          e,
+          fallback: '코스 삭제 중 문제가 발생했어요.\n잠시 후 다시 시도해주세요.',
+        );
       }
     } finally {
       if (mounted) {
@@ -520,10 +567,14 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: !_hasChanges(),
-      onPopInvokedWithResult: (bool didPop, dynamic result) {
+      canPop: !_hasChanges() && !_isSaving && !_isDeleting,
+      onPopInvokedWithResult: (bool didPop, dynamic result) async {
         if (didPop) return;
-        _handleBack();
+        if (_isSaving || _isDeleting) {
+          await _handleBackDuringSaveOrDelete();
+        } else {
+          _handleBack();
+        }
       },
       child: Scaffold(
         backgroundColor: AppColors.backgroundWhite,
@@ -556,7 +607,10 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                                   size: 24,
                                   color: AppColors.primaryGreen,
                                 ),
-                                onPressed: _handleBack,
+                                onPressed:
+                                    (_isSaving || _isDeleting)
+                                        ? _handleBackDuringSaveOrDelete
+                                        : _handleBack,
                                 color: AppColors.textPrimary,
                               ),
 
@@ -744,7 +798,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                                 height: 20,
                                 child: CircularProgressIndicator(
                                   strokeWidth: 2,
-                                  color: Colors.white,
+                                  color: AppColors.primaryGreen,
                                 ),
                               )
                               : Text(

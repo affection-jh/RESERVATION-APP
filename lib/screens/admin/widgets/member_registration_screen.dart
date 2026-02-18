@@ -8,6 +8,7 @@ import '../../../services/firestore_service.dart';
 import '../../../theme/app_colors.dart';
 import '../../../utils/text_field_decoration_util.dart';
 import '../../../utils/snackbar_util.dart';
+import '../../../widgets/common_dialog.dart';
 import '../../../utils/timezone_utils.dart';
 import '../../../widgets/valid_period_input_widget.dart';
 import '../../../widgets/reservations_input_widget.dart';
@@ -104,6 +105,7 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
   String? _courseErrorText;
   bool _isCheckingPhone = false;
   bool _isSaving = false; // 저장 중 상태
+  bool _leaveRequested = false;
 
   @override
   void initState() {
@@ -440,6 +442,17 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
     }
   }
 
+  Future<void> _handleBackDuringSave() async {
+    if (!_isSaving) return;
+    final leave = await CommonDialog.showSavingLeaveConfirm(
+      context: context,
+      onLeave: () => _leaveRequested = true,
+    );
+    if (leave && mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
   Future<void> _handleSave() async {
     if (_memberList.isEmpty || _isSaving) return;
 
@@ -448,12 +461,23 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
     });
 
     try {
+      if (_leaveRequested) return;
       await widget.onSave(_memberList);
-      if (!mounted) return;
+      if (_leaveRequested || !mounted) return;
       // 구독에서 새 멤버가 실제로 감지될 때까지 로딩 유지
       await _waitUntilMembersVisibleInList();
+      if (_leaveRequested) return;
       if (mounted) {
         Navigator.of(context).pop();
+      }
+    } catch (e) {
+      if (_leaveRequested) return;
+      if (mounted) {
+        SnackbarUtil.showInfoFromError(
+          context,
+          e,
+          fallback: '저장 중 오류가 발생했습니다.',
+        );
       }
     } finally {
       if (mounted) {
@@ -466,8 +490,23 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final _needsListSwitch =
+        (widget.isEditMode || _mode == MemberRegistrationMode.input) &&
+        _memberList.isNotEmpty;
     return PopScope(
-      canPop: true,
+      canPop: !_isSaving && !_needsListSwitch,
+      onPopInvokedWithResult: (bool didPop, dynamic result) async {
+        if (didPop) return;
+        if (_isSaving) {
+          await _handleBackDuringSave();
+        } else if (_needsListSwitch) {
+          setState(() {
+            _mode = MemberRegistrationMode.list;
+          });
+        } else {
+          if (mounted) Navigator.of(context).pop();
+        }
+      },
       child: Scaffold(
         backgroundColor: AppColors.backgroundWhite,
 
@@ -477,7 +516,11 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
           elevation: 0,
           leading: IconButton(
             icon: Icon(Icons.arrow_back_ios, color: AppColors.textPrimary),
-            onPressed: () {
+            onPressed: () async {
+              if (_isSaving) {
+                await _handleBackDuringSave();
+                return;
+              }
               // 입력 모드일 때: 리스트에 멤버가 있으면 리스트로 전환, 없으면 나가기
               if (widget.isEditMode || _mode == MemberRegistrationMode.input) {
                 if (_memberList.isNotEmpty) {
@@ -489,7 +532,6 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
                 if (context.mounted) Navigator.of(context).pop();
                 return;
               }
-              // 리스트 모드일 때도 다이얼로그 없이 그냥 나가기
               if (context.mounted) Navigator.of(context).pop();
             },
           ),

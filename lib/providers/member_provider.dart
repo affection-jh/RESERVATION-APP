@@ -38,7 +38,8 @@ class MemberProvider with ChangeNotifier {
   String? _error;
   final Set<String> _deletingMemberIds = {};
 
-  StreamSubscription<(List<PlaceMember>, DocumentSnapshot?)>? _placeMembersSegmentSub;
+  StreamSubscription<(List<PlaceMember>, DocumentSnapshot?)>?
+  _placeMembersSegmentSub;
   StreamSubscription<List<PendingMember>>? _pendingSub;
   StreamSubscription<List<CourseEnrollment>>? _enrollmentsSub;
   Set<String> _lastEnrollmentUserIds = {};
@@ -89,7 +90,8 @@ class MemberProvider with ChangeNotifier {
   }
 
   List<MemberView> _pendingToViews() {
-    return _pendingMembers.map((p) {
+    final list = _pendingMembers;
+    return list.map((p) {
       final pendingName = (p.adminDisplayName ?? '').trim();
       return MemberView(
         userId: 'pending_${p.id}',
@@ -109,14 +111,11 @@ class MemberProvider with ChangeNotifier {
     for (final e in _enrollments) {
       byUser.putIfAbsent(e.userId, () => []).add(e.courseId);
     }
-    final placeViews = _placeMembersToViews(
-      [
-        ..._cachedPlaceMembersBefore,
-        ..._streamedPlaceMembers,
-        ..._loadedPlaceMembersAfter,
-      ],
-      byUser,
-    );
+    final placeViews = _placeMembersToViews([
+      ..._cachedPlaceMembersBefore,
+      ..._streamedPlaceMembers,
+      ..._loadedPlaceMembersAfter,
+    ], byUser);
     final pendingViews = _pendingToViews();
     final combined = [...placeViews, ...pendingViews];
     return combined
@@ -188,21 +187,29 @@ class MemberProvider with ChangeNotifier {
     if (_selectedCourseIds.length == 1) {
       final courseId = _selectedCourseIds.first;
       var list = getMembersForCourse(courseId);
-      final pending = allMembers
-          .where((v) =>
-              v.isPending && v.manageableCourseIds.contains(courseId))
-          .toList();
+      final pending =
+          allMembers
+              .where(
+                (v) => v.isPending && v.manageableCourseIds.contains(courseId),
+              )
+              .toList();
       list = [...list, ...pending];
       list = _filteredBySearch(list);
       list = _sortCourseMembers(list);
       return list;
     }
-    final filtered = allMembers.where((v) {
-      final hasCourse = v.isPending
-          ? v.manageableCourseIds.any((id) => _selectedCourseIds.contains(id))
-          : v.enrolledCourseIds.any((id) => _selectedCourseIds.contains(id));
-      return hasCourse;
-    }).toList();
+    final filtered =
+        allMembers.where((v) {
+          final hasCourse =
+              v.isPending
+                  ? v.manageableCourseIds.any(
+                    (id) => _selectedCourseIds.contains(id),
+                  )
+                  : v.enrolledCourseIds.any(
+                    (id) => _selectedCourseIds.contains(id),
+                  );
+          return hasCourse;
+        }).toList();
     var list = _filteredBySearch(filtered);
     // 다중 코스 선택 시 코스별 enrollment 없음 → 이름 순 정렬
     list.sort((a, b) => a.adminDisplayName.compareTo(b.adminDisplayName));
@@ -225,27 +232,33 @@ class MemberProvider with ChangeNotifier {
     const pendingLabel = '가입 대기중';
     final lower = q.toLowerCase();
     final digitsOnly = q.replaceAll(RegExp(r'[^\d]'), '');
-    final keywords = lower.split(RegExp(r'\s+')).where((s) => s.isNotEmpty).toList();
+    final keywords =
+        lower.split(RegExp(r'\s+')).where((s) => s.isNotEmpty).toList();
     return views.where((v) {
       final name = (v.adminDisplayName).trim().toLowerCase();
       final phone = v.phoneNumber.replaceAll(RegExp(r'[^\d]'), '');
       // N회 패턴은 전화번호 매칭 제외 (예: "5회"의 "5"가 010-5555-xxx 매칭 방지)
-      final excludePhoneForFull =
-          _selectedTab == 1 && _isCountKeyword(lower);
+      final excludePhoneForFull = _selectedTab == 1 && _isCountKeyword(lower);
       final nameMatch = name.contains(lower);
-      final phoneMatch = !excludePhoneForFull &&
+      final phoneMatch =
+          !excludePhoneForFull &&
           digitsOnly.isNotEmpty &&
           phone.contains(digitsOnly);
       // '대기중' / '가입 대기중' 키워드: '대', '대기', '가입', '가입 대기중' 등 매칭
-      final pendingMatch = v.isPending &&
+      final pendingMatch =
+          v.isPending &&
           ('대기중'.contains(lower) ||
               lower.contains('대기중') ||
               pendingLabel.contains(lower) ||
               lower.contains(pendingLabel));
       // 과목 키워드: 등록/관리 코스명에 포함되면 매칭
       bool courseMatch = false;
-      if (_courseIdToNameForSearch != null && _courseIdToNameForSearch!.isNotEmpty) {
-        final memberCourseIds = {...v.enrolledCourseIds, ...v.manageableCourseIds};
+      if (_courseIdToNameForSearch != null &&
+          _courseIdToNameForSearch!.isNotEmpty) {
+        final memberCourseIds = {
+          ...v.enrolledCourseIds,
+          ...v.manageableCourseIds,
+        };
         for (final cid in memberCourseIds) {
           final cname = _courseIdToNameForSearch![cid];
           if (cname != null && cname.toLowerCase().contains(lower)) {
@@ -255,7 +268,8 @@ class MemberProvider with ChangeNotifier {
         }
       }
       // N회(남은 횟수) 매칭: 코스별 탭에서만 "3회", "2", "10회" 등
-      final countMatch = _selectedTab == 1 &&
+      final countMatch =
+          _selectedTab == 1 &&
           _matchRemainingCount(lower, v.userId, _selectedCourseIds);
       final matchFull =
           nameMatch || phoneMatch || pendingMatch || courseMatch || countMatch;
@@ -264,15 +278,21 @@ class MemberProvider with ChangeNotifier {
         final isCountKw = _selectedTab == 1 && _isCountKeyword(kw);
         final kwDigits = kw.replaceAll(RegExp(r'[^\d]'), '');
         final kn = !isCountKw && name.contains(kw);
-        final kp = !isCountKw && kwDigits.isNotEmpty && phone.contains(kwDigits);
-        final kPending = v.isPending &&
+        final kp =
+            !isCountKw && kwDigits.isNotEmpty && phone.contains(kwDigits);
+        final kPending =
+            v.isPending &&
             ('대기중'.contains(kw) ||
                 kw.contains('대기중') ||
                 pendingLabel.contains(kw) ||
                 kw.contains(pendingLabel));
         bool kCourse = false;
-        if (_courseIdToNameForSearch != null && _courseIdToNameForSearch!.isNotEmpty) {
-          final memberCourseIds = {...v.enrolledCourseIds, ...v.manageableCourseIds};
+        if (_courseIdToNameForSearch != null &&
+            _courseIdToNameForSearch!.isNotEmpty) {
+          final memberCourseIds = {
+            ...v.enrolledCourseIds,
+            ...v.manageableCourseIds,
+          };
           for (final cid in memberCourseIds) {
             final cname = _courseIdToNameForSearch![cid];
             if (cname != null && cname.toLowerCase().contains(kw)) {
@@ -282,7 +302,8 @@ class MemberProvider with ChangeNotifier {
           }
         }
         final kCount =
-            _selectedTab == 1 && _matchRemainingCount(kw, v.userId, _selectedCourseIds);
+            _selectedTab == 1 &&
+            _matchRemainingCount(kw, v.userId, _selectedCourseIds);
         return kn || kp || kPending || kCourse || kCount;
       });
       return matchFull || matchKeywords;
@@ -325,13 +346,21 @@ class MemberProvider with ChangeNotifier {
       if (aEnrollments.isEmpty) return 1;
       if (bEnrollments.isEmpty) return -1;
       if (_sortBy == 1) {
-        final aMin = aEnrollments.map((e) => e.validUntil).reduce((a, b) => a.isBefore(b) ? a : b);
-        final bMin = bEnrollments.map((e) => e.validUntil).reduce((a, b) => a.isBefore(b) ? a : b);
+        final aMin = aEnrollments
+            .map((e) => e.validUntil)
+            .reduce((a, b) => a.isBefore(b) ? a : b);
+        final bMin = bEnrollments
+            .map((e) => e.validUntil)
+            .reduce((a, b) => a.isBefore(b) ? a : b);
         return aMin.compareTo(bMin);
       }
       // _sortBy == 2: 남은횟수순
-      final aMin = aEnrollments.map((e) => e.remainingReservations).reduce((a, b) => a < b ? a : b);
-      final bMin = bEnrollments.map((e) => e.remainingReservations).reduce((a, b) => a < b ? a : b);
+      final aMin = aEnrollments
+          .map((e) => e.remainingReservations)
+          .reduce((a, b) => a < b ? a : b);
+      final bMin = bEnrollments
+          .map((e) => e.remainingReservations)
+          .reduce((a, b) => a < b ? a : b);
       return aMin.compareTo(bMin);
     });
     return list;
@@ -398,7 +427,8 @@ class MemberProvider with ChangeNotifier {
 
   /// 코스별 탭: 단일 코스만 선택하고 SharedPreferences에 저장
   void selectSingleCourseForCourseTab(String courseId, {bool save = true}) {
-    if (_selectedCourseIds.length == 1 && _selectedCourseIds.contains(courseId)) {
+    if (_selectedCourseIds.length == 1 &&
+        _selectedCourseIds.contains(courseId)) {
       return;
     }
     _selectedCourseIds.clear();
@@ -516,10 +546,14 @@ class MemberProvider with ChangeNotifier {
     if (newSegmentIndex < _currentSegmentIndex) {
       final needLen = (newSegmentIndex + 1) * _segmentSize;
       if (_cachedPlaceMembersBefore.length >= needLen) {
-        _streamedPlaceMembers = _cachedPlaceMembersBefore
-            .sublist(newSegmentIndex * _segmentSize, needLen);
-        _cachedPlaceMembersBefore = _cachedPlaceMembersBefore
-            .sublist(0, newSegmentIndex * _segmentSize);
+        _streamedPlaceMembers = _cachedPlaceMembersBefore.sublist(
+          newSegmentIndex * _segmentSize,
+          needLen,
+        );
+        _cachedPlaceMembersBefore = _cachedPlaceMembersBefore.sublist(
+          0,
+          newSegmentIndex * _segmentSize,
+        );
         _streamedSegmentLastDoc = _segmentBoundaryDocs[newSegmentIndex];
       } else {
         _streamedPlaceMembers = [];
@@ -534,10 +568,13 @@ class MemberProvider with ChangeNotifier {
         _segmentBoundaryDocs[_currentSegmentIndex] = _streamedSegmentLastDoc!;
       }
       if (_loadedPlaceMembersAfter.length >= _segmentSize) {
-        _streamedPlaceMembers =
-            _loadedPlaceMembersAfter.sublist(0, _segmentSize);
-        _loadedPlaceMembersAfter =
-            _loadedPlaceMembersAfter.sublist(_segmentSize);
+        _streamedPlaceMembers = _loadedPlaceMembersAfter.sublist(
+          0,
+          _segmentSize,
+        );
+        _loadedPlaceMembersAfter = _loadedPlaceMembersAfter.sublist(
+          _segmentSize,
+        );
       } else {
         _streamedPlaceMembers = [];
       }
@@ -545,9 +582,8 @@ class MemberProvider with ChangeNotifier {
     }
 
     _currentSegmentIndex = newSegmentIndex;
-    final startAfter = newSegmentIndex > 0
-        ? _segmentBoundaryDocs[newSegmentIndex - 1]
-        : null;
+    final startAfter =
+        newSegmentIndex > 0 ? _segmentBoundaryDocs[newSegmentIndex - 1] : null;
 
     _placeMembersSegmentSub = _service
         .watchPlaceMembersSegment(placeId, startAfter: startAfter)
@@ -625,15 +661,17 @@ class MemberProvider with ChangeNotifier {
             notifyListeners();
           },
         );
-    _pendingSub = _service.watchPendingMembersByPlace(placeId).listen(
-      (list) {
-        _pendingMembers = list;
-        notifyListeners();
-      },
-      onError: (e) {
-        debugPrint('[MemberProvider] pending stream error: $e');
-      },
-    );
+    _pendingSub = _service
+        .watchPendingMembersByPlace(placeId)
+        .listen(
+          (list) {
+            _pendingMembers = list;
+            notifyListeners();
+          },
+          onError: (e) {
+            debugPrint('[MemberProvider] pending stream error: $e');
+          },
+        );
   }
 
   void setSelectedCourseId(String? courseId) {
@@ -658,7 +696,8 @@ class MemberProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  bool isDeletingMember(String memberId) => _deletingMemberIds.contains(memberId);
+  bool isDeletingMember(String memberId) =>
+      _deletingMemberIds.contains(memberId);
 
   /// 플레이스에서 멤버 제거 (Cloud Function 호출)
   Future<void> removeMemberFromPlace({
@@ -670,7 +709,9 @@ class MemberProvider with ChangeNotifier {
     startDeletingMember(userId);
     try {
       final normalizedPhone = phoneNumber.replaceAll(RegExp(r'[^\d]'), '');
-      final callable = FirebaseFunctions.instance.httpsCallable('removeMemberFromPlace');
+      final callable = FirebaseFunctions.instance.httpsCallable(
+        'removeMemberFromPlace',
+      );
       await callable.call({
         'placeId': placeId,
         'userId': userId,
@@ -696,9 +737,11 @@ class MemberProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      final startAfter = _loadedPlaceMembersAfter.isEmpty
-          ? _streamedSegmentLastDoc ?? _segmentBoundaryDocs[_currentSegmentIndex]
-          : _lastLoadedAfterDoc;
+      final startAfter =
+          _loadedPlaceMembersAfter.isEmpty
+              ? _streamedSegmentLastDoc ??
+                  _segmentBoundaryDocs[_currentSegmentIndex]
+              : _lastLoadedAfterDoc;
       final (list, lastDoc) = await _service.getPlaceMembersPage(
         placeId,
         startAfter: startAfter,

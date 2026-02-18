@@ -351,6 +351,18 @@ class EnrollmentService {
     return enrollment;
   }
 
+  /// 리버트 시 Firestore 로컬 캐시·펜딩 큐를 원래 enrollment로 덮어씁니다.
+  /// (큐에서 실패한 쓰기를 "제거"하는 API는 없으므로, 같은 문서에 이전 값으로 다시 씀)
+  Future<void> overwriteEnrollmentForRevert(CourseEnrollment oldEnrollment) async {
+    final docRef = _firestore.collection('enrollments').doc(oldEnrollment.id);
+    final validUntil = TimezoneUtils.getSeoulEndOfDay(oldEnrollment.validUntil);
+    final json = Map<String, dynamic>.from(oldEnrollment.toJson());
+    json['enrolledAt'] = _dateTimeToTimestamp(oldEnrollment.enrolledAt);
+    json['validFrom'] = _dateTimeToTimestamp(oldEnrollment.validFrom);
+    json['validUntil'] = _dateTimeToTimestamp(validUntil);
+    await FirestoreUtils.overwritePendingWrite(docRef, json);
+  }
+
   /// 재등록: enrollment 업데이트 + actionHistory에 액션 1건 추가
   Future<void> reenrollWithHistory({
     required CourseEnrollment updatedEnrollment,

@@ -61,48 +61,44 @@ class _ReservationSummaryCardState extends State<ReservationSummaryCard> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // 섹션 타이틀 행: 내 수강 (탭 시 예약 탭으로 이동)
-        InkWell(
-          onTap: widget.onTap,
-          borderRadius: BorderRadius.circular(8),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-            child: Row(
-              children: [
-                Text(
-                  '내 코스',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
-                  ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+          child: Row(
+            children: [
+              Text(
+                '내 코스',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
                 ),
-                const Spacer(),
-                if (widget.isLoggedIn && widget.enrollments.isNotEmpty)
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: List.generate(
-                      widget.enrollments.length,
-                      (index) => Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 3),
-                        child: Container(
-                          width: 10,
-                          height: 10,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color:
-                                index == _currentPage
-                                    ? AppColors.primaryGreen
-                                    : AppColors.primaryGreen.withOpacity(0.3),
-                          ),
+              ),
+              const Spacer(),
+              if (widget.isLoggedIn && widget.enrollments.isNotEmpty)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: List.generate(
+                    widget.enrollments.length,
+                    (index) => Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 3),
+                      child: Container(
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color:
+                              index == _currentPage
+                                  ? AppColors.primaryGreen
+                                  : AppColors.primaryGreen.withOpacity(0.3),
                         ),
                       ),
                     ),
                   ),
-              ],
-            ),
+                ),
+            ],
           ),
         ),
+
         const SizedBox(height: 12),
         // 카드 영역: 왼쪽 패딩 최소, 카드 간 간격은 item padding으로
         _buildCardContent(context),

@@ -6,7 +6,6 @@ class Place {
   final String name;
   final String adminId; // 어드민 사용자 ID
   final String? description;
-  final String? appBarText; // 앱바에 표시될 텍스트
   final String? greetingText; // 홈 화면 인사말
   final bool hideGreeting; // true면 홈 화면에 환영 메시지 미표시
   final String? imageUrl; // 플레이스 이미지 URL
@@ -17,7 +16,6 @@ class Place {
     required this.name,
     required this.adminId,
     this.description,
-    this.appBarText,
     this.greetingText,
     this.hideGreeting = false,
     this.imageUrl,
@@ -52,7 +50,6 @@ class Place {
       'name': name,
       'adminId': adminId,
       if (description != null) 'description': description,
-      if (appBarText != null) 'appBarText': appBarText,
       if (greetingText != null) 'greetingText': greetingText,
       'hideGreeting': hideGreeting,
       if (imageUrl != null) 'imageUrl': imageUrl,
@@ -98,7 +95,6 @@ class Place {
       name: json['name'] as String,
       adminId: json['adminId'] as String,
       description: json['description'] as String?,
-      appBarText: json['appBarText'] as String?,
       greetingText: json['greetingText'] as String?,
       hideGreeting: json['hideGreeting'] as bool? ?? false,
       imageUrl: json['imageUrl'] as String?,
@@ -123,7 +119,6 @@ class Place {
       name: name ?? this.name,
       adminId: adminId ?? this.adminId,
       description: description ?? this.description,
-      appBarText: appBarText ?? this.appBarText,
       greetingText: greetingText ?? this.greetingText,
       hideGreeting: hideGreeting ?? this.hideGreeting,
       imageUrl: imageUrl ?? this.imageUrl,

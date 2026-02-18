@@ -19,9 +19,11 @@ import '../../../utils/snackbar_util.dart';
 import '../../../utils/navigator_key.dart';
 import '../../../utils/timezone_utils.dart';
 import '../../../utils/format_utils.dart';
+import '../../../utils/firestore_utils.dart';
 import '../../../widgets/session_manage_bottom_sheet.dart';
 import '../../../providers/course_provider.dart';
 import '../../../providers/reservation_summary_provider.dart';
+import 'enrollment_detail_screen.dart';
 import 'dart:async';
 
 /// 세션 상세보기 화면
@@ -58,6 +60,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
   bool _isBulkCancelling = false; // 일괄 취소 진행 중
   /// 비정기/정기 세션 삭제·취소 진행 중 — 이때 뒤로가기 막아 이중 pop 방지
   bool _isDeletingSession = false;
+  bool _leaveRequested = false;
 
   @override
   void initState() {
@@ -156,6 +159,10 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
 
     return PopScope(
       canPop: !_isDeletingSession,
+      onPopInvokedWithResult: (bool didPop, dynamic result) async {
+        if (didPop) return;
+        if (_isDeletingSession) await _handleBackDuringDelete();
+      },
       child: Scaffold(
         key: _scaffoldKey,
         backgroundColor: AppColors.backgroundWhite,
@@ -525,7 +532,13 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
       elevation: 0,
       leading: IconButton(
         icon: const Icon(Icons.arrow_back_ios, color: AppColors.primaryGreen),
-        onPressed: () => Navigator.of(context).pop(),
+        onPressed: () async {
+          if (_isDeletingSession) {
+            await _handleBackDuringDelete();
+          } else {
+            Navigator.of(context).pop();
+          }
+        },
       ),
       title: Text(
         widget.course.name,
@@ -705,7 +718,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     final isCancelling = _cancellingReservationIds.contains(reservation.id);
 
     return InkWell(
-      onTap: null, // 개별 멤버 탭 시 바텀시트 비활성화 (체크박스로 일괄 선택만)
+      onTap: () => _openEnrollmentDetailFor(reservation),
       child: Container(
         decoration: BoxDecoration(
           color: AppColors.backgroundLight,
@@ -847,6 +860,35 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     );
   }
 
+  /// 멤버 카드 탭 시 해당 멤버의 이 코스 등록(enrollment) 상세 화면으로 이동
+  void _openEnrollmentDetailFor(SessionReservation reservation) {
+    final memberProvider = Provider.of<MemberProvider>(context, listen: false);
+    final membersWithEnrollment = memberProvider.getMembersForCourse(
+      widget.course.id,
+    );
+    MemberView? targetMember;
+    for (final m in membersWithEnrollment) {
+      if (m.userId == reservation.userId && m.enrollment != null) {
+        targetMember = m;
+        break;
+      }
+    }
+    if (targetMember == null || targetMember.enrollment == null) {
+      SnackbarUtil.showInfo(context, '등록 정보를 불러올 수 없습니다.');
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder:
+            (context) => EnrollmentDetailScreen(
+              member: targetMember!,
+              enrollment: targetMember.enrollment!,
+              course: widget.course,
+            ),
+      ),
+    );
+  }
+
   void _handleMovingStarted(Set<String> reservationIds) {
     if (!mounted) return;
     setState(() {
@@ -981,6 +1023,19 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     });
   }
 
+  Future<void> _handleBackDuringDelete() async {
+    if (!_isDeletingSession) return;
+    final leave = await CommonDialog.showSavingLeaveConfirm(
+      context: context,
+      title: '삭제 중입니다',
+      onLeave: () => _leaveRequested = true,
+    );
+    if (leave && mounted) {
+      setState(() => _isDeletingSession = false);
+      Navigator.of(context).pop();
+    }
+  }
+
   /// 세션 관리 바텀시트 표시 (수용인원 변경, 세션 취소)
   Future<void> _showSessionManageBottomSheet() async {
     final dateString = TimezoneUtils.formatDateToSeoul(widget.date);
@@ -1044,6 +1099,15 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
       currentCapacity: currentCapacity,
       reservedCount: reservedCount,
       onCapacityChanged: (newCapacity) async {
+        if (!await FirestoreUtils.canReachFirestoreForSave(
+          probeCollection: 'places',
+          probeDocId: widget.placeId,
+        )) {
+          if (mounted) {
+            SnackbarUtil.showInfo(context, '네트워크 연결을 확인해주세요. ');
+          }
+          return;
+        }
         await _firestoreService.setCapacityOverride(
           placeId: widget.placeId,
           sessionId: sessionId,
@@ -1084,11 +1148,22 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     }
 
     try {
+      if (_leaveRequested) return;
+      if (!await FirestoreUtils.canReachFirestoreForSave(
+        probeCollection: 'places',
+        probeDocId: widget.placeId,
+      )) {
+        if (mounted) {
+          setState(() => _isDeletingSession = false);
+          SnackbarUtil.showInfo(context, '네트워크 연결을 확인해주세요. ');
+        }
+        return;
+      }
       // 세션 취소 처리
       // 알림은 항상 true로 설정 (UI에서 제거됨)
       const bool shouldSendNotification = true;
 
-      // 세션 취소 처리 (await로 완료까지 대기)
+      // 세션 취소 처리 (await로 완료까지 대기, 삭제 시 리버트 가드 적용)
       await (addedOverride != null
           ? _firestoreService.upsertCourseOverride(
             placeId: widget.placeId,
@@ -1113,6 +1188,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
             action: 'create',
             sendNotification: shouldSendNotification,
           ));
+      if (_leaveRequested) return;
 
       // 성공 시 먼저 pop한 뒤 다음 프레임에 성공 스낵바 표시 (로딩 스낵바가 확실히 성공으로 대체되도록)
       if (mounted) {
@@ -1127,9 +1203,10 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
       }
     } catch (e) {
       debugPrint('[SessionDetailScreen] 세션 취소 실패: $e');
+      if (_leaveRequested) return;
       if (mounted) {
         setState(() => _isDeletingSession = false);
-        SnackbarUtil.showInfo(context, '세션 취소에 실패했습니다.');
+        SnackbarUtil.showInfoFromError(context, e, fallback: '세션 취소에 실패했습니다.');
       }
     }
   }

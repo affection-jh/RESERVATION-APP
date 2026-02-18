@@ -14,13 +14,12 @@ class PlaceProvider with ChangeNotifier {
   String? _error;
 
   Place? get currentPlace => _currentPlace;
+
   bool get isLoading => _isLoading;
   String? get error => _error;
 
   /// 특정 플레이스 가져오기
-  Place? getPlace(String placeId) {
-    return _places[placeId];
-  }
+  Place? getPlace(String placeId) => _places[placeId];
 
   /// 모든 플레이스 목록
   List<Place> get allPlaces => _places.values.toList();
@@ -77,9 +76,10 @@ class PlaceProvider with ChangeNotifier {
 
       // 로드된 플레이스를 맵에 추가
       for (int i = 0; i < placeIdsToLoad.length; i++) {
+        final id = placeIdsToLoad[i];
         final place = places[i];
         if (place != null) {
-          _places[placeIdsToLoad[i]] = place;
+          _places[id] = place;
         }
       }
 
@@ -105,19 +105,19 @@ class PlaceProvider with ChangeNotifier {
     _isLoading = true;
     notifyListeners();
 
-    try {
-      final place = Place(
-        id: _generatePlaceId(),
-        name: name,
-        adminId: adminId,
-        description: description,
-        appBarText: appBarText,
-        greetingText: greetingText,
-        hideGreeting: hideGreeting,
-        imageUrl: imageUrl,
-        courses: [],
-      );
+    final place = Place(
+      id: _generatePlaceId(),
+      name: name,
+      adminId: adminId,
+      description: description,
 
+      greetingText: greetingText,
+      hideGreeting: hideGreeting,
+      imageUrl: imageUrl,
+      courses: [],
+    );
+
+    try {
       await _firestoreService.createPlace(place);
       _places[place.id] = place;
       _currentPlace = place;
@@ -144,6 +144,7 @@ class PlaceProvider with ChangeNotifier {
       if (_currentPlace?.id == place.id) {
         _currentPlace = place;
       }
+      _places[place.id] = place;
       _error = null;
       notifyListeners();
     } catch (e) {
@@ -164,7 +165,6 @@ class PlaceProvider with ChangeNotifier {
     if (_currentPlace == null) return;
 
     final updatedPlace = _currentPlace!.copyWith(
-      appBarText: appBarText ?? _currentPlace!.appBarText,
       greetingText: greetingText ?? _currentPlace!.greetingText,
       hideGreeting: hideGreeting ?? _currentPlace!.hideGreeting,
     );

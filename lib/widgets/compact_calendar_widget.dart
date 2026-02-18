@@ -15,6 +15,7 @@ import '../utils/reservation_policy_engine.dart';
 import '../services/firestore_service.dart';
 import '../utils/timezone_utils.dart';
 import '../utils/calendar_utils.dart';
+import '../utils/firestore_utils.dart';
 import '../theme/app_colors.dart';
 import '../utils/local_storage_util.dart';
 import 'session_block_style.dart';
@@ -286,6 +287,15 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
           SnackbarUtil.showInfo(context, '플레이스를 찾을 수 없습니다.');
           return;
         }
+        if (!await FirestoreUtils.canReachFirestoreForSave(
+          probeCollection: 'places',
+          probeDocId: placeId,
+        )) {
+          if (mounted) {
+            SnackbarUtil.showInfo(context, '네트워크 연결을 확인해주세요. ');
+          }
+          return;
+        }
         await _firestoreService.setCapacityOverride(
           placeId: placeId,
           sessionId: sessionId,
@@ -341,6 +351,16 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
         });
         return;
       }
+      if (!await FirestoreUtils.canReachFirestoreForSave(
+        probeCollection: 'places',
+        probeDocId: placeId,
+      )) {
+        if (mounted) {
+          setState(() => _cancellingSessions.remove(cancellingKey));
+          SnackbarUtil.showInfo(context, '네트워크 연결을 확인해주세요. ');
+        }
+        return;
+      }
 
       final weekStart = DateTime(
         date.year,
@@ -352,8 +372,8 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       final shouldSendNotification = result['sendNotification'] ?? true;
 
       final Map<String, dynamic> upsertResult =
-          addedOverride != null
-              ? await _firestoreService.upsertCourseOverride(
+          await (addedOverride != null
+              ? _firestoreService.upsertCourseOverride(
                 placeId: placeId,
                 courseId: course.id,
                 date: dateString,
@@ -365,7 +385,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                 overrideId: addedOverride.id,
                 sendNotification: shouldSendNotification,
               )
-              : await _firestoreService.upsertCourseOverride(
+              : _firestoreService.upsertCourseOverride(
                 placeId: placeId,
                 courseId: course.id,
                 date: dateString,
@@ -375,7 +395,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                 isCancelled: true,
                 action: 'create',
                 sendNotification: shouldSendNotification,
-              );
+              ));
 
       if (mounted) {
         setState(() => _cancellingSessions.remove(cancellingKey));

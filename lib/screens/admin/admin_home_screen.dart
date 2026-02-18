@@ -442,7 +442,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
               )
             else
               const NotificationIconWidget(),
-            const SizedBox(width: 20),
+            SizedBox(width: showExitButton ? 10 : 20),
           ],
         );
       },
@@ -692,8 +692,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
         final currentWeekStart = thisWeekMonday.add(
           Duration(days: 7 * _selectedWeekTab),
         );
-        final weekStartDate =
-            TimezoneUtils.formatDateToSeoul(currentWeekStart);
+        final weekStartDate = TimezoneUtils.formatDateToSeoul(currentWeekStart);
         await courseProvider.refreshOverridesForWeek(
           currentPlace.id,
           weekStartDate,

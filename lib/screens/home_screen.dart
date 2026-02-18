@@ -220,7 +220,7 @@ class _HomeScreenState extends State<HomeScreen> {
               )
             else
               const NotificationIconWidget(),
-            const SizedBox(width: 20),
+            SizedBox(width: showExitButton ? 10 : 20),
           ],
         );
       },

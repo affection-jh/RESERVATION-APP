@@ -16,6 +16,7 @@ import '../../../services/storage_service.dart';
 import '../../../providers/place_provider.dart';
 import '../../../providers/auth_provider.dart';
 import '../../../services/user_service.dart';
+import '../../../utils/firestore_utils.dart';
 import '../../../widgets/common_dialog.dart';
 import 'place_delete_confirm_screen.dart';
 
@@ -51,6 +52,7 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
 
   // 저장 관련
   bool _isSaving = false;
+  bool _leaveRequested = false;
 
   // 초기값 저장 (변경사항 추적용)
   String _initialName = '';
@@ -69,7 +71,6 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
       _initialName = widget.place!.name;
       _initialDescription = widget.place!.description ?? '';
       _existingImageUrl = widget.place!.imageUrl;
-      _initialAppBarText = widget.place!.appBarText ?? '';
       _initialGreetingText = widget.place!.greetingText ?? '';
       _hideGreeting = widget.place!.hideGreeting;
       _initialHideGreeting = widget.place!.hideGreeting;
@@ -147,8 +148,23 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         currentImageUrl != widget.place!.imageUrl;
   }
 
+  Future<void> _handleBackDuringSave() async {
+    if (!_isSaving) return;
+    final leave = await CommonDialog.showSavingLeaveConfirm(
+      context: context,
+      onLeave: () => _leaveRequested = true,
+    );
+    if (leave && mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
   Future<void> _handleBack() async {
     _removeFocus();
+    if (_isSaving) {
+      await _handleBackDuringSave();
+      return;
+    }
     if (!_hasChanges()) {
       if (mounted) Navigator.of(context).pop();
       return;
@@ -178,10 +194,14 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: !_hasChanges(),
-      onPopInvokedWithResult: (bool didPop, dynamic result) {
+      canPop: !_hasChanges() && !_isSaving,
+      onPopInvokedWithResult: (bool didPop, dynamic result) async {
         if (didPop) return;
-        _handleBack();
+        if (_isSaving) {
+          await _handleBackDuringSave();
+        } else {
+          _handleBack();
+        }
       },
       child: Scaffold(
         backgroundColor: AppColors.backgroundWhite,
@@ -856,6 +876,19 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
     }
 
     try {
+      if (_leaveRequested) return;
+      final probeDocId =
+          widget.place?.id ?? placeProvider.currentPlace?.id ?? 'probe';
+      if (!await FirestoreUtils.canReachFirestoreForSave(
+        probeCollection: 'places',
+        probeDocId: probeDocId,
+      )) {
+        if (mounted) {
+          setState(() => _isSaving = false);
+          SnackbarUtil.showInfo(context, '네트워크 연결을 확인해주세요. ');
+        }
+        return;
+      }
       if (widget.place == null) {
         // 새로 등록
         final newPlace = await placeProvider.createPlace(
@@ -876,6 +909,7 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
           imageUrl: _uploadedImageUrl,
           adminId: currentAdmin.userId,
         );
+        if (_leaveRequested) return;
 
         // 생성자를 해당 플레이스 members에 manager로 추가 (접근 가능 플레이스 = members 기준)
         // adminDisplayName은 반드시 생성자(매니저) 표시 이름으로 채움
@@ -899,6 +933,7 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
           currentAdmin.userId,
           creatorMember,
         );
+        if (_leaveRequested) return;
 
         final updatedAdmin = currentAdmin.addPlace(newPlace.id);
         await userService.updateAdmin(updatedAdmin);
@@ -912,6 +947,7 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         if (!currentApproved.contains(newPlace.id)) {
           authProvider.setApprovedPlaceIds([...currentApproved, newPlace.id]);
         }
+        if (_leaveRequested) return;
 
         if (mounted) {
           Navigator.of(context).pop(newPlace);
@@ -938,6 +974,7 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         );
 
         await placeProvider.updatePlace(updatedPlace);
+        if (_leaveRequested) return;
 
         if (mounted) {
           Navigator.of(context).pop(updatedPlace);
@@ -945,11 +982,16 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         }
       }
     } catch (e) {
+      if (_leaveRequested) return;
       if (mounted) {
         setState(() {
           _isSaving = false;
         });
-        SnackbarUtil.showInfo(context, '저장 중 오류가 발생했습니다: ${e.toString()}');
+        SnackbarUtil.showInfoFromError(
+          context,
+          e,
+          fallback: '저장 중 오류가 발생했습니다.',
+        );
       }
     } finally {
       if (mounted) {

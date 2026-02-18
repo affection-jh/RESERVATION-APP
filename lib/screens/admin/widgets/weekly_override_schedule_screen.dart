@@ -9,6 +9,7 @@ import '../../../providers/course_provider.dart';
 import '../../../providers/place_provider.dart';
 import '../../../services/firestore_service.dart';
 import '../../../utils/calendar_utils.dart';
+import '../../../utils/firestore_utils.dart';
 import '../../../utils/navigator_key.dart';
 import '../../../utils/snackbar_util.dart';
 import '../../../widgets/common_dialog.dart';
@@ -108,8 +109,10 @@ class _WeeklyOverrideScheduleScreenState
       context: context,
       onLeave: () {
         _leaveRequested = true;
-        Provider.of<CourseProvider>(context, listen: false)
-            .clearSavingOverrides(_weekStartDateString);
+        Provider.of<CourseProvider>(
+          context,
+          listen: false,
+        ).clearSavingOverrides(_weekStartDateString);
       },
     );
     if (leave && mounted) {
@@ -743,25 +746,25 @@ class _WeeklyOverrideScheduleScreenState
                                   ),
                                 )
                                 : TweenAnimationBuilder<double>(
-                                    key: ValueKey('grid_$_currentWeekOffset'),
-                                    tween: Tween(begin: 0, end: 1),
-                                    duration: const Duration(milliseconds: 320),
-                                    curve: Curves.easeOut,
-                                    builder: (context, value, child) {
-                                      return Opacity(
-                                        opacity: value,
-                                        child: child,
+                                  key: ValueKey('grid_$_currentWeekOffset'),
+                                  tween: Tween(begin: 0, end: 1),
+                                  duration: const Duration(milliseconds: 320),
+                                  curve: Curves.easeOut,
+                                  builder: (context, value, child) {
+                                    return Opacity(
+                                      opacity: value,
+                                      child: child,
+                                    );
+                                  },
+                                  child: LayoutBuilder(
+                                    builder: (context, constraints) {
+                                      return _buildAllDaysCalendar(
+                                        constraints.maxHeight,
+                                        selectedDays,
                                       );
                                     },
-                                    child: LayoutBuilder(
-                                      builder: (context, constraints) {
-                                        return _buildAllDaysCalendar(
-                                          constraints.maxHeight,
-                                          selectedDays,
-                                        );
-                                      },
-                                    ),
                                   ),
+                                ),
                       ),
                     ),
                   ],
@@ -785,47 +788,44 @@ class _WeeklyOverrideScheduleScreenState
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                            onPressed:
-                                _isSaving
-                                    ? null
-                                    : (_isWeekOpenedByPolicy(context)
-                                        ? (_hasChanges()
-                                            ? _saveOverrides
-                                            : null)
-                                        : _saveOverrides),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.primaryGreen,
-                              foregroundColor: Colors.white,
-                              disabledBackgroundColor: AppColors.borderLight,
-                              disabledForegroundColor: AppColors.textSecondary,
-                              padding: const EdgeInsets.symmetric(vertical: 16),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              elevation: 0,
-                            ),
-                            child:
-                                _isSaving
-                                    ? const SizedBox(
-                                      width: 20,
-                                      height: 20,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        valueColor:
-                                            AlwaysStoppedAnimation<Color>(
-                                              AppColors.textPrimary,
-                                            ),
-                                      ),
-                                    )
-                                    : Text(
-                                      _isWeekOpenedByPolicy(context)
-                                          ? '저장'
-                                          : '미리 예약 열기',
-                                      style: const TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w600,
-                                      ),
+                        onPressed:
+                            _isSaving
+                                ? null
+                                : (_isWeekOpenedByPolicy(context)
+                                    ? (_hasChanges() ? _saveOverrides : null)
+                                    : _saveOverrides),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.primaryGreen,
+                          foregroundColor: Colors.white,
+                          disabledBackgroundColor: AppColors.borderLight,
+                          disabledForegroundColor: AppColors.textSecondary,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          elevation: 0,
+                        ),
+                        child:
+                            _isSaving
+                                ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      AppColors.textPrimary,
                                     ),
+                                  ),
+                                )
+                                : Text(
+                                  _isWeekOpenedByPolicy(context)
+                                      ? '저장'
+                                      : '미리 예약 열기',
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
                       ),
                     ),
                     if (_isWeekPreOpenedByAdmin(context)) ...[
@@ -1558,6 +1558,16 @@ class _WeeklyOverrideScheduleScreenState
     );
     if (confirmed != true || !mounted) return;
 
+    if (!await FirestoreUtils.canReachFirestoreForSave(
+      probeCollection: 'places',
+      probeDocId: placeId,
+    )) {
+      if (mounted) {
+        SnackbarUtil.showInfo(context, '네트워크 연결을 확인해주세요. ');
+      }
+      return;
+    }
+
     setState(() => _isSaving = true);
     if (_leaveRequested) return;
     try {
@@ -1574,7 +1584,11 @@ class _WeeklyOverrideScheduleScreenState
     } catch (e) {
       if (mounted) {
         debugPrint('[WeeklyOverrideScheduleScreen] 미리 예약 닫기 실패: $e');
-        SnackbarUtil.showInfoFromError(context, e, fallback: '미리 예약 닫기에 실패했습니다.');
+        SnackbarUtil.showInfoFromError(
+          context,
+          e,
+          fallback: '미리 예약 닫기에 실패했습니다.',
+        );
       }
     } finally {
       if (mounted) setState(() => _isSaving = false);
@@ -1653,6 +1667,18 @@ class _WeeklyOverrideScheduleScreenState
     }
 
     try {
+      if (!await FirestoreUtils.canReachFirestoreForSave(
+        probeCollection: 'places',
+        probeDocId: placeId,
+      )) {
+        if (mounted) {
+          courseProvider.clearSavingOverrides(_weekStartDateString);
+          setState(() => _isSaving = false);
+          SnackbarUtil.showInfo(context, '네트워크 연결을 확인해주세요. ');
+        }
+        return;
+      }
+
       if (isPreOpen && !hasChanges) {
         await _firestoreService.setBookingWeekOpened(
           placeId: placeId,
@@ -1837,7 +1863,11 @@ class _WeeklyOverrideScheduleScreenState
     } catch (e) {
       if (mounted) {
         debugPrint('저장 중 오류: $e');
-        SnackbarUtil.showInfoFromError(context, e, fallback: '저장 중 오류가 발생했습니다.');
+        SnackbarUtil.showInfoFromError(
+          context,
+          e,
+          fallback: '저장 중 오류가 발생했습니다.',
+        );
       }
     } finally {
       // 화면을 나갔어도 항상 clear (홈 캘린더 로딩 해제)
