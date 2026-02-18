@@ -506,11 +506,19 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
                     );
                     if (admin != null && mounted) {
                       authProvider.setLinkedAdmin(admin);
-                      final managedIds = await _firestoreService
+                      final fromServer = await _firestoreService
                           .getManagedPlaceIdsByAdminId(admin.userId);
+                      // 서브매니저는 places.adminId가 아니므로 getManagedPlaceIdsByAdminId에 없음.
+                      // memberships(manager+subManager)와 병합해 PlaceSwitch 토글 후보에 포함.
+                      final fromMemberships =
+                          authProvider.managedPlaceIdsFromMemberships;
+                      final managedIds = <String>{
+                        ...fromServer,
+                        ...fromMemberships,
+                      }.toList();
                       authProvider.setAdminManagedPlaceIds(managedIds);
                       debugPrint(
-                        '[PlaceWaitingScreen] AuthProvider linkedAdmin + adminManagedPlaceIds: ${managedIds.length}개',
+                        '[PlaceWaitingScreen] AuthProvider linkedAdmin + adminManagedPlaceIds: ${managedIds.length}개 (server ${fromServer.length} + memberships ${fromMemberships.length})',
                       );
                     } else if (mounted) {
                       authProvider.setLinkedAdmin(null);

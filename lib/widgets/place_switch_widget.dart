@@ -185,7 +185,7 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
           // 플레이스 정보 (로그인 시에만 클릭 가능)
           Row(
             children: [
-              // 플레이스 이미지와 이름 (enabled일 때만 이미지 상세 보기로 이동)
+              // 플레이스 이미지와 이름 (탭 시 이미지 상세 보기로 이동 — 홈/마이페이지 공통)
               Expanded(
                 child: Builder(
                   builder: (context) {
@@ -193,45 +193,42 @@ class _PlaceSwitchWidgetState extends State<PlaceSwitchWidget> {
                         'place_image_${currentPlace.id}'
                         '${widget.heroTagSuffix != null ? '_${widget.heroTagSuffix}' : ''}';
                     return InkWell(
-                      onTap:
-                          widget.enabled
-                              ? () {
-                                Navigator.of(context).push(
-                                  PageRouteBuilder(
-                                    pageBuilder:
-                                        (
-                                          context,
-                                          animation,
-                                          secondaryAnimation,
-                                        ) => PlaceImageDetailScreen(
-                                          imageUrl: currentPlace.imageUrl,
-                                          placeName: currentPlace.name,
-                                          placeDescription:
-                                              currentPlace.description ?? '',
-                                          heroTag: placeHeroTag,
-                                        ),
-                                    transitionDuration: const Duration(
-                                      milliseconds: 300,
-                                    ),
-                                    reverseTransitionDuration: const Duration(
-                                      milliseconds: 300,
-                                    ),
-                                    opaque: false,
-                                    transitionsBuilder: (
-                                      context,
-                                      animation,
-                                      secondaryAnimation,
-                                      child,
-                                    ) {
-                                      return FadeTransition(
-                                        opacity: animation,
-                                        child: child,
-                                      );
-                                    },
-                                  ),
-                                );
-                              }
-                              : null,
+                      onTap: () {
+                        Navigator.of(context).push(
+                          PageRouteBuilder(
+                            pageBuilder:
+                                (
+                                  context,
+                                  animation,
+                                  secondaryAnimation,
+                                ) => PlaceImageDetailScreen(
+                                  imageUrl: currentPlace.imageUrl,
+                                  placeName: currentPlace.name,
+                                  placeDescription:
+                                      currentPlace.description ?? '',
+                                  heroTag: placeHeroTag,
+                                ),
+                            transitionDuration: const Duration(
+                              milliseconds: 300,
+                            ),
+                            reverseTransitionDuration: const Duration(
+                              milliseconds: 300,
+                            ),
+                            opaque: false,
+                            transitionsBuilder: (
+                              context,
+                              animation,
+                              secondaryAnimation,
+                              child,
+                            ) {
+                              return FadeTransition(
+                                opacity: animation,
+                                child: child,
+                              );
+                            },
+                          ),
+                        );
+                      },
                       borderRadius: BorderRadius.circular(16),
                       splashColor: Colors.transparent,
                       highlightColor: Colors.transparent,
