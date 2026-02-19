@@ -539,32 +539,28 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
           rethrow;
         }
       }
-      if (_leaveRequested) return;
-
-      // 삭제 완료 - navigatorKey 사용 (사용자가 뒤로가기로 나갔어도 동작)
-      // 상세 화면 제거로 코스 탭 시 바로 편집 화면으로 가므로 1번만 pop
+      // 나갔어도 로딩 스낵바를 닫고 결과 표시
       final navCtx = navigatorKey.currentContext;
+      if (navCtx != null) {
+        SnackbarUtil.showSuccess(navCtx, '코스가 삭제되었습니다.');
+      }
+      if (_leaveRequested) return;
       if (navCtx != null) {
         final navigator = Navigator.of(navCtx);
         if (navigator.canPop()) navigator.pop(); // CourseEditScreen
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          final ctx = navigatorKey.currentContext;
-          if (ctx != null) {
-            SnackbarUtil.showSuccess(ctx, '코스가 삭제되었습니다.');
-          }
-        });
       }
     } catch (e) {
-      if (_leaveRequested) return;
-      final navCtx = navigatorKey.currentContext;
-      if (navCtx != null) {
+      final errCtx = navigatorKey.currentContext;
+      if (errCtx != null) {
         SnackbarUtil.showInfoFromError(
-          navCtx,
+          errCtx,
           e,
           fallback: '코스 삭제 중 문제가 발생했어요.\n잠시 후 다시 시도해주세요.',
         );
       }
+      if (_leaveRequested) return;
     } finally {
+      SnackbarUtil.dismissLoading();
       if (mounted) {
         setState(() {
           _isDeleting = false;

@@ -8,7 +8,29 @@ import 'error_message_util.dart';
 import 'navigator_key.dart';
 
 class SnackbarUtil {
-  static OverlayState? _resolveOverlay(BuildContext? context) {
+  /// 로딩 스낵바( persistent: true )를 닫을 때 사용. showSuccess/showInfo 전에 호출.
+  static AnimationController? _loadingController;
+
+  static void _dismissLoadingIfAny() {
+    final c = _loadingController;
+    _loadingController = null;
+    if (c == null) return;
+    try {
+      c.reverse();
+    } catch (_) {}
+  }
+
+  /// 로딩 스낵바를 강제로 닫을 때 사용. (나가기 후 완료 시 showSuccess가 호출되지 않는 경로에서 finally 등에서 호출)
+  static void dismissLoading() {
+    _dismissLoadingIfAny();
+  }
+
+  static OverlayState? _resolveOverlay(BuildContext? context, {bool preferRoot = false}) {
+    // 0) 로딩 스낵바와 동일 오버레이 쓰기 위해 루트(네비게이터) 오버레이 우선
+    if (preferRoot) {
+      final rootOverlay = navigatorKey.currentState?.overlay;
+      if (rootOverlay != null) return rootOverlay;
+    }
     // 1) navigatorKey 기준으로 먼저 시도 (pop 직후/비활성 context에서도 안전)
     final navCtx = navigatorKey.currentContext;
     if (navCtx != null) {
@@ -95,12 +117,14 @@ class SnackbarUtil {
 
   /// 상단에 성공 스낵바 표시
   /// [imageUrl]이 제공되면 코스 이미지를 표시합니다.
+  /// 로딩 스낵바가 떠 있으면 먼저 닫고 표시 (저장 중 나가기 후 완료 시 정합성).
   static void showSuccess(
     BuildContext context,
     String message, {
     String? imageUrl,
   }) {
-    final overlay = _resolveOverlay(context);
+    _dismissLoadingIfAny();
+    final overlay = _resolveOverlay(context, preferRoot: true) ?? _resolveOverlay(context);
     if (overlay == null) {
       _fallbackSnackBar(context, message, isError: false);
       return;
@@ -147,12 +171,14 @@ class SnackbarUtil {
 
   /// 상단에 정보 스낵바 표시
   /// [imageUrl]이 제공되면 코스 이미지를 표시합니다.
+  /// 로딩 스낵바가 떠 있으면 먼저 닫고 표시.
   static void showInfo(
     BuildContext context,
     String message, {
     String? imageUrl,
   }) {
-    final overlay = _resolveOverlay(context);
+    _dismissLoadingIfAny();
+    final overlay = _resolveOverlay(context, preferRoot: true) ?? _resolveOverlay(context);
     if (overlay == null) {
       _fallbackSnackBar(context, message, isError: false);
       return;
@@ -168,25 +194,32 @@ class SnackbarUtil {
 
   /// 서버/네트워크 에러를 한국어로 변환해 정보 스낵바 표시
   /// (예: "The internet connection appears to be offline" → "인터넷 연결이 끊어졌습니다.")
+  /// internal 코드는 그대로 "INTERNAL" 노출하지 않고 fallback 사용.
   static void showInfoFromError(
     BuildContext context,
     dynamic error, {
     String fallback = '오류가 발생했습니다. 잠시 후 다시 시도해주세요.',
   }) {
-    // FirebaseFunctionsException은 toString에 stack trace/기술 정보가 붙을 수 있어 message만 노출
-    final String raw =
-        error is FirebaseFunctionsException
-            ? ((error.message ?? '').trim())
-            : (error is String ? error : error.toString());
+    String raw;
+    if (error is FirebaseFunctionsException) {
+      if (error.code == 'internal') {
+        raw = '';
+      } else {
+        raw = (error.message ?? '').trim();
+      }
+    } else {
+      raw = error is String ? error : error.toString();
+    }
     final message =
         raw.trim().isEmpty ? fallback : ErrorMessageUtil.toUserFriendlyMessage(raw);
     showInfo(context, message);
   }
 
   /// 상단에 로딩 스낵바 표시 (스피너 + 메시지). 작업이 끝날 때까지 유지됨.
-  /// 완료 후 showSuccess / showInfo 호출 시 로딩이 자동으로 해당 스낵바로 대체됨.
+  /// 완료 후 showSuccess / showInfo 호출 시 _dismissLoadingIfAny()로 먼저 닫고 결과 스낵바 표시.
+  /// 루트 오버레이를 우선 사용해, 나가기 후 완료 시에도 success와 동일 레이어에서 표시되도록 함.
   static void showLoading(BuildContext context, String message) {
-    final overlay = _resolveOverlay(context);
+    final overlay = _resolveOverlay(context, preferRoot: true) ?? _resolveOverlay(context);
     if (overlay == null) {
       _fallbackSnackBar(context, message, isError: false);
       return;
@@ -197,7 +230,10 @@ class SnackbarUtil {
       animationDuration: const Duration(milliseconds: 300),
       reverseAnimationDuration: const Duration(milliseconds: 250),
       curve: Curves.easeOut,
-      persistent: true, // 3초 자동 숨김 없이, 다음 스낵바(showSuccess/showInfo)가 뜰 때까지 유지
+      persistent: true,
+      onAnimationControllerInit: (c) {
+        _loadingController = c;
+      },
     );
   }
 }

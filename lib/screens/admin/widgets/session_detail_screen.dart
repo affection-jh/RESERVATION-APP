@@ -1217,26 +1217,29 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
             action: 'create',
             sendNotification: shouldSendNotification,
           ));
+      // 나갔어도 로딩 스낵바를 닫고 결과 표시
+      final resultCtx = mounted ? context : navigatorKey.currentContext;
+      if (resultCtx != null) {
+        final message = addedOverride != null ? '세션이 삭제되었습니다.' : '세션이 취소되었습니다.';
+        SnackbarUtil.showSuccess(resultCtx, message);
+      }
       if (_leaveRequested) return;
-
-      // 성공 시 먼저 pop한 뒤 다음 프레임에 성공 스낵바 표시 (로딩 스낵바가 확실히 성공으로 대체되도록)
       if (mounted) {
         Navigator.of(context).pop();
-        final message = addedOverride != null ? '세션이 삭제되었습니다.' : '세션이 취소되었습니다.';
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          final ctx = navigatorKey.currentContext;
-          if (ctx != null) {
-            SnackbarUtil.showSuccess(ctx, message);
-          }
-        });
       }
     } catch (e) {
       debugPrint('[SessionDetailScreen] 세션 취소 실패: $e');
+      final errCtx = mounted ? context : navigatorKey.currentContext;
+      if (errCtx != null) {
+        SnackbarUtil.showInfoFromError(errCtx, e, fallback: '세션 취소에 실패했습니다.');
+      }
       if (_leaveRequested) return;
       if (mounted) {
         setState(() => _isDeletingSession = false);
-        SnackbarUtil.showInfoFromError(context, e, fallback: '세션 취소에 실패했습니다.');
       }
+    } finally {
+      SnackbarUtil.dismissLoading();
+      if (mounted) setState(() => _isDeletingSession = false);
     }
   }
 }

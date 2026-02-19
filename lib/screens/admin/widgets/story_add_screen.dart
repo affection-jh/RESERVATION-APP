@@ -6,6 +6,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../../../models/story.dart';
 import '../../../theme/app_colors.dart';
 import '../../../utils/snackbar_util.dart';
+import '../../../utils/navigator_key.dart';
 import '../../../services/storage_service.dart' as firebase_storage;
 import '../../../widgets/common_dialog.dart';
 
@@ -372,8 +373,9 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
       _isSaving = true;
     });
 
-    if (_leaveRequested) return;
-    // 모든 이미지 URL 리스트 (기존 업로드된 것 + 새로 업로드할 것)
+    try {
+      if (_leaveRequested) return;
+      // 모든 이미지 URL 리스트 (기존 업로드된 것 + 새로 업로드할 것)
     final List<String> allImageUrls = List<String>.from(_uploadedImageUrls);
 
     // 선택한 로컬 이미지들을 저장 시에만 업로드 (병렬로)
@@ -489,16 +491,33 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
       backgroundImageUrl: finalBackgroundImageUrl,
     );
 
+    // 나가기 후에도 요청이 이미 나간 상태면 로딩 스낵바로 진행 중임을 표시 (완료 시 success/error로 대체됨)
+    final loadCtx = navigatorKey.currentContext;
+    if (loadCtx != null) SnackbarUtil.showLoading(loadCtx, '저장 중…');
+
     try {
       await widget.onSave(story);
-      if (_leaveRequested || !mounted) return;
-      setState(() => _isSaving = false);
-      Navigator.of(context).pop();
+      // 나가기한 뒤 완료된 경우에도 결과 알림
+      final resultCtx = mounted ? context : navigatorKey.currentContext;
+      if (resultCtx != null) {
+        SnackbarUtil.showSuccess(resultCtx, '저장되었습니다.');
+      }
+      if (mounted) {
+        setState(() => _isSaving = false);
+        Navigator.of(context).pop();
+      }
     } catch (e) {
-      if (_leaveRequested || !mounted) return;
-      setState(() => _isSaving = false);
-      SnackbarUtil.showInfo(context, '저장에 실패했습니다. 다시 시도해 주세요.');
+      final resultCtx = mounted ? context : navigatorKey.currentContext;
+      if (resultCtx != null) {
+        SnackbarUtil.showInfo(resultCtx, '저장에 실패했습니다. 다시 시도해 주세요.');
+      }
+    } finally {
+      SnackbarUtil.dismissLoading();
+      if (mounted) setState(() => _isSaving = false);
     }
+  } finally {
+    if (mounted) setState(() => _isSaving = false);
+  }
   }
 
   @override
@@ -598,6 +617,8 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
                                   context,
                                   '삭제에 실패했습니다. 다시 시도해 주세요.',
                                 );
+                              } finally {
+                                if (mounted) setState(() => _isDeleting = false);
                               }
                             },
                     style: OutlinedButton.styleFrom(

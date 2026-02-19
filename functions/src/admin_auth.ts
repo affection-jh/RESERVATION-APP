@@ -138,8 +138,8 @@ export async function getPlaceIdsWhereUserMustDeletePlaceFirst(uid: string): Pro
         }
     }
 
-    // 2) 플레이스 소유자(adminId === uid)인 플레이스
-    const placesSnap = await db.collection('places').where('adminId', '==', uid).limit(100).get();
+    // 2) 플레이스 소유자(adminIds 배열에 uid 포함)인 플레이스
+    const placesSnap = await db.collection('places').where('adminIds', 'array-contains', uid).limit(100).get();
     placesSnap.docs.forEach((d) => placeIds.add(d.id));
 
     return Array.from(placeIds);

@@ -42,7 +42,7 @@ class PlaceFirestoreService {
     final snapshot =
         await _firestore
             .collection('places')
-            .where('adminId', isEqualTo: adminId)
+            .where('adminIds', arrayContains: adminId)
             .get();
     return snapshot.docs.map((d) => d.id).toList();
   }
@@ -99,10 +99,15 @@ class PlaceFirestoreService {
         if (raw is! Map) continue;
         try {
           final item = Map<String, dynamic>.from(raw);
+          final rawAdminIds = item['adminIds'];
+          final List<String> adminIdsList = rawAdminIds is List
+              ? rawAdminIds.map((e) => e?.toString() ?? '').where((s) => s.isNotEmpty).toList()
+              : <String>[];
+
           final normalized = <String, dynamic>{
             'id': FirestoreUtils.ensureString(item['id']),
             'name': FirestoreUtils.ensureString(item['name']),
-            'adminId': FirestoreUtils.ensureString(item['adminId']),
+            'adminIds': adminIdsList,
             'description': FirestoreUtils.ensureStringOrNull(
               item['description'],
             ),

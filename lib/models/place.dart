@@ -4,23 +4,27 @@ import 'course.dart';
 class Place {
   final String id;
   final String name;
-  final String adminId; // 어드민 사용자 ID
+  /// 전체 매니저(소유자) UID 목록. 복수 명 지원.
+  final List<String> adminIds;
   final String? description;
   final String? greetingText; // 홈 화면 인사말
   final bool hideGreeting; // true면 홈 화면에 환영 메시지 미표시
   final String? imageUrl; // 플레이스 이미지 URL
   final List<Course> courses; // 이 플레이스에서 진행되는 코스들
 
+  /// 호환용: 첫 번째 전체 매니저 ID (adminIds.firstOrNull ?? '')
+  String get adminId => adminIds.isNotEmpty ? adminIds.first : '';
+
   Place({
     required this.id,
     required this.name,
-    required this.adminId,
+    List<String>? adminIds,
     this.description,
     this.greetingText,
     this.hideGreeting = false,
     this.imageUrl,
     this.courses = const [],
-  });
+  }) : adminIds = adminIds ?? const [];
 
   // 특정 코스 찾기
   Course? findCourse(String courseId) {
@@ -48,7 +52,7 @@ class Place {
     return {
       'id': id,
       'name': name,
-      'adminId': adminId,
+      'adminIds': adminIds,
       if (description != null) 'description': description,
       if (greetingText != null) 'greetingText': greetingText,
       'hideGreeting': hideGreeting,
@@ -90,10 +94,19 @@ class Place {
       print('[Place.fromJson] courses 파싱 중 에러: $e');
     }
 
+    // adminIds 배열만 사용
+    List<String> adminIdsList = [];
+    if (json['adminIds'] is List) {
+      adminIdsList = (json['adminIds'] as List)
+          .map((e) => e?.toString() ?? '')
+          .where((s) => s.isNotEmpty)
+          .toList();
+    }
+
     return Place(
       id: json['id'] as String,
       name: json['name'] as String,
-      adminId: json['adminId'] as String,
+      adminIds: adminIdsList,
       description: json['description'] as String?,
       greetingText: json['greetingText'] as String?,
       hideGreeting: json['hideGreeting'] as bool? ?? false,
@@ -106,7 +119,7 @@ class Place {
   Place copyWith({
     String? id,
     String? name,
-    String? adminId,
+    List<String>? adminIds,
     String? description,
     String? appBarText,
     String? greetingText,
@@ -117,7 +130,7 @@ class Place {
     return Place(
       id: id ?? this.id,
       name: name ?? this.name,
-      adminId: adminId ?? this.adminId,
+      adminIds: adminIds ?? this.adminIds,
       description: description ?? this.description,
       greetingText: greetingText ?? this.greetingText,
       hideGreeting: hideGreeting ?? this.hideGreeting,

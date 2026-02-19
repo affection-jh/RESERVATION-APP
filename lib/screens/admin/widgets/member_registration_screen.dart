@@ -9,6 +9,7 @@ import '../../../services/firestore_service.dart';
 import '../../../theme/app_colors.dart';
 import '../../../utils/text_field_decoration_util.dart';
 import '../../../utils/snackbar_util.dart';
+import '../../../utils/navigator_key.dart';
 import '../../../widgets/common_dialog.dart';
 import '../../../utils/timezone_utils.dart';
 import '../../../widgets/valid_period_input_widget.dart';
@@ -450,6 +451,8 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
       onLeave: () => _leaveRequested = true,
     );
     if (leave && mounted) {
+      final loadCtx = navigatorKey.currentContext;
+      if (loadCtx != null) SnackbarUtil.showLoading(loadCtx, '저장 중');
       Navigator.of(context).pop();
     }
   }
@@ -481,6 +484,7 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
         );
       }
     } finally {
+      SnackbarUtil.dismissLoading();
       if (mounted) {
         setState(() {
           _isSaving = false;
@@ -940,18 +944,22 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
                           listen: false,
                         );
                         final placeId = placeProvider.currentPlace?.id;
-                        final isSubManager = placeId != null &&
+                        final isSubManager =
+                            placeId != null &&
                             authProvider.isSubManagerForPlace(placeId);
-                        final placeMember = placeId != null
-                            ? authProvider.getPlaceMemberForPlace(placeId)
-                            : null;
-                        final coursesToShow = isSubManager && placeMember != null
-                            ? courseProvider.courses
-                                .where((c) =>
-                                    placeMember.manageableCourseIds
-                                        .contains(c.id))
-                                .toList()
-                            : courseProvider.courses;
+                        final placeMember =
+                            placeId != null
+                                ? authProvider.getPlaceMemberForPlace(placeId)
+                                : null;
+                        final coursesToShow =
+                            isSubManager && placeMember != null
+                                ? courseProvider.courses
+                                    .where(
+                                      (c) => placeMember.manageableCourseIds
+                                          .contains(c.id),
+                                    )
+                                    .toList()
+                                : courseProvider.courses;
                         if (coursesToShow.isEmpty) {
                           return const SizedBox.shrink();
                         }
@@ -1162,19 +1170,22 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
                           listen: false,
                         );
                         final placeId = placeProvider.currentPlace?.id;
-                        final isSubManager = placeId != null &&
+                        final isSubManager =
+                            placeId != null &&
                             authProvider.isSubManagerForPlace(placeId);
-                        final allowedIds = isSubManager
-                            ? (authProvider
-                                    .getPlaceMemberForPlace(placeId)
-                                    ?.manageableCourseIds ??
-                                <String>[])
-                            : null;
-                        final courseIdsToShow = allowedIds != null
-                            ? _selectedCourseIds
-                                .where((id) => allowedIds.contains(id))
-                                .toList()
-                            : _selectedCourseIds.toList();
+                        final allowedIds =
+                            isSubManager
+                                ? (authProvider
+                                        .getPlaceMemberForPlace(placeId)
+                                        ?.manageableCourseIds ??
+                                    <String>[])
+                                : null;
+                        final courseIdsToShow =
+                            allowedIds != null
+                                ? _selectedCourseIds
+                                    .where((id) => allowedIds.contains(id))
+                                    .toList()
+                                : _selectedCourseIds.toList();
                         return Column(
                           children: [
                             ...courseIdsToShow.map((courseId) {

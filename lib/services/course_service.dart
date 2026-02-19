@@ -5,7 +5,6 @@ import '../models/course.dart';
 import '../models/course_policy.dart';
 import '../models/course_override.dart';
 import '../utils/firestore_utils.dart';
-import '../utils/timezone_utils.dart';
 import 'reservation_service.dart';
 
 /// 코스 + 비정기 일정 + 정원 오버라이드 + 주차 오픈 통합 서비스
@@ -460,76 +459,4 @@ class CourseService {
     });
   }
 
-  // ==================== Booking Week Opens ====================
-
-  Future<void> setBookingWeekOpened({
-    required String placeId,
-    required String courseId,
-    required String weekStartDate,
-  }) async {
-    try {
-      final docId = '${placeId}_${courseId}_$weekStartDate';
-      await _firestore.collection('bookingWeekOpens').doc(docId).set({
-        'placeId': placeId,
-        'courseId': courseId,
-        'weekStartDate': weekStartDate,
-        'openedAt': FirestoreUtils.dateTimeToTimestamp(
-          TimezoneUtils.getSeoulDateTime(),
-        ),
-      }, SetOptions(merge: true));
-      await FirestoreUtils.waitForServerAck();
-    } catch (e) {
-      debugPrint('[CourseService] setBookingWeekOpened error: $e');
-      rethrow;
-    }
-  }
-
-  /// 미리 예약 열기를 취소(닫기) — 해당 주의 bookingWeekOpens 문서 삭제
-  Future<void> clearBookingWeekOpened({
-    required String placeId,
-    required String courseId,
-    required String weekStartDate,
-  }) async {
-    try {
-      final docId = '${placeId}_${courseId}_$weekStartDate';
-      await _firestore.collection('bookingWeekOpens').doc(docId).delete();
-      await FirestoreUtils.waitForServerAck();
-    } catch (e) {
-      debugPrint('[CourseService] clearBookingWeekOpened error: $e');
-      rethrow;
-    }
-  }
-
-  Future<bool> isBookingWeekOpened({
-    required String placeId,
-    required String courseId,
-    required String weekStartDate,
-  }) async {
-    try {
-      final docId = '${placeId}_${courseId}_$weekStartDate';
-      final doc =
-          await _firestore.collection('bookingWeekOpens').doc(docId).get();
-      return doc.exists;
-    } catch (e) {
-      debugPrint('[CourseService] isBookingWeekOpened error: $e');
-      return false;
-    }
-  }
-
-  Stream<Set<String>> streamBookingWeekOpens({
-    required String placeId,
-    required String courseId,
-  }) {
-    return _firestore
-        .collection('bookingWeekOpens')
-        .where('placeId', isEqualTo: placeId)
-        .where('courseId', isEqualTo: courseId)
-        .snapshots()
-        .map((snapshot) {
-          return snapshot.docs
-              .map((doc) => doc.data()['weekStartDate'] as String? ?? '')
-              .where((date) => date.isNotEmpty)
-              .toSet();
-        });
-  }
 }

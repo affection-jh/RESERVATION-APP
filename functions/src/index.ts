@@ -300,7 +300,6 @@ function evaluateReservation({
     reservedCount,
     enrollmentCanReserve,
     skipOpenPolicy = false,
-    isBookingWeekOpened = false, // 관리자가 미리 열린 주차인지 여부
 }: {
     now: Date;
     policy: CoursePolicy;
@@ -310,7 +309,6 @@ function evaluateReservation({
     reservedCount: number;
     enrollmentCanReserve: boolean;
     skipOpenPolicy?: boolean;
-    isBookingWeekOpened?: boolean;
 }): ReservationEligibility {
     // 1) 과거 날짜 (가장 우선 체크) — now는 epoch 기준 현재 시각, 서울 날짜는 getSeoulDateParts로
     const todayString = formatDateToSeoul(now);
@@ -332,8 +330,8 @@ function evaluateReservation({
         return { canReserve: false, reason: ReservationLockReason.closedBeforeStart };
     }
 
-    // 4) 오픈 정책 (skipOpenPolicy가 true이거나 미리 열린 주차이면 건너뛰기)
-    if (!skipOpenPolicy && !isBookingWeekOpened) {
+    // 4) 오픈 정책 (skipOpenPolicy가 true이면 건너뛰기)
+    if (!skipOpenPolicy) {
         const openAt = computeOpenAt({ policy, sessionDateString });
         if (openAt && now.getTime() < openAt.getTime()) {
             return { canReserve: false, reason: ReservationLockReason.notOpenedYet, openAt };
@@ -476,8 +474,9 @@ export const createEnrollmentsFromPendingMembers = functions.https.onCall(async 
             placeIds.push(placeId);
 
             const pendingRole = (pendingData.role as string) || 'member';
+            const isManager = pendingRole === 'manager';
             const isSubManager = pendingRole === 'subManager' || pendingRole === 'submanager';
-            const memberRole = isSubManager ? 'submanager' : 'member';
+            const memberRole = isManager ? 'manager' : (isSubManager ? 'submanager' : 'member');
             const managedRaw = Array.isArray((pendingData as any).managedCourseIds)
                 ? ((pendingData as any).managedCourseIds as string[]).map((id: string) => String(id)).filter(Boolean)
                 : null;
@@ -487,7 +486,7 @@ export const createEnrollmentsFromPendingMembers = functions.https.onCall(async 
             // ✅ 수강(enrollment) 생성은 courseEnrollments만 사용. allowedIds 병합 제거 — 관리 코스가 수강으로 생성되는 역방향 버그 방지.
             const enrollCourseIds = Array.from(new Set<string>([...fromEnrollments]));
 
-            if (enrollCourseIds.length === 0 && !isSubManager) {
+            if (enrollCourseIds.length === 0 && !isSubManager && !isManager) {
                 // 수강 코스도 없고(submanager도 아님) → 의미 없는 pending, 정리
                 await pendingDoc.ref.delete();
                 continue;
@@ -502,9 +501,9 @@ export const createEnrollmentsFromPendingMembers = functions.https.onCall(async 
             const memberRef = db.collection('places').doc(placeId).collection('members').doc(userId);
             const existingMemberSnap = await memberRef.get();
             const existingRole = String((existingMemberSnap.data() as any)?.role ?? '').toLowerCase();
-            // role 우선순위: manager > submanager > member (절대 강등 금지)
+            // role 우선순위: manager > submanager > member (절대 강등 금지). pending이 manager면 매니저로 반영
             const nextRole =
-                existingRole === 'manager'
+                existingRole === 'manager' || memberRole === 'manager'
                     ? 'manager'
                     : (existingRole === 'submanager' || memberRole === 'submanager')
                         ? 'submanager'
@@ -519,6 +518,19 @@ export const createEnrollmentsFromPendingMembers = functions.https.onCall(async 
                     : [];
             const userDoc = await db.collection('users').doc(userId).get();
             const userPhone = userDoc.exists ? (userDoc.data()?.phoneNumber as string) ?? phoneNumber : phoneNumber;
+
+            // role이 manager면 반드시 adminIds를 먼저 반영 (순서 보장으로 role만 manager인 불일치 방지)
+            if (nextRole === 'manager') {
+                const placeRef = db.collection('places').doc(placeId);
+                const placeSnap = await placeRef.get();
+                const placeData = placeSnap.data() || {};
+                const adminIds: string[] = Array.isArray(placeData?.adminIds)
+                    ? (placeData.adminIds as unknown[]).map((x) => String(x)).filter(Boolean)
+                    : [];
+                if (!adminIds.includes(userId)) {
+                    await placeRef.update({ adminIds: [...adminIds, userId] });
+                }
+            }
 
             await memberRef.set({
                 userId,
@@ -1098,18 +1110,11 @@ export const createReservation = functions.https.onCall(async (data, context) =>
                 throw new functions.https.HttpsError('already-exists', '이미 예약된 세션입니다.');
             }
 
-            // 7) 미리 열린 주차 확인 (관리자가 미리 예약 열기한 주차인지). 주차 키는 서울 기준 월요일 날짜로 통일
             const reservedDate = seoulDateOnly(reservedDateString);
-            const weekStart = startOfWeekMondaySeoul(reservedDateString);
-            const weekStartDateString = formatDateToSeoul(weekStart);
-            const bookingWeekOpenDocId = `${placeId}_${courseId}_${weekStartDateString}`;
-            const bookingWeekOpenDoc = await tx.get(db.collection('bookingWeekOpens').doc(bookingWeekOpenDocId));
-            const isBookingWeekOpened = bookingWeekOpenDoc.exists;
 
             // 8) 중앙 정책 엔진(서버 버전)으로 최종 검증
             // 관리자가 다른 사용자를 위해 예약 생성 시: 정원 초과/오픈 전/마감 전은 허용, 과거 날짜만 차단
             // ⚠️ override 세션(비정기 일정)인 경우 오픈 정책을 건너뛰고 즉시 예약 가능하도록 함
-            // ⚠️ 미리 열린 주차인 경우도 오픈 정책을 건너뛰고 즉시 예약 가능하도록 함
             const eligibility = evaluateReservation({
                 now,
                 policy,
@@ -1118,9 +1123,7 @@ export const createReservation = functions.https.onCall(async (data, context) =>
                 capacity,
                 reservedCount: currentReservedCount,
                 enrollmentCanReserve,
-                // override 세션이거나 "미리 열린 주차"면 오픈 정책을 건너뛰기
-                skipOpenPolicy: isOverrideSession || isBookingWeekOpened,
-                isBookingWeekOpened,
+                skipOpenPolicy: isOverrideSession,
             });
 
             if (!eligibility.canReserve) {
@@ -1161,7 +1164,7 @@ export const createReservation = functions.https.onCall(async (data, context) =>
                         throw new functions.https.HttpsError('failed-precondition', '정책상 예약을 추가할 수 없습니다.', { reason: eligibility.reason });
                     }
                 } else {
-                    // 일반 사용자: 정책 그대로 적용 (override/미리열기면 evaluateReservation이 openPolicy를 이미 스킵)
+                    // 일반 사용자: 정책 그대로 적용 (override면 evaluateReservation이 openPolicy를 이미 스킵)
                     if (eligibility.reason === ReservationLockReason.notOpenedYet && eligibility.openAt) {
                         throw new functions.https.HttpsError(
                             'failed-precondition',
@@ -1380,7 +1383,7 @@ export const batchCreateReservations = functions.https.onCall(async (data, conte
 
     try {
         const txResult = await db.runTransaction(async (tx) => {
-            // 1) 공통: place, course, session, capacity, count, cancel, bookingWeekOpen, summary
+            // 1) 공통: place, course, session, capacity, count, cancel, summary
             const placeDoc = await tx.get(placeRef);
             if (!placeDoc.exists) {
                 throw new functions.https.HttpsError('not-found', '플레이스를 찾을 수 없습니다.');
@@ -1457,11 +1460,6 @@ export const batchCreateReservations = functions.https.onCall(async (data, conte
             }
 
             const reservedDate = seoulDateOnly(reservedDateString);
-            const weekStart = startOfWeekMondaySeoul(reservedDateString);
-            const weekStartDateString = formatDateToSeoul(weekStart);
-            const bookingWeekOpenDocId = `${placeId}_${courseId}_${weekStartDateString}`;
-            const bookingWeekOpenDoc = await tx.get(db.collection('bookingWeekOpens').doc(bookingWeekOpenDocId));
-            const isBookingWeekOpened = bookingWeekOpenDoc.exists;
 
             // reservationSummary는 이미 위에서 읽음 (중복 읽기 제거)
 
@@ -1612,8 +1610,7 @@ export const batchCreateReservations = functions.https.onCall(async (data, conte
                         capacity,
                         reservedCount: reservedCountForEligibility,
                         enrollmentCanReserve,
-                        skipOpenPolicy: isOverrideSession || isBookingWeekOpened,
-                        isBookingWeekOpened,
+                        skipOpenPolicy: isOverrideSession,
                     });
 
                     if (!eligibility.canReserve) {
@@ -1955,8 +1952,10 @@ export const removeMemberFromPlace = functions.https.onCall(async (data, context
         throw new functions.https.HttpsError('not-found', '플레이스를 찾을 수 없습니다.');
     }
     const placeData = placeDoc.data() as any;
-    const placeAdminId = placeData?.adminId ? String(placeData.adminId) : '';
-    if (placeAdminId && targetUserId === placeAdminId) {
+    const adminIds: string[] = Array.isArray(placeData?.adminIds)
+        ? (placeData.adminIds as unknown[]).map((x) => String(x)).filter(Boolean)
+        : [];
+    if (adminIds.includes(targetUserId)) {
         logFunctionError(functionName, new Error('Cannot remove place owner'), { placeId, targetUserId });
         throw new functions.https.HttpsError(
             'failed-precondition',
@@ -2470,7 +2469,7 @@ export const deleteCourse = functions.https.onCall(async (data, context) => {
     // 3.5) reservationSummary 정리 (코스 삭제 시 해당 코스의 집계 문서 일괄 삭제)
     const deletedSummaries = await deleteSummariesForCourse(db, placeId, courseId);
 
-    // 4) courseOverrides (add/cancel/capacity) / bookingWeekOpens 정리
+    // 4) courseOverrides (add/cancel/capacity) 정리 (bookingWeekOpens는 과거 데이터 정리용)
     const deletedCourseOverrides = await deleteByQuery(
         db,
         db.collection('courseOverrides').where('placeId', '==', placeId).where('courseId', '==', courseId),
@@ -3368,7 +3367,8 @@ export const sendUpcomingSessionNotifications = functions.pubsub
 /**
  * 주기적 과거 데이터 정리 (매일 새벽 4시)
  * - 현재 시점 기준 30일 이전 데이터 삭제
- * - courseOverrides, reservationSummary, bookingWeekOpens (각 단계 사이 2초 텀)
+ * - courseOverrides, reservationSummary (각 단계 사이 2초 텀)
+ * - bookingWeekOpens는 과거 데이터 정리용 (더 이상 사용하지 않는 기능)
  * - reservations 컬렉션은 정리하지 않음 (사용자 예약 히스토리 보존)
  */
 const CLEANUP_DAYS_AGO = 30;
@@ -3410,7 +3410,7 @@ export const cleanupOldData = functions.pubsub
             }
             await sleep(CLEANUP_STEP_DELAY_MS);
 
-            // 3) bookingWeekOpens (weekStartDate < 30일 전 — 이미 지난 주의 미리예약 열기 문서)
+            // 3) bookingWeekOpens (과거 데이터 정리용 — 더 이상 사용하지 않는 기능의 레거시 문서)
             const bwoQuery = db.collection('bookingWeekOpens')
                 .where('weekStartDate', '<', cutoffString)
                 .orderBy('weekStartDate');
@@ -4065,7 +4065,7 @@ export const searchPlaces = functions.https.onCall(async (data, context) => {
     const db = admin.firestore();
     const snapshot = await db.collection('places').limit(300).get();
     const maxResults = 100;
-    const places: { id: string; name: string; adminId: string; description?: string; location?: string; imageUrl?: string; appBarText?: string; greetingText?: string; courses: unknown[] }[] = [];
+    const places: { id: string; name: string; adminIds: string[]; description?: string; location?: string; imageUrl?: string; appBarText?: string; greetingText?: string; courses: unknown[] }[] = [];
 
     for (const doc of snapshot.docs) {
         if (places.length >= maxResults) break;
@@ -4076,10 +4076,14 @@ export const searchPlaces = functions.https.onCall(async (data, context) => {
         const locationMatch = location.toLowerCase().includes(query);
         if (!nameMatch && !locationMatch) continue;
 
+        const rawAdminIds = d.adminIds;
+        const adminIds: string[] = Array.isArray(rawAdminIds)
+            ? (rawAdminIds as unknown[]).map((x) => String(x)).filter(Boolean)
+            : [];
         places.push({
             id: doc.id,
             name: name,
-            adminId: (d.adminId as string) ?? '',
+            adminIds,
             description: d.description as string | undefined,
             location: location || undefined,
             imageUrl: d.imageUrl as string | undefined,
@@ -4318,8 +4322,8 @@ export const createPlaceWithMember = functions.https.onCall(async (data, context
 
     const db = admin.firestore();
 
-    // 중복: 같은 adminId + 같은 이름(대소문자 무시)
-    const existingSnap = await db.collection('places').where('adminId', '==', adminId).get();
+    // 중복: 해당 사용자가 소유한 플레이스 중 같은 이름(대소문자 무시)
+    const existingSnap = await db.collection('places').where('adminIds', 'array-contains', adminId).get();
     const nameLower = name.toLowerCase();
     for (const doc of existingSnap.docs) {
         if ((String(doc.data().name || '')).toLowerCase() === nameLower) {
@@ -4334,7 +4338,7 @@ export const createPlaceWithMember = functions.https.onCall(async (data, context
     const placeData: Record<string, unknown> = {
         id: placeId,
         name,
-        adminId,
+        adminIds: [adminId],
         hideGreeting,
         courses: [],
     };
@@ -4365,7 +4369,7 @@ export const createPlaceWithMember = functions.https.onCall(async (data, context
     const placePayload: Record<string, unknown> = {
         id: placeId,
         name,
-        adminId,
+        adminIds: [adminId],
         description: description ?? null,
         greetingText: greetingText ?? null,
         hideGreeting,
@@ -4456,33 +4460,49 @@ export const inviteSubManagerForCourse = functions.https.onCall(async (data, con
         const existingUserId = userSnap.docs[0].id;
         const memberRef = db.collection('places').doc(placeId).collection('members').doc(existingUserId);
         const memberSnap = await memberRef.get();
-        const memberData = memberSnap.data() || {};
-        const currentRole = String((memberData.role as string) ?? 'member').toLowerCase();
-        const beforeIds = Array.isArray(memberData.manageableCourseIds)
-            ? (memberData.manageableCourseIds as string[]).map((id: string) => String(id)).filter(Boolean)
-            : [];
-        if (beforeIds.includes(courseId)) {
-            logFunctionSuccess(functionName, { existingMember: true, alreadyHasCourse: true });
-            return { success: true, existingMember: true, alreadyHasCourse: true };
+        if (memberSnap.exists) {
+            const memberData = memberSnap.data() || {};
+            const currentRole = String((memberData.role as string) ?? 'member').toLowerCase();
+            const beforeIds = Array.isArray(memberData.manageableCourseIds)
+                ? (memberData.manageableCourseIds as string[]).map((id: string) => String(id)).filter(Boolean)
+                : [];
+            if (beforeIds.includes(courseId)) {
+                logFunctionSuccess(functionName, { existingMember: true, alreadyHasCourse: true });
+                return { success: true, existingMember: true, alreadyHasCourse: true };
+            }
+            const nextIds = [...beforeIds, courseId];
+            const updateData: Record<string, unknown> = {
+                manageableCourseIds: nextIds,
+                updatedAt: now,
+            };
+            if (adminDisplayName != null) (updateData as any).adminDisplayName = adminDisplayName;
+            if (currentRole === 'member') {
+                (updateData as any).role = 'submanager';
+            }
+            await memberRef.update(updateData);
+            logFunctionSuccess(functionName, {
+                existingMember: true,
+                manageableCourseIds: nextIds.length,
+                promoted: currentRole === 'member',
+            });
+            return { success: true, existingMember: true, promoted: currentRole === 'member' };
         }
-        const nextIds = [...beforeIds, courseId];
-        const updateData: Record<string, unknown> = {
-            manageableCourseIds: nextIds,
+
+        // 앱 유저지만 이 플레이스 멤버 아님 → members에 새로 넣고 코스매니저로 지정 (pending 말고)
+        await memberRef.set({
+            userId: existingUserId,
+            role: 'submanager',
+            adminDisplayName: adminDisplayName || null,
+            phoneNumber: koreaPhone,
+            manageableCourseIds: [courseId],
+            createdAt: now,
             updatedAt: now,
-        };
-        if (adminDisplayName != null) (updateData as any).adminDisplayName = adminDisplayName;
-        if (currentRole === 'member') {
-            (updateData as any).role = 'submanager';
-        }
-        await memberRef.update(updateData);
-        logFunctionSuccess(functionName, {
-            existingMember: true,
-            manageableCourseIds: nextIds.length,
-            promoted: currentRole === 'member',
-        });
-        return { success: true, existingMember: true, promoted: currentRole === 'member' };
+        }, { merge: true });
+        logFunctionSuccess(functionName, { newMember: true, manageableCourseIds: 1 });
+        return { success: true, newMember: true };
     }
 
+    // users에도 없음 → 미가입자 초대용 pendingMember
     await pendingRef.set({
         placeId,
         phoneNumber: koreaPhone,
@@ -4490,6 +4510,110 @@ export const inviteSubManagerForCourse = functions.https.onCall(async (data, con
         role: 'submanager',
         managedCourseIds: [courseId],
         allowedCourseIds: [],
+        adminDisplayName: adminDisplayName || null,
+        createdAt: now,
+    });
+    logFunctionSuccess(functionName, { pending: true });
+    return { success: true, pending: true };
+});
+
+/**
+ * 전체 매니저 초대 (전화번호 직접 입력 시, 코스매니저와 동일한 우선순위)
+ * 1순위: pendingMembers에 해당 전화번호 문서 있음 → role 'manager'로 업데이트
+ * 2순위: users에 해당 전화번호 있음 → 이 플레이스 members 있음/없음에 따라 role manager + place.adminIds 반영
+ * 후순위: users에도 없음 → pendingMembers 새 문서 role 'manager' (가입 시 createEnrollmentsFromPendingMembers에서 adminIds 반영)
+ */
+export const inviteFullManager = functions.https.onCall(async (data, context) => {
+    const functionName = 'inviteFullManager';
+    logFunctionStart(functionName, {});
+
+    if (!context.auth?.uid) {
+        throw new functions.https.HttpsError('unauthenticated', '로그인이 필요합니다.');
+    }
+    const adminId = context.auth.uid;
+    const placeId = String(data?.placeId ?? '').trim();
+    const phoneNumber = String(data?.phoneNumber ?? '').trim();
+    const adminDisplayName = (data?.adminDisplayName as string)?.trim() || null;
+
+    if (!placeId || !phoneNumber) {
+        throw new functions.https.HttpsError('invalid-argument', 'placeId, phoneNumber가 필요합니다.');
+    }
+
+    const koreaPhone = normalizePhoneForStorage(phoneNumber);
+    await assertAdminForPlaceUid(adminId, placeId);
+
+    const db = admin.firestore();
+    const callerMemberSnap = await db.collection('places').doc(placeId).collection('members').doc(adminId).get();
+    const callerRole = String((callerMemberSnap.data()?.role as string) ?? '').toLowerCase();
+    if (callerRole === 'submanager') {
+        throw new functions.https.HttpsError(
+            'permission-denied',
+            '전체 매니저 추가는 매니저만 할 수 있습니다.',
+        );
+    }
+
+    const pendingId = `${placeId}_${koreaPhone}`;
+    const pendingRef = db.collection('places').doc(placeId).collection('pendingMembers').doc(pendingId);
+    const now = admin.firestore.Timestamp.now();
+
+    const pendingSnap = await pendingRef.get();
+    if (pendingSnap.exists) {
+        await pendingRef.update({
+            role: 'manager',
+            ...(adminDisplayName != null ? { adminDisplayName } : {}),
+            updatedAt: now,
+        });
+        logFunctionSuccess(functionName, { updated: true, pending: true });
+        return { success: true, updated: true, pending: true };
+    }
+
+    const userSnap = await db.collection('users').where('phoneNumber', '==', koreaPhone).limit(1).get();
+    if (!userSnap.empty) {
+        const existingUserId = userSnap.docs[0].id;
+        const placeRef = db.collection('places').doc(placeId);
+        const memberRef = placeRef.collection('members').doc(existingUserId);
+        const memberSnap = await memberRef.get();
+
+        const placeSnap = await placeRef.get();
+        const placeData = placeSnap.data() || {};
+        const adminIds: string[] = Array.isArray(placeData?.adminIds)
+            ? (placeData.adminIds as unknown[]).map((x) => String(x)).filter(Boolean)
+            : [];
+        if (adminIds.includes(existingUserId)) {
+            logFunctionSuccess(functionName, { existingManager: true });
+            return { success: true, existingManager: true };
+        }
+        const newAdminIds = [...adminIds, existingUserId];
+
+        // adminIds를 먼저 반영해 role만 manager인 불일치 방지 (place 업데이트 실패 시에도 member만 바뀌지 않게)
+        await placeRef.update({ adminIds: newAdminIds });
+
+        if (memberSnap.exists) {
+            await memberRef.update({
+                role: 'manager',
+                ...(adminDisplayName != null ? { adminDisplayName } : {}),
+                updatedAt: now,
+            });
+        } else {
+            await memberRef.set({
+                userId: existingUserId,
+                role: 'manager',
+                adminDisplayName: adminDisplayName || null,
+                phoneNumber: koreaPhone,
+                manageableCourseIds: [],
+                createdAt: now,
+                updatedAt: now,
+            }, { merge: true });
+        }
+        logFunctionSuccess(functionName, { existingMember: memberSnap.exists, newMember: !memberSnap.exists });
+        return { success: true, existingMember: memberSnap.exists, newMember: !memberSnap.exists };
+    }
+
+    await pendingRef.set({
+        placeId,
+        phoneNumber: koreaPhone,
+        invitedBy: adminId,
+        role: 'manager',
         adminDisplayName: adminDisplayName || null,
         createdAt: now,
     });

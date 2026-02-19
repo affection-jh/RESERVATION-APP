@@ -122,7 +122,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
       _ensureUserDataLoaded();
       _updateProviderContext();
       _subscribeReservationOperationEvents();
-      _subscribeBookingWeekOpens();
     });
   }
 
@@ -333,68 +332,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
     });
   }
 
-  /// 미리 열린 주차 구독 (CourseProvider에서 단일 구독 공유)
-  void _subscribeBookingWeekOpens() {
-    final placeId =
-        Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
-    if (placeId == null) return;
-    Provider.of<CourseProvider>(
-      context,
-      listen: false,
-    ).subscribeToBookingWeekOpens(placeId, course.id);
-    if (_coursePolicy != null) {
-      final opened = Provider.of<CourseProvider>(
-        context,
-        listen: false,
-      ).getBookingWeekOpens(placeId, course.id);
-      _updateAvailableWeekOffsets(_coursePolicy!, opened);
-    }
-  }
-
-  /// 정책 기반 주차 범위 계산 (미리 열린 주차 포함)
-  /// 이번 주(0)는 항상 탭에 포함.
-  void _updateAvailableWeekOffsets(
-    CoursePolicy policy, [
-    Set<String>? openedWeekStartDates,
-  ]) {
-    final opened =
-        openedWeekStartDates ??
-        (() {
-          final placeId =
-              Provider.of<PlaceProvider>(
-                context,
-                listen: false,
-              ).currentPlace?.id;
-          if (placeId == null) return <String>{};
-          return Provider.of<CourseProvider>(
-            context,
-            listen: false,
-          ).getBookingWeekOpens(placeId, course.id);
-        })();
-    // 정책 기반 기본 주차 범위
+  /// 정책 기반 주차 범위 계산. 이번 주(0)는 항상 탭에 포함.
+  void _updateAvailableWeekOffsets(CoursePolicy policy) {
     final baseOffsets = WeekRangeCalculator.getAvailableWeekOffsets(policy);
     final now = TimezoneUtils.getSeoulDateTime();
     final thisWeekMonday = CalendarUtils.startOfWeekMonday(now);
-
-    // 미리 열린 주차의 weekOffset 계산
-    final openedOffsets = <int>{};
-    for (final weekStartDateStr in opened) {
-      try {
-        final parts = weekStartDateStr.split('-');
-        final weekStartDate = DateTime(
-          int.parse(parts[0]),
-          int.parse(parts[1]),
-          int.parse(parts[2]),
-        );
-        final diffDays = weekStartDate.difference(thisWeekMonday).inDays;
-        final weekOffset = (diffDays / 7).round();
-        if (weekOffset >= 0) {
-          openedOffsets.add(weekOffset);
-        }
-      } catch (_) {
-        // 날짜 파싱 실패 시 스킵
-      }
-    }
 
     // highlightSession의 주차도 포함 (새 수업 일정 알림 등)
     final highlightOffsets = <int>{};
@@ -414,10 +356,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
       }
     }
 
-    // 정책 기반 주차 + 미리 열린 주차 + highlight 주차 합치기
     var sortedOffsets =
-        <int>{0, ...baseOffsets, ...openedOffsets, ...highlightOffsets}.toList()
-          ..sort();
+        <int>{0, ...baseOffsets, ...highlightOffsets}.toList()..sort();
 
     // 빈 리스트 방지 (clamp(0, -1) 예외 방지)
     if (sortedOffsets.isEmpty) {
@@ -1460,24 +1400,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
       enrollmentCanReserve: enrollmentCanReserve,
     );
 
-    // ✅ 관리자가 미리 예약 열기를 한 경우 잠금 해제
-    bool isBookingWeekOpened = false;
-    if (eligibility.reason == ReservationLockReason.notOpenedYet &&
-        placeId != null) {
-      final weekStart = CalendarUtils.startOfWeekMonday(date);
-      final weekStartDateString = CalendarUtils.formatDateYMD(weekStart);
-      isBookingWeekOpened = Provider.of<CourseProvider>(
-        context,
-        listen: false,
-      ).getBookingWeekOpens(placeId, course.id).contains(weekStartDateString);
-    }
-
-    // 미리 열린 주차인 경우 잠금 해제
-    final effectiveCanReserve =
-        eligibility.canReserve ||
-        (isBookingWeekOpened &&
-            eligibility.reason == ReservationLockReason.notOpenedYet);
-
+    final effectiveCanReserve = eligibility.canReserve;
     final isLocked = !effectiveCanReserve || !isEnrolled || userId == null;
     final isMyReserved = hasUserReservation;
     final canReserve = !isLocked && !isMyReserved;
@@ -1513,7 +1436,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
     );
 
     // 예약 불가(잠긴) 세션은 박스 숨김 — 세션 칸만 유지
-    if (isLocked && !isBookingWeekOpened) {
+    if (isLocked) {
       return Positioned(
         top: topPosition,
         left: _sessionPadding,
@@ -1807,7 +1730,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                     ),
                   ),
                 ),
-              if (!hasUserReservation && isLocked && !isBookingWeekOpened)
+              if (!hasUserReservation && isLocked)
                 Positioned(
                   top: 0,
                   right: 0,
@@ -1819,7 +1742,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 ),
               if (!hasUserReservation &&
                   isLocked &&
-                  !isBookingWeekOpened &&
                   eligibility.reason == ReservationLockReason.notOpenedYet &&
                   eligibility.openAt != null &&
                   sessionHeightPx >= 70)

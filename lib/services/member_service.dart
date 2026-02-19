@@ -367,6 +367,30 @@ class MemberService {
         .doc(inviteId);
   }
 
+  /// pending 멤버의 role만 변경 (예: 전체 매니저 초대 해제 시 role 'manager' → 'member')
+  /// [pendingDocId] userId가 'pending_xxx'일 때 'xxx' 부분 (placeId_normalizedPhone)
+  Future<bool> updatePendingMemberRole(
+    String placeId,
+    String pendingDocId,
+    String role,
+  ) async {
+    try {
+      final ref = _firestore
+          .collection('places')
+          .doc(placeId)
+          .collection('pendingMembers')
+          .doc(pendingDocId);
+      await ref.update({
+        'role': role,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      return true;
+    } catch (e) {
+      debugPrint('❌ [MemberService] updatePendingMemberRole 실패: $e');
+      return false;
+    }
+  }
+
   /// 부매니저가 관리 코스 0개일 때 일반 멤버로 전락 (서버에서 role·manageableCourseIds 갱신)
   Future<bool> demoteSubManagerToMemberIfNoCourses(String placeId) async {
     try {
@@ -398,6 +422,26 @@ class MemberService {
         .call({
       'placeId': placeId,
       'courseId': courseId,
+      'phoneNumber': normalized,
+      if (adminDisplayName != null && adminDisplayName.trim().isNotEmpty)
+        'adminDisplayName': adminDisplayName.trim(),
+    });
+    final data = result.data as Map<String, dynamic>?;
+    return data != null && data['success'] == true;
+  }
+
+  /// 전체 매니저 초대 (전화번호 직접 입력, 코스매니저와 동일 우선순위: pending → users/members → pending 생성)
+  Future<bool> inviteFullManager({
+    required String placeId,
+    required String phoneNumber,
+    String? adminDisplayName,
+  }) async {
+    final normalized = _normalizePhone(phoneNumber);
+    if (normalized.length != 11) return false;
+    final result = await FirebaseFunctions.instance
+        .httpsCallable('inviteFullManager')
+        .call({
+      'placeId': placeId,
       'phoneNumber': normalized,
       if (adminDisplayName != null && adminDisplayName.trim().isNotEmpty)
         'adminDisplayName': adminDisplayName.trim(),

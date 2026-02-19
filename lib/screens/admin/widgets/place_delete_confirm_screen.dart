@@ -83,6 +83,10 @@ class _PlaceDeleteConfirmScreenState extends State<PlaceDeleteConfirmScreen> {
         }
         return;
       }
+      // 나가기 후에도 요청이 이미 나간 상태면 로딩 스낵바로 진행 중임을 표시 (완료 시 success/error로 대체됨)
+      final loadCtx = navigatorKey.currentContext;
+      if (loadCtx != null) SnackbarUtil.showLoading(loadCtx, '삭제 중…');
+
       final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
       final userService = UserService();
@@ -90,7 +94,6 @@ class _PlaceDeleteConfirmScreenState extends State<PlaceDeleteConfirmScreen> {
       final phoneNumberForWaiting = currentAdmin?.phoneNumber ?? '';
 
       await placeProvider.deletePlace(widget.place.id);
-      if (_leaveRequested) return;
 
       if (currentAdmin != null) {
         final updatedAdmin = currentAdmin.removePlace(widget.place.id);
@@ -99,12 +102,11 @@ class _PlaceDeleteConfirmScreenState extends State<PlaceDeleteConfirmScreen> {
           authProvider.setCurrentAdmin(updatedAdmin);
         }
       }
-      if (_leaveRequested) return;
 
-      if (mounted) {
-        // 완료되면 waiting_screen으로 이동 (기존 화면 스택 제거)
-        // skipAutoEnter: true → 삭제 후 남은 플레이스 1개여도 자동 진입하지 않음
-        Navigator.of(context).pushNamedAndRemoveUntil(
+      // 삭제 성공 시 항상 PlaceWaiting으로 이동 (나가기 후 백그라운드 완료여도 동일)
+      final navContext = mounted ? context : navigatorKey.currentContext;
+      if (navContext != null) {
+        Navigator.of(navContext).pushNamedAndRemoveUntil(
           '/place-waiting',
           (route) => false,
           arguments: {
@@ -112,23 +114,21 @@ class _PlaceDeleteConfirmScreenState extends State<PlaceDeleteConfirmScreen> {
             'skipAutoEnter': true,
           },
         );
-        final ctx = navigatorKey.currentContext;
-        if (ctx != null) {
-          SnackbarUtil.showSuccess(ctx, '플레이스가 삭제되었습니다.');
-        }
+        SnackbarUtil.showSuccess(navContext, '플레이스가 삭제되었습니다.');
       }
     } catch (e) {
-      if (_leaveRequested) return;
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
+      // 나가기한 뒤 실패한 경우에도 결과 알림
+      final resultCtx = mounted ? context : navigatorKey.currentContext;
+      if (resultCtx != null) {
         SnackbarUtil.showInfoFromError(
-          context,
+          resultCtx,
           e,
           fallback: '플레이스 삭제에 실패했습니다. 잠시 후 다시 시도해주세요.',
         );
       }
+    } finally {
+      SnackbarUtil.dismissLoading();
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 

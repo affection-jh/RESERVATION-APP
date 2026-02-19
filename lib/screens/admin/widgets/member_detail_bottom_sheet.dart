@@ -638,7 +638,7 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     final place =
         Provider.of<PlaceProvider>(context, listen: false).currentPlace;
     if (place == null) return false;
-    if (place.adminId == widget.member.userId) return false;
+    if (place.adminIds.contains(widget.member.userId)) return false;
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     if (authProvider.isSubManagerForPlace(place.id)) return false;
     return true;

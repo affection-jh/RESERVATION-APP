@@ -424,15 +424,19 @@ class _UserReservationManageBottomSheetState
                                             setState(() {
                                               _isSubmitting = true;
                                             });
-                                            final ok =
-                                                await _createReservation();
-                                            if (!mounted) return;
-                                            if (ok) {
-                                              Navigator.of(context).pop();
-                                            } else {
-                                              setState(() {
-                                                _isSubmitting = false;
-                                              });
+                                            try {
+                                              final ok =
+                                                  await _createReservation();
+                                              if (!mounted) return;
+                                              if (ok) {
+                                                Navigator.of(context).pop();
+                                              }
+                                            } finally {
+                                              if (mounted) {
+                                                setState(() {
+                                                  _isSubmitting = false;
+                                                });
+                                              }
                                             }
                                           }
                                           : null,

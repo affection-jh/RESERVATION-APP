@@ -6,6 +6,12 @@ class ErrorMessageUtil {
     if (raw.isEmpty) return '오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
 
     final lower = raw.toLowerCase();
+    if (lower.contains('permission-denied') || lower.contains('permission_denied')) {
+      return '권한이 없습니다.';
+    }
+    if (lower == 'internal' || lower.trim() == 'internal') {
+      return '서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.';
+    }
     final trimmed =
         raw.replaceFirst(RegExp(r'^Exception:\s*'), '').trim();
 

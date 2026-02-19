@@ -8,6 +8,7 @@ import '../../../services/member_service.dart';
 import '../../../theme/app_colors.dart';
 import '../../../utils/timezone_utils.dart';
 import '../../../utils/snackbar_util.dart';
+import '../../../utils/navigator_key.dart';
 import '../../../utils/format_utils.dart';
 import '../../../widgets/common_dialog.dart';
 import '../../../widgets/valid_period_input_widget.dart';
@@ -175,7 +176,10 @@ class _MemberCourseEnrollmentScreenState
       _isSaving = true;
       _courseErrorText = null;
     });
-    if (_leaveRequested) return;
+    if (_leaveRequested) {
+      if (mounted) setState(() => _isSaving = false);
+      return;
+    }
 
     try {
       final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
@@ -213,6 +217,8 @@ class _MemberCourseEnrollmentScreenState
               .cast<Map<String, dynamic>>()
               .toList();
 
+      // 스낵바는 나가기한 뒤 저장 중일 때만 띄움 (화면 안에 있을 때는 안 띄움)
+
       // ⚠️ 중앙 로직: pending/일반 멤버 자동 분기 처리
       final memberService = MemberService();
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
@@ -227,7 +233,6 @@ class _MemberCourseEnrollmentScreenState
         adminId: adminId,
         adminDisplayName: widget.member.adminDisplayName,
       );
-      if (_leaveRequested) return;
 
       if (!success) {
         throw Exception('코스 등록에 실패했습니다.');
@@ -240,22 +245,28 @@ class _MemberCourseEnrollmentScreenState
       );
       memberProvider.setPlaceId(placeId);
 
-      if (mounted) {
+      final resultCtx = mounted ? context : navigatorKey.currentContext;
+      if (resultCtx != null) {
         SnackbarUtil.showSuccess(
-          context,
+          resultCtx,
           '${_selectedCourseIds.length}개의 코스가 등록되었습니다.',
         );
+      }
+      if (_leaveRequested) return;
+      if (mounted) {
         Navigator.of(context).pop(true);
       }
     } catch (e) {
-      if (mounted) {
+      final resultCtx = mounted ? context : navigatorKey.currentContext;
+      if (resultCtx != null) {
         SnackbarUtil.showInfoFromError(
-          context,
+          resultCtx,
           e,
           fallback: '코스 등록 중 오류가 발생했습니다.',
         );
       }
     } finally {
+      SnackbarUtil.dismissLoading();
       if (mounted) {
         setState(() {
           _isSaving = false;
@@ -309,6 +320,8 @@ class _MemberCourseEnrollmentScreenState
       onLeave: () => _leaveRequested = true,
     );
     if (leave && mounted) {
+      final loadCtx = navigatorKey.currentContext;
+      if (loadCtx != null) SnackbarUtil.showLoading(loadCtx, '등록 중…');
       setState(() => _isSaving = false);
       return true;
     }

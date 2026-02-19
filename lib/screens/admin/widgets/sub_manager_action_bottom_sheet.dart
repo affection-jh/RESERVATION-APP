@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/svg.dart';
 import 'package:provider/provider.dart';
 import '../../../theme/app_colors.dart';
 import '../../../models/member_view.dart';
@@ -264,14 +265,29 @@ class _SubManagerActionBottomSheetState
                         ],
                       ),
                     ),
-                    _HeaderIconButton(
-                      icon: Icons.edit_outlined,
-                      onPressed: _handleEditName,
+                    _buildSvgIconButton(
+                      svgPath: 'assets/icons/edit.svg',
+                      color: AppColors.primaryGreen,
+                      onTap: _handleEditName,
                     ),
                     const SizedBox(width: 8),
-                    _HeaderIconButton(
-                      icon: Icons.close,
-                      onPressed: () => Navigator.of(context).pop(),
+                    GestureDetector(
+                      onTap: () => Navigator.of(context).pop(),
+                      child: Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: AppColors.textPrimary.withOpacity(0.08),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Center(
+                          child: Icon(
+                            Icons.close,
+                            size: 20,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -309,26 +325,28 @@ class _SubManagerActionBottomSheetState
       ),
     );
   }
-}
 
-/// 헤더용 원형 아이콘 버튼 (연필, 닫기 등)
-class _HeaderIconButton extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onPressed;
-
-  const _HeaderIconButton({required this.icon, required this.onPressed});
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: AppColors.backgroundLight,
-      shape: const CircleBorder(),
-      child: InkWell(
-        onTap: onPressed,
-        customBorder: const CircleBorder(),
-        child: Container(
-          padding: const EdgeInsets.all(10),
-          child: Icon(icon, size: 22, color: AppColors.textSecondary),
+  Widget _buildSvgIconButton({
+    required String svgPath,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.08),
+          shape: BoxShape.circle,
+        ),
+        child: Center(
+          child: SvgPicture.asset(
+            svgPath,
+            width: 20,
+            height: 20,
+            colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
+          ),
         ),
       ),
     );

@@ -87,11 +87,8 @@ class _WeeklyOverrideScheduleScreenState
   Map<int, List<SessionDraft>> _initialDaySessions = {};
   Map<int, Set<String>> _initialCancelledSessions = {};
 
-  // 정책 기반 주차 범위 (기본값: 0~2주, 정책 + 2주까지 확장)
+  // 정책 기반 주차 범위 (예약 정책에 맞게만 표시)
   List<int> _availableWeekOffsets = [0, 1, 2]; // 기본값
-
-  // 정책 정보 (주차 오픈 여부 확인용)
-  CoursePolicy? _coursePolicy;
 
   /// 저장 성공 후 pop 또는 사용자 뒤로가기 시 한 번만 pop 되도록 방지
   bool _isLeaving = false;
@@ -103,6 +100,23 @@ class _WeeklyOverrideScheduleScreenState
     if (_isLeaving || !mounted) return;
     _isLeaving = true;
     Navigator.of(context).pop(result);
+  }
+
+  /// 변경사항 있을 때 나가기 전 확인 (저장하지 않고 나갈 때)
+  Future<void> _handleBackWithUnsavedChanges() async {
+    if (!_hasChanges()) {
+      _popOnce(null);
+      return;
+    }
+    final leave = await CommonDialog.show(
+      context: context,
+      title: '변경사항이 있습니다',
+      message: '저장하지 않고 나가시겠습니까?',
+      cancelText: '취소',
+      confirmText: '나가기',
+      confirmButtonColor: Colors.red,
+    );
+    if (leave == true && mounted) _popOnce(null);
   }
 
   /// 저장 중 뒤로가기/나가기 처리
@@ -119,6 +133,9 @@ class _WeeklyOverrideScheduleScreenState
       },
     );
     if (leave && mounted) {
+      // 나간 뒤에도 저장이 계속되므로, 이때만 스낵바로 진행/완료 표시
+      final loadCtx = navigatorKey.currentContext;
+      if (loadCtx != null) SnackbarUtil.showLoading(loadCtx, '저장 중…');
       setState(() => _isSaving = false);
       _popOnce(null);
     }
@@ -127,7 +144,8 @@ class _WeeklyOverrideScheduleScreenState
   /// 부매니저일 때는 allowedCourseIds만 반환
   List<reservation_models.Course> _getCourses(CourseProvider cp) {
     var list = cp.courses;
-    if (widget.allowedCourseIds != null && widget.allowedCourseIds!.isNotEmpty) {
+    if (widget.allowedCourseIds != null &&
+        widget.allowedCourseIds!.isNotEmpty) {
       final allowed = widget.allowedCourseIds!.toSet();
       list = list.where((c) => allowed.contains(c.id)).toList();
     }
@@ -239,16 +257,18 @@ class _WeeklyOverrideScheduleScreenState
                   .where((c) => c.id == widget.selectedCourseId)
                   .toList()
               : courseProvider.courses;
-      if (widget.allowedCourseIds != null && widget.allowedCourseIds!.isNotEmpty) {
+      if (widget.allowedCourseIds != null &&
+          widget.allowedCourseIds!.isNotEmpty) {
         final allowed = widget.allowedCourseIds!.toSet();
-        targetCourses = targetCourses.where((c) => allowed.contains(c.id)).toList();
+        targetCourses =
+            targetCourses.where((c) => allowed.contains(c.id)).toList();
       }
 
       for (final course in targetCourses) {
         newRegularSessions[course.id] = course.sessions;
       }
 
-      // 정책에서 허용하는 주차 + 2주까지만 선택 가능하도록 설정
+      // 예약 정책에 맞는 주차만 표시
       List<int> newAvailableWeekOffsets = [0, 1, 2]; // 기본값
       CoursePolicy? loadedPolicy =
           CoursePolicy.defaultValue; // selectedCourseId 없어도 null 체크 방지
@@ -264,18 +284,13 @@ class _WeeklyOverrideScheduleScreenState
           loadedPolicy = CoursePolicy.defaultValue;
         }
 
-        // 2) 주차 탭 범위 = 정책 기반 + 2주(관리자 편집 여유)
+        // 2) 주차 탭 범위 = 예약 정책과 동일
         final policyOffsets = WeekRangeCalculator.getAvailableWeekOffsets(
           loadedPolicy,
         );
         if (policyOffsets.isNotEmpty) {
-          final maxPolicyWeek = policyOffsets.reduce((a, b) => a > b ? a : b);
-          final maxWeek = maxPolicyWeek + 2;
-          newAvailableWeekOffsets = List.generate(maxWeek + 1, (i) => i);
+          newAvailableWeekOffsets = List.from(policyOffsets);
         }
-
-        // 3) bookingWeekOpens는 CourseProvider에서 구독·참조 (미리 예약 현 주)
-        courseProvider.subscribeToBookingWeekOpens(placeId, selectedCourseId);
       }
 
       // 비정기 일정 로드 (선택된 코스만)
@@ -420,10 +435,9 @@ class _WeeklyOverrideScheduleScreenState
           _regularSessions = newRegularSessions;
           _cancelledSessions = newCancelledSessions;
           _daySessions = newDaySessions;
-          // 주차 범위 업데이트 (정책과 상관없이 0~9주까지 확장)
+          // 주차 범위 업데이트 (예약 정책에 맞게)
           _availableWeekOffsets = newAvailableWeekOffsets;
           // 정책 저장
-          _coursePolicy = loadedPolicy;
           // 초기 상태 저장 (변경사항 추적용)
           _initialDaySessions = Map.fromEntries(
             _daySessions.entries.map(
@@ -503,100 +517,6 @@ class _WeeklyOverrideScheduleScreenState
     return false;
   }
 
-  /// 관리자가 "미리 예약 열기"로 열었는지 (bookingWeekOpens에 포함 여부)
-  /// [listen] true: build 시 사용(Provider 변경 시 리빌드), false: 이벤트 핸들러에서 사용
-  bool _isWeekPreOpenedByAdmin(BuildContext context, {bool listen = true}) {
-    final placeId =
-        Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
-    final courseId = widget.selectedCourseId;
-    if (placeId == null || courseId == null) return false;
-    return Provider.of<CourseProvider>(
-      context,
-      listen: listen,
-    ).getBookingWeekOpens(placeId, courseId).contains(_weekStartDateString);
-  }
-
-  /// 현재 주차가 정책상 오픈되었는지 확인
-  /// (미리 열린 주차인 경우 true 반환)
-  /// [listen] true: build 시 사용(Provider 변경 시 리빌드), false: 이벤트 핸들러에서 사용
-  bool _isWeekOpenedByPolicy(BuildContext context, {bool listen = true}) {
-    // 1) 먼저 미리 열린 주차인지 확인 (관리자가 "미리 예약 열기"를 한 경우)
-    final placeId =
-        Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
-    final courseId = widget.selectedCourseId;
-    if (placeId != null && courseId != null) {
-      final isOpened = Provider.of<CourseProvider>(
-        context,
-        listen: listen,
-      ).getBookingWeekOpens(placeId, courseId).contains(_weekStartDateString);
-      if (isOpened) return true;
-    }
-
-    final policy = _coursePolicy;
-    if (policy == null || widget.selectedCourseId == null) {
-      return true;
-    }
-
-    final now = TimezoneUtils.getSeoulDateTime();
-    final strategyType = policy.openStrategy.type;
-
-    switch (strategyType) {
-      case BookingOpenStrategyType.rollingWindow:
-        // rollingWindow: "오늘부터 N일 뒤까지 오픈"
-        // 주차 단위 오픈 판단은 "해당 주의 마지막 날짜(일요일)가 오픈 범위 안에 들어오는가"로 통일
-        return _isWeekOpenedByRollingWindowPolicy();
-
-      case BookingOpenStrategyType.weeklyRelease:
-        // weeklyRelease: 주차 시작 날짜(월요일) 기준으로 오픈 시간 계산
-        // 정책: "매주 월요일 09:00에 1주 뒤까지"라면
-        // 다음 주가 오픈되는 시간은 이번 주 월요일 09:00
-        final openAt = _computeOpenAtForWeeklyRelease(_weekStart);
-        if (openAt == null) {
-          return true; // 오픈 시간을 계산할 수 없으면 오픈된 것으로 간주
-        }
-        return now.isAfter(openAt) || now.isAtSameMomentAs(openAt);
-    }
-  }
-
-  /// rollingWindow 정책: 주차 단위 오픈 여부 판단
-  bool _isWeekOpenedByRollingWindowPolicy() {
-    if (_coursePolicy == null) return true;
-    final days = _coursePolicy!.openStrategy.rollingWindow?.windowDays ?? 21;
-    final today = TimezoneUtils.getSeoulToday();
-    final openUntil = today.add(Duration(days: (days - 1).clamp(0, 3650)));
-    final weekEnd = TimezoneUtils.getSeoulDateOnly(
-      _weekStart.add(const Duration(days: 6)),
-    );
-    // 주 마지막 날짜가 오픈 범위 내면 "해당 주는 오픈"으로 간주
-    return !weekEnd.isAfter(openUntil);
-  }
-
-  /// weeklyRelease 정책: 주차 시작 날짜(월요일) 기준으로 오픈 시간 계산
-  DateTime? _computeOpenAtForWeeklyRelease(DateTime weekStartDate) {
-    if (_coursePolicy == null) return null;
-
-    final s = _coursePolicy!.openStrategy.weeklyRelease;
-    if (s == null) return null;
-
-    final dateOnly = TimezoneUtils.getSeoulDateOnly(weekStartDate);
-
-    // weekStartDate는 이미 월요일이므로 그대로 사용
-    // weeksAhead 의미(정책 UI와 일치):
-    // - weeksAhead=1: 이번주만 오픈 (해당 주의 releaseDay/releaseTime에 오픈)
-    // - weeksAhead=2: 이번주+다음주 오픈 (다음 주는 이번주의 releaseDay/releaseTime에 오픈)
-    final backWeeks = (s.weeksAhead - 1).clamp(0, 520);
-    final openWeekStart = dateOnly.subtract(Duration(days: 7 * backWeeks));
-    final parts = s.releaseTime.split(':');
-    final h = int.tryParse(parts[0]) ?? 10;
-    final m = int.tryParse(parts[1]) ?? 0;
-
-    // 오픈 주차의 releaseDayOfWeek 요일에 releaseTime 시간에 오픈
-    return TimezoneUtils.combineDateAndTimeSeoul(
-      openWeekStart.add(Duration(days: (s.releaseDayOfWeek - 1))),
-      '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}',
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     // 월~일(1~7) 항상 표시, 지나간 요일만 제외
@@ -611,10 +531,14 @@ class _WeeklyOverrideScheduleScreenState
         }).toList();
 
     return PopScope(
-      canPop: !_isLeaving && !_isSaving,
+      canPop: !_isLeaving && !_isSaving && !_hasChanges(),
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
-        if (_isSaving) await _handleBackDuringSave();
+        if (_isSaving) {
+          await _handleBackDuringSave();
+        } else if (_hasChanges()) {
+          await _handleBackWithUnsavedChanges();
+        }
       },
       child: Scaffold(
         backgroundColor: AppColors.backgroundWhite,
@@ -627,7 +551,7 @@ class _WeeklyOverrideScheduleScreenState
             onPressed:
                 _isSaving
                     ? () => _handleBackDuringSave()
-                    : () => _popOnce(null),
+                    : () => _handleBackWithUnsavedChanges(),
             color: AppColors.textPrimary,
           ),
           title: Column(
@@ -808,9 +732,7 @@ class _WeeklyOverrideScheduleScreenState
                         onPressed:
                             _isSaving
                                 ? null
-                                : (_isWeekOpenedByPolicy(context)
-                                    ? (_hasChanges() ? _saveOverrides : null)
-                                    : _saveOverrides),
+                                : (_hasChanges() ? _saveOverrides : null),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.primaryGreen,
                           foregroundColor: Colors.white,
@@ -834,33 +756,15 @@ class _WeeklyOverrideScheduleScreenState
                                     ),
                                   ),
                                 )
-                                : Text(
-                                  _isWeekOpenedByPolicy(context)
-                                      ? '저장'
-                                      : '미리 예약 열기',
-                                  style: const TextStyle(
+                                : const Text(
+                                  '저장',
+                                  style: TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.w600,
                                   ),
                                 ),
                       ),
                     ),
-                    if (_isWeekPreOpenedByAdmin(context)) ...[
-                      const SizedBox(height: 8),
-                      TextButton(
-                        onPressed: _isSaving ? null : _closePreOpenedWeek,
-                        style: TextButton.styleFrom(
-                          foregroundColor: AppColors.textSecondary,
-                        ),
-                        child: const Text(
-                          '미리 예약 닫기',
-                          style: TextStyle(
-                            fontSize: 16,
-                            color: AppColors.textSecondary,
-                          ),
-                        ),
-                      ),
-                    ],
                   ],
                 ),
               ),
@@ -1130,7 +1034,8 @@ class _WeeklyOverrideScheduleScreenState
     final courses = _getCourses(courseProvider);
     Color courseColor = AppColors.primaryGreen;
     if (widget.selectedCourseId != null) {
-      final selectedCourse = courses.where((c) => c.id == widget.selectedCourseId).firstOrNull;
+      final selectedCourse =
+          courses.where((c) => c.id == widget.selectedCourseId).firstOrNull;
       if (selectedCourse != null) {
         courseColor = Color(selectedCourse.color);
       }
@@ -1259,86 +1164,59 @@ class _WeeklyOverrideScheduleScreenState
       isDismissible: true,
       enableDrag: true,
       useSafeArea: true,
-      builder: (context) => SessionEditBottomSheet(
-              initialStartTime: startTime,
-              initialEndTime: endTime,
-              initialCapacity:
-                  existingSession?.capacity ??
-                  (_defaultCapacity == -1 ? 0 : _defaultCapacity),
-              courseName: '비정기 세션',
-              dayOfWeek: dayOfWeek,
-              selectedDays: {dayOfWeek},
-              courseColor: AppColors.primaryGreen,
-              canBulkCancel: false,
-              existingSessions: existingSessionsForDay,
-              allDaySessions: _daySessions,
-              isEditMode: isEditMode,
-              onBulkRegistrationChanged: (_) {
-                // 비정기 일정에서는 일괄 등록 미지원
-              },
-              onCancel: () {
-                setState(() {
-                  _previewStartTime = null;
-                  _previewEndTime = null;
-                  _previewDayOfWeek = null;
-                });
-                _clearSelectionForDay(dayOfWeek);
-              },
-              onRegister: (newStartTime, newEndTime, capacity, bulkDays) {
-                setState(() {
-                  _previewStartTime = null;
-                  _previewEndTime = null;
-                  _previewDayOfWeek = null;
-                  _defaultCapacity = capacity;
+      builder:
+          (context) => SessionEditBottomSheet(
+            initialStartTime: startTime,
+            initialEndTime: endTime,
+            initialCapacity:
+                existingSession?.capacity ??
+                (_defaultCapacity == -1 ? 0 : _defaultCapacity),
+            courseName: '비정기 세션',
+            dayOfWeek: dayOfWeek,
+            selectedDays: {dayOfWeek},
+            courseColor: AppColors.primaryGreen,
+            canBulkCancel: false,
+            existingSessions: existingSessionsForDay,
+            allDaySessions: _daySessions,
+            isEditMode: isEditMode,
+            onBulkRegistrationChanged: (_) {
+              // 비정기 일정에서는 일괄 등록 미지원
+            },
+            onCancel: () {
+              setState(() {
+                _previewStartTime = null;
+                _previewEndTime = null;
+                _previewDayOfWeek = null;
+              });
+              _clearSelectionForDay(dayOfWeek);
+            },
+            onRegister: (newStartTime, newEndTime, capacity, bulkDays) {
+              setState(() {
+                _previewStartTime = null;
+                _previewEndTime = null;
+                _previewDayOfWeek = null;
+                _defaultCapacity = capacity;
 
-                  if (bulkDays != null && bulkDays.isNotEmpty) {
-                    for (final bulkDay in bulkDays) {
-                      if (!_daySessions.containsKey(bulkDay)) {
-                        _daySessions[bulkDay] = [];
-                      }
-                      if (!_hasOverlap(bulkDay, newStartTime, newEndTime)) {
-                        if (isEditMode) {
-                          final index = _daySessions[bulkDay]!.indexWhere(
-                            (s) =>
-                                s.startTime == startTime &&
-                                s.endTime == endTime,
-                          );
-                          if (index != -1) {
-                            _daySessions[bulkDay]![index] = SessionDraft(
-                              startTime: newStartTime,
-                              endTime: newEndTime,
-                              capacity: capacity,
-                            );
-                          }
-                        } else {
-                          _daySessions[bulkDay]!.add(
-                            SessionDraft(
-                              startTime: newStartTime,
-                              endTime: newEndTime,
-                              capacity: capacity,
-                            ),
+                if (bulkDays != null && bulkDays.isNotEmpty) {
+                  for (final bulkDay in bulkDays) {
+                    if (!_daySessions.containsKey(bulkDay)) {
+                      _daySessions[bulkDay] = [];
+                    }
+                    if (!_hasOverlap(bulkDay, newStartTime, newEndTime)) {
+                      if (isEditMode) {
+                        final index = _daySessions[bulkDay]!.indexWhere(
+                          (s) =>
+                              s.startTime == startTime && s.endTime == endTime,
+                        );
+                        if (index != -1) {
+                          _daySessions[bulkDay]![index] = SessionDraft(
+                            startTime: newStartTime,
+                            endTime: newEndTime,
+                            capacity: capacity,
                           );
                         }
-                      }
-                    }
-                  } else {
-                    if (isEditMode) {
-                      final index = _daySessions[dayOfWeek]!.indexOf(
-                        existingSession,
-                      );
-                      if (index != -1) {
-                        _daySessions[dayOfWeek]![index] = SessionDraft(
-                          startTime: newStartTime,
-                          endTime: newEndTime,
-                          capacity: capacity,
-                        );
-                      }
-                    } else {
-                      if (!_daySessions.containsKey(dayOfWeek)) {
-                        _daySessions[dayOfWeek] = [];
-                      }
-                      if (!_hasOverlap(dayOfWeek, newStartTime, newEndTime)) {
-                        _daySessions[dayOfWeek]!.add(
+                      } else {
+                        _daySessions[bulkDay]!.add(
                           SessionDraft(
                             startTime: newStartTime,
                             endTime: newEndTime,
@@ -1348,22 +1226,49 @@ class _WeeklyOverrideScheduleScreenState
                       }
                     }
                   }
-                });
-                _clearSelectionForDay(dayOfWeek);
-              },
-              onDelete:
-                  isEditMode
-                      ? (bulkDays) {
-                        setState(() {
-                          _previewStartTime = null;
-                          _previewEndTime = null;
-                          _previewDayOfWeek = null;
-                          _daySessions[dayOfWeek]?.remove(existingSession);
-                        });
-                        _clearSelectionForDay(dayOfWeek);
-                      }
-                      : null,
-      ),
+                } else {
+                  if (isEditMode) {
+                    final index = _daySessions[dayOfWeek]!.indexOf(
+                      existingSession,
+                    );
+                    if (index != -1) {
+                      _daySessions[dayOfWeek]![index] = SessionDraft(
+                        startTime: newStartTime,
+                        endTime: newEndTime,
+                        capacity: capacity,
+                      );
+                    }
+                  } else {
+                    if (!_daySessions.containsKey(dayOfWeek)) {
+                      _daySessions[dayOfWeek] = [];
+                    }
+                    if (!_hasOverlap(dayOfWeek, newStartTime, newEndTime)) {
+                      _daySessions[dayOfWeek]!.add(
+                        SessionDraft(
+                          startTime: newStartTime,
+                          endTime: newEndTime,
+                          capacity: capacity,
+                        ),
+                      );
+                    }
+                  }
+                }
+              });
+              _clearSelectionForDay(dayOfWeek);
+            },
+            onDelete:
+                isEditMode
+                    ? (bulkDays) {
+                      setState(() {
+                        _previewStartTime = null;
+                        _previewEndTime = null;
+                        _previewDayOfWeek = null;
+                        _daySessions[dayOfWeek]?.remove(existingSession);
+                      });
+                      _clearSelectionForDay(dayOfWeek);
+                    }
+                    : null,
+          ),
     ).then((_) {
       setState(() {
         _previewStartTime = null;
@@ -1421,11 +1326,16 @@ class _WeeklyOverrideScheduleScreenState
       bool sendNotification = true; // 기본값: 알림 전송
 
       // 세션 정보 찾기
-      final courseProvider = Provider.of<CourseProvider>(context, listen: false);
+      final courseProvider = Provider.of<CourseProvider>(
+        context,
+        listen: false,
+      );
       final courses = _getCourses(courseProvider);
       final displayCourse =
           widget.selectedCourseId != null
-              ? courses.where((c) => c.id == widget.selectedCourseId).firstOrNull
+              ? courses
+                  .where((c) => c.id == widget.selectedCourseId)
+                  .firstOrNull
               : null;
 
       final sessionDate = _weekDates.firstWhere(
@@ -1545,61 +1455,6 @@ class _WeeklyOverrideScheduleScreenState
     }
   }
 
-  Future<void> _closePreOpenedWeek() async {
-    if (_isSaving) return;
-
-    final placeId =
-        Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
-    final courseId =
-        widget.selectedCourseId ?? _regularSessions.keys.firstOrNull;
-    if (placeId == null || courseId == null) return;
-
-    final confirmed = await CommonDialog.show(
-      context: context,
-      title: '미리 예약 닫기',
-      message: '이 주차의 예약을 미리 닫을까요? ',
-      cancelText: '취소',
-      confirmText: '닫기',
-    );
-    if (confirmed != true || !mounted) return;
-
-    if (!await FirestoreUtils.canReachFirestoreForSave(
-      probeCollection: 'places',
-      probeDocId: placeId,
-    )) {
-      if (mounted) {
-        SnackbarUtil.showInfo(context, '네트워크 연결을 확인해주세요. ');
-      }
-      return;
-    }
-
-    setState(() => _isSaving = true);
-    if (_leaveRequested) return;
-    try {
-      await _firestoreService.clearBookingWeekOpened(
-        placeId: placeId,
-        courseId: courseId,
-        weekStartDate: _weekStartDateString,
-      );
-      if (_leaveRequested) return;
-      if (mounted) {
-        SnackbarUtil.showSuccess(context, '미리 예약이 닫혔습니다.');
-        _popOnce(true);
-      }
-    } catch (e) {
-      if (mounted) {
-        debugPrint('[WeeklyOverrideScheduleScreen] 미리 예약 닫기 실패: $e');
-        SnackbarUtil.showInfoFromError(
-          context,
-          e,
-          fallback: '미리 예약 닫기에 실패했습니다.',
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _isSaving = false);
-    }
-  }
-
   Future<void> _saveOverrides() async {
     if (_isSaving) return;
 
@@ -1617,12 +1472,10 @@ class _WeeklyOverrideScheduleScreenState
       return;
     }
 
-    final isPreOpen = !_isWeekOpenedByPolicy(context, listen: false);
-    final hasChanges = _hasChanges();
-
     setState(() => _isSaving = true);
     if (_leaveRequested) return;
 
+    // 스낵바는 나가기한 뒤 저장 중일 때만 띄움 (화면 안에 있을 때는 안 띄움)
     // 저장 즉시 CourseProvider에 알림 (편집한 세션 박스만 로딩 스피너 표시)
     final courseProvider = Provider.of<CourseProvider>(context, listen: false);
     final savingKeys = <String>{};
@@ -1684,20 +1537,6 @@ class _WeeklyOverrideScheduleScreenState
         return;
       }
 
-      if (isPreOpen && !hasChanges) {
-        await _firestoreService.setBookingWeekOpened(
-          placeId: placeId,
-          courseId: courseId,
-          weekStartDate: _weekStartDateString,
-        );
-        if (_leaveRequested) return;
-        if (mounted) {
-          SnackbarUtil.showSuccess(context, '예약이 미리 열렸습니다.');
-          _popOnce(true);
-        }
-        return;
-      }
-
       final existingOverrides = await _firestoreService.getCourseOverrides(
         placeId: placeId,
         courseId: courseId,
@@ -1734,12 +1573,22 @@ class _WeeklyOverrideScheduleScreenState
         }
       }
       // 백엔드는 dayOfWeek 1-7만 허용. 0이면 Firestore legacy 등으로 무시.
+      // ✅ 정합성: 취소된 세션의 경우, 기존 add override는 삭제하고 cancel override는 나중에 생성/업데이트
+      // (같은 자리에 add와 cancel이 모두 있으면 add가 우선 표시되지만, cancel도 유지되어야 함)
       final deleteFutures = <Future>[];
       for (final override in existingOverrides) {
         final d = override.dayOfWeek;
         if (d < 1 || d > 7) continue;
         final overrideKey = '${d}_${override.startTime ?? ''}';
-        if (cancelledKeys.contains(overrideKey)) continue;
+
+        // ✅ 정합성: 취소된 세션이어도 add override는 삭제 (cancel override는 나중에 생성/업데이트)
+        // cancel override만 유지하고, add override는 삭제 후 재생성
+        if (cancelledKeys.contains(overrideKey) && override.isCancelled) {
+          // 이미 cancel override가 있으면 삭제하지 않음 (나중에 update됨)
+          continue;
+        }
+
+        // add override이거나, 취소 해제된 cancel override는 삭제
         deleteFutures.add(
           _firestoreService.upsertCourseOverride(
             placeId: placeId,
@@ -1757,7 +1606,8 @@ class _WeeklyOverrideScheduleScreenState
         await Future.wait(deleteFutures);
         await Future.delayed(const Duration(milliseconds: 10));
       }
-      if (_leaveRequested) return;
+      // ✅ 삭제 후에는 반드시 create·cancel까지 완료. 여기서 return하면 해당 날짜 세션이 전부 사라지는 치명적 버그 방지
+      // if (_leaveRequested) return; 제거
 
       final createFutures = <Future>[];
       for (final entry in _daySessions.entries) {
@@ -1788,10 +1638,12 @@ class _WeeklyOverrideScheduleScreenState
         await Future.wait(createFutures);
         await Future.delayed(const Duration(milliseconds: 10));
       }
-      if (_leaveRequested) return;
+      // ✅ create 후에는 cancel 단계까지 반드시 완료 (취소 상태 정합성)
+      // if (_leaveRequested) return; 제거
 
-      // 정기 일정 취소: add와 cancel은 별도 문서(courseId_date_startTime vs _cancel)
+      // ✅ 정기 일정 취소: add와 cancel은 별도 문서이지만 같은 sessionId 사용
       // 같은 자리에 add가 있어도 cancel은 유지. 표시 시 add 우선.
+      // 정합성: delete/create 후 최신 상태를 반영하기 위해 같은 자리에 추가된 add 세션 확인
       final cancelFutures = <Future>[];
       for (final entry in _cancelledSessions.entries) {
         final dayOfWeek = entry.key.clamp(1, 7);
@@ -1802,15 +1654,35 @@ class _WeeklyOverrideScheduleScreenState
         for (final startTime in startTimes) {
           final key = '${dayOfWeek}_$startTime';
           final sendNotification = _cancelNotificationFlags[key] ?? true;
-          final existingOverride =
-              existingOverrides
-                  .where(
-                    (o) =>
-                        o.dayOfWeek == dayOfWeek &&
-                        o.startTime == startTime &&
-                        o.date == date,
-                  )
-                  .firstOrNull;
+
+          // ✅ 정합성: 같은 자리에 add가 추가되었는지 확인 (delete/create 후 최신 상태 반영)
+          final hasAddInSameSlot =
+              _daySessions[entry.key]?.any(
+                (session) => session.startTime == startTime,
+              ) ??
+              false;
+
+          // 기존 override 찾기 (초기 스냅샷 또는 같은 자리에 add가 있으면 그 overrideId 사용)
+          CourseOverride? existingOverride;
+          if (hasAddInSameSlot) {
+            // 같은 자리에 add가 있으면, add가 생성한 overrideId를 찾아야 함
+            // 하지만 add는 방금 생성했으므로 overrideId를 알 수 없음
+            // 따라서 create로 처리 (서버에서 같은 sessionId로 찾아서 merge됨)
+            existingOverride = null;
+          } else {
+            // add가 없으면 초기 스냅샷에서 찾기
+            existingOverride =
+                existingOverrides
+                    .where(
+                      (o) =>
+                          o.dayOfWeek == dayOfWeek &&
+                          o.startTime == startTime &&
+                          o.date == date &&
+                          o.isCancelled == true, // cancel override만 찾기
+                    )
+                    .firstOrNull;
+          }
+
           final action =
               (existingOverride != null && existingOverride.id.isNotEmpty)
                   ? 'update'
@@ -1838,43 +1710,75 @@ class _WeeklyOverrideScheduleScreenState
       if (cancelFutures.isNotEmpty) {
         await Future.wait(cancelFutures);
       }
-      if (_leaveRequested) return;
 
-      if (isPreOpen) {
-        try {
-          await _firestoreService.setBookingWeekOpened(
-            placeId: placeId,
-            courseId: courseId,
-            weekStartDate: _weekStartDateString,
-          );
-        } catch (e) {
-          debugPrint('[WeeklyOverrideScheduleScreen] 미리 예약 열기 실패: $e');
-        }
-      }
-      if (_leaveRequested) return;
-
+      // ✅ 정합성 보장: 나가기해도 서버 상태는 갱신되었으므로 UI도 갱신해야 함
+      // (로딩 중 나가기 시에도 서버에는 저장되었을 수 있으므로)
       if (mounted) {
         await courseProvider.refreshOverridesForWeek(
           placeId,
           _weekStartDateString,
         );
       }
-      // 화면을 나간 후 저장 완료여도 스낵바 표시 (navigatorKey로 전역 컨텍스트 사용)
-      final ctx = mounted ? context : navigatorKey.currentContext;
-      if (ctx != null) {
-        SnackbarUtil.showSuccess(ctx, '저장되었습니다.');
+      // 나가기한 뒤 저장 중이었을 때만 스낵바로 결과 표시 (화면 안에 있으면 pop만 함)
+      if (_leaveRequested) {
+        final ctx = navigatorKey.currentContext;
+        if (ctx != null) SnackbarUtil.showSuccess(ctx, '저장되었습니다.');
+        if (mounted) setState(() => _isLeaving = false);
+        return;
       }
-      if (mounted) _popOnce(true);
-    } catch (e) {
+      // _popOnce 쓰지 않음: 저장 성공 후 pop 시 _isLeaving을 세우면, pop이 실패할 때 이후 나가기가 영원히 막힘
       if (mounted) {
-        debugPrint('저장 중 오류: $e');
-        SnackbarUtil.showInfoFromError(
-          context,
-          e,
-          fallback: '저장 중 오류가 발생했습니다.',
-        );
+        setState(() {
+          _initialDaySessions = Map.fromEntries(
+            _daySessions.entries.map(
+              (e) => MapEntry(
+                e.key,
+                e.value
+                    .map(
+                      (s) => SessionDraft(
+                        startTime: s.startTime,
+                        endTime: s.endTime,
+                        capacity: s.capacity,
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+          );
+          _initialCancelledSessions = Map.fromEntries(
+            _cancelledSessions.entries.map(
+              (e) => MapEntry(e.key, Set.from(e.value)),
+            ),
+          );
+        });
+        Navigator.of(context).pop(true);
+      }
+    } catch (e) {
+      debugPrint('저장 중 오류: $e');
+      // ✅ 정합성: 에러 발생 시에도 부분적으로 저장되었을 수 있으므로 갱신 시도
+      if (mounted) {
+        try {
+          await courseProvider.refreshOverridesForWeek(
+            placeId,
+            _weekStartDateString,
+          );
+        } catch (_) {
+          // 갱신 실패는 무시 (에러 메시지만 표시)
+        }
+      }
+      // 나가기한 뒤 저장 중이었을 때만 스낵바로 에러 표시
+      if (_leaveRequested) {
+        final resultCtx = navigatorKey.currentContext;
+        if (resultCtx != null) {
+          SnackbarUtil.showInfoFromError(
+            resultCtx,
+            e,
+            fallback: '저장 중 오류가 발생했습니다.',
+          );
+        }
       }
     } finally {
+      SnackbarUtil.dismissLoading();
       // 화면을 나갔어도 항상 clear (홈 캘린더 로딩 해제)
       courseProvider.clearSavingOverrides(_weekStartDateString);
       if (mounted) setState(() => _isSaving = false);

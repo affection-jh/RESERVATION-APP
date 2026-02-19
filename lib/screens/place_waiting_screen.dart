@@ -357,6 +357,10 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
             fallbackPhone = null;
           }
           await _ensureAuthProviderUser(uid: uid, phoneNumber: fallbackPhone);
+          // ✅ PlaceSwitchWidget에서 서브매니저의 adminManagedPlaceIds를 위해 placeMemberships 로드 필요
+          final authProvider = Provider.of<AuthProvider>(context, listen: false);
+          await authProvider.loadPlaceMembershipsForCurrentUser();
+          authProvider.startWatchingPlaceMemberships();
           // 멤버십 구독 시작 (userId가 uid일 수도 있음)
           _startMembershipSubscription();
           return;
@@ -383,6 +387,11 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
 
       // ✅ Main 진입 시 enrollments/reservations 로드를 위해 currentUser 보장
       await _ensureAuthProviderUser(uid: uid, phoneNumber: user.phoneNumber);
+
+      // ✅ PlaceSwitchWidget에서 서브매니저의 adminManagedPlaceIds를 위해 placeMemberships 로드 필요
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      await authProvider.loadPlaceMembershipsForCurrentUser();
+      authProvider.startWatchingPlaceMemberships();
 
       // 멤버십 구독 시작
       _startMembershipSubscription();
@@ -519,14 +528,16 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
                         '[PlaceWaitingScreen] AuthProvider linkedAdmin + managedPlaceIds: ${managedIds.length}개 (server ${fromServer.length} + memberships ${fromMemberships.length})',
                       );
                     } else if (mounted) {
+                      // linkedAdmin이 null이면 adminManagedPlaceIds getter가 자동으로
+                      // managedPlaceIdsFromMemberships를 사용하므로 setAdminManagedPlaceIds 호출 불필요
                       authProvider.setLinkedAdmin(null);
-                      authProvider.setAdminManagedPlaceIds([]);
                     }
                   } catch (e) {
                     debugPrint('[PlaceWaitingScreen] 관리자 정보 로드 실패 (무시): $e');
                     if (mounted) {
+                      // linkedAdmin이 null이면 adminManagedPlaceIds getter가 자동으로
+                      // managedPlaceIdsFromMemberships를 사용하므로 setAdminManagedPlaceIds 호출 불필요
                       authProvider.setLinkedAdmin(null);
-                      authProvider.setAdminManagedPlaceIds([]);
                     }
                   }
                 }
@@ -640,7 +651,8 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
 
       // ✅ 이 플레이스에서 코스매니저/매니저면 관리자 모드로 진입 (처음 가입 후 카드 탭 시)
       bool isAdminEntry =
-          authProvider.getPlaceMemberForPlace(place.id)?.canManagePlace ?? false;
+          authProvider.getPlaceMemberForPlace(place.id)?.canManagePlace ??
+          false;
       // 가입 직후에는 AuthProvider의 membership 캐시가 아직 반영되지 않을 수 있으므로
       // Firestore에서 members 문서를 직접 확인해 관리자 진입을 결정한다.
       final uid = authProvider.currentUser?.userId;
@@ -679,7 +691,9 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
         await _authService.updateLastAccessedPlace(place.id);
         courseProvider.loadCourses(place.id);
         if (!mounted) return;
-        Navigator.of(context).pushNamedAndRemoveUntil('/admin', (route) => false);
+        Navigator.of(
+          context,
+        ).pushNamedAndRemoveUntil('/admin', (route) => false);
         return;
       }
 
@@ -946,6 +960,8 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
           fallback: '회원탈퇴 중 오류가 발생했습니다.',
         );
       }
+    } finally {
+      SnackbarUtil.dismissLoading();
     }
   }
 

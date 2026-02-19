@@ -21,6 +21,7 @@ import '../../../theme/app_colors.dart';
 import '../../../utils/text_field_decoration_util.dart';
 import '../../../utils/timezone_utils.dart';
 import '../../../utils/snackbar_util.dart';
+import '../../../utils/navigator_key.dart';
 import '../../../utils/format_utils.dart';
 import '../../../utils/date_range_picker_util.dart';
 import '../../../utils/enrollment_valid_until_util.dart';
@@ -331,6 +332,8 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         }
         return;
       }
+      final loadCtx = navigatorKey.currentContext;
+      if (loadCtx != null) SnackbarUtil.showLoading(loadCtx, '저장 중…');
 
       final enrollmentService = EnrollmentService();
       final remaining = int.parse(_remainingReservationsController.text);
@@ -349,7 +352,6 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           validUntil: widget.enrollment.validUntil,
         );
         if (!success) throw Exception('pendingMembers 업데이트 실패');
-        if (_leaveRequested) return;
 
         // 저장 성공 후 변경사항 추적 기준 업데이트
         setState(() {
@@ -361,9 +363,12 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           listen: false,
         );
         memberProvider.setPlaceId(placeId);
-        if (mounted) {
-          SnackbarUtil.showSuccess(context, '대기 등록 정보가 변경되었습니다.');
+        // 나갔어도 로딩 스낵바를 닫고 결과 표시
+        final resultCtxPending = mounted ? context : navigatorKey.currentContext;
+        if (resultCtxPending != null) {
+          SnackbarUtil.showSuccess(resultCtxPending, '대기 등록 정보가 변경되었습니다.');
         }
+        if (_leaveRequested) return;
       } else {
         // ✅ remainingReservations 변경 시 totalReservations도 함께 업데이트
         // remainingReservations가 totalReservations보다 크면 totalReservations도 증가
@@ -394,7 +399,6 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
             },
           ),
         );
-        if (_leaveRequested) return;
 
         // 저장 성공 후 변경사항 추적 기준 업데이트
         setState(() {
@@ -414,20 +418,24 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           ).setPlaceId(placeIdForRefresh);
         }
 
-        if (mounted) {
-          SnackbarUtil.showSuccess(context, '남은 횟수가 변경되었습니다.');
+        // 나갔어도 로딩 스낵바를 닫고 결과 표시
+        final resultCtx = mounted ? context : navigatorKey.currentContext;
+        if (resultCtx != null) {
+          SnackbarUtil.showSuccess(resultCtx, '남은 횟수가 변경되었습니다.');
         }
+        if (_leaveRequested) return;
       }
     } catch (e) {
-      if (_leaveRequested) return;
-      if (mounted) {
+      final resultCtx = mounted ? context : navigatorKey.currentContext;
+      if (resultCtx != null) {
         SnackbarUtil.showInfoFromError(
-          context,
+          resultCtx,
           e,
           fallback: '저장 중 오류가 발생했습니다.',
         );
       }
     } finally {
+      SnackbarUtil.dismissLoading();
       if (mounted) {
         setState(() {
           _isSaving = false;
@@ -579,6 +587,8 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         }
         return;
       }
+      final loadCtxPeriod = navigatorKey.currentContext;
+      if (loadCtxPeriod != null) SnackbarUtil.showLoading(loadCtxPeriod, '저장 중…');
 
       final enrollmentService = EnrollmentService();
 
@@ -593,7 +603,6 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           validUntil: _extendedValidUntil,
         );
         if (!success) throw Exception('pendingMembers 업데이트 실패');
-        if (_leaveRequested) return;
 
         // 저장 성공 후 변경사항 추적 기준 업데이트
         setState(() {
@@ -607,9 +616,12 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         });
 
         Provider.of<MemberProvider>(context, listen: false).setPlaceId(placeId);
-        if (mounted) {
-          SnackbarUtil.showSuccess(context, '대기 등록 정보가 변경되었습니다.');
+        // 나갔어도 로딩 스낵바를 닫고 결과 표시
+        final resultCtxPendingPeriod = mounted ? context : navigatorKey.currentContext;
+        if (resultCtxPendingPeriod != null) {
+          SnackbarUtil.showSuccess(resultCtxPendingPeriod, '대기 등록 정보가 변경되었습니다.');
         }
+        if (_leaveRequested) return;
       } else {
         final CourseEnrollment updatedEnrollment = widget.enrollment.copyWith(
           validUntil: _extendedValidUntil,
@@ -653,20 +665,22 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           ).setPlaceId(placeIdForRefresh);
         }
 
-        if (mounted) {
-          SnackbarUtil.showSuccess(context, '유효기간이 변경되었습니다.');
+        final resultCtxPeriod = mounted ? context : navigatorKey.currentContext;
+        if (resultCtxPeriod != null) {
+          SnackbarUtil.showSuccess(resultCtxPeriod, '유효기간이 변경되었습니다.');
         }
       }
     } catch (e) {
-      if (_leaveRequested) return;
-      if (mounted) {
+      final resultCtxPeriodErr = mounted ? context : navigatorKey.currentContext;
+      if (resultCtxPeriodErr != null) {
         SnackbarUtil.showInfoFromError(
-          context,
+          resultCtxPeriodErr,
           e,
           fallback: '저장 중 오류가 발생했습니다.',
         );
       }
     } finally {
+      SnackbarUtil.dismissLoading();
       if (mounted) {
         setState(() {
           _isSaving = false;
@@ -1168,6 +1182,11 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
       onLeave: () => _leaveRequested = true,
     );
     if (leave && mounted) {
+      setState(() {
+        _isSaving = false;
+        _isReenrolling = false;
+        _isCancelling = false;
+      });
       Navigator.of(context).pop();
     }
   }

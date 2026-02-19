@@ -116,9 +116,8 @@ class PlaceProvider with ChangeNotifier {
     final place = Place(
       id: _generatePlaceId(),
       name: name,
-      adminId: adminId,
+      adminIds: [adminId],
       description: description,
-
       greetingText: greetingText,
       hideGreeting: hideGreeting,
       imageUrl: imageUrl,

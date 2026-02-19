@@ -356,43 +356,6 @@ class FirestoreService {
     weekStartDate: weekStartDate,
   );
 
-  // ==================== Booking Week Opens ====================
-
-  Future<void> setBookingWeekOpened({
-    required String placeId,
-    required String courseId,
-    required String weekStartDate,
-  }) => _courseService.setBookingWeekOpened(
-    placeId: placeId,
-    courseId: courseId,
-    weekStartDate: weekStartDate,
-  );
-  Future<void> clearBookingWeekOpened({
-    required String placeId,
-    required String courseId,
-    required String weekStartDate,
-  }) => _courseService.clearBookingWeekOpened(
-    placeId: placeId,
-    courseId: courseId,
-    weekStartDate: weekStartDate,
-  );
-  Future<bool> isBookingWeekOpened({
-    required String placeId,
-    required String courseId,
-    required String weekStartDate,
-  }) => _courseService.isBookingWeekOpened(
-    placeId: placeId,
-    courseId: courseId,
-    weekStartDate: weekStartDate,
-  );
-  Stream<Set<String>> streamBookingWeekOpens({
-    required String placeId,
-    required String courseId,
-  }) => _courseService.streamBookingWeekOpens(
-    placeId: placeId,
-    courseId: courseId,
-  );
-
   // ==================== Stories ====================
 
   Future<List<Story>> getStoriesByPlace(String placeId) =>

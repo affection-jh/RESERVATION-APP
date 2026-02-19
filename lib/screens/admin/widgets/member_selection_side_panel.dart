@@ -13,6 +13,8 @@ import '../../../utils/format_utils.dart';
 import '../../../utils/snackbar_util.dart';
 import '../../../utils/navigator_key.dart';
 import '../../../services/member_service.dart';
+import '../../../providers/place_provider.dart';
+import '../../../widgets/direct_phone_input_bottom_sheet.dart';
 
 /// 멤버 선택 바텀시트 (예약 추가용)
 ///
@@ -26,14 +28,22 @@ enum MemberSelectionMode {
   /// 예약 추가용 (이미 예약한 유저 제외, 남은 횟수 표시)
   justMemberAdd,
 
-  /// 부매니저 추가용 (이미 이 코스 부매니저인 유저 제외)
+  /// 부매니저(코스매니저) 추가용 (이미 이 코스 부매니저인 유저 제외)
   forSubManagerAdd,
+
+  /// 전체 매니저 추가용 (이미 전체 매니저인 유저 제외)
+  forFullManagerAdd,
 }
 
 class MemberSelectionSidePanel extends StatefulWidget {
   final String placeId;
-  final Course course;
+
+  /// null when mode == forFullManagerAdd
+  final Course? course;
   final MemberSelectionMode mode;
+
+  /// used when mode == forFullManagerAdd (현재 전체 매니저 userId 목록, 제외용)
+  final List<String>? currentAdminIds;
   final int totalCapacity;
   final int reservedCount;
   final List<String> existingReservationUserIds;
@@ -42,8 +52,9 @@ class MemberSelectionSidePanel extends StatefulWidget {
   const MemberSelectionSidePanel({
     super.key,
     required this.placeId,
-    required this.course,
+    this.course,
     this.mode = MemberSelectionMode.justMemberAdd,
+    this.currentAdminIds,
     this.totalCapacity = 0,
     this.reservedCount = 0,
     this.existingReservationUserIds = const [],
@@ -101,6 +112,32 @@ class MemberSelectionSidePanel extends StatefulWidget {
             placeId: placeId,
             course: course,
             mode: MemberSelectionMode.forSubManagerAdd,
+            onMembersSelected: onMembersSelected,
+          ),
+    );
+  }
+
+  /// 전체 매니저 추가용 (플레이스 편집에서 호출)
+  static void showForFullManagerAdd({
+    required BuildContext context,
+    required String placeId,
+    required List<String> currentAdminIds,
+    required Function(List<MemberView> members) onMembersSelected,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withOpacity(0.7),
+      isDismissible: true,
+      enableDrag: true,
+      useSafeArea: true,
+      builder:
+          (context) => MemberSelectionSidePanel(
+            placeId: placeId,
+            course: null,
+            mode: MemberSelectionMode.forFullManagerAdd,
+            currentAdminIds: currentAdminIds,
             onMembersSelected: onMembersSelected,
           ),
     );
@@ -166,12 +203,12 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
         widget.placeId,
         isSubManagerForPlace: isSubManager,
       );
-      memberProvider.setSelectedCourseId(widget.course.id);
-      if (isSubManager) {
-        memberProvider.selectSingleCourseForCourseTab(
-          widget.course.id,
-          save: false,
-        );
+      final course = widget.course;
+      if (course != null) {
+        memberProvider.setSelectedCourseId(course.id);
+        if (isSubManager) {
+          memberProvider.selectSingleCourseForCourseTab(course.id, save: false);
+        }
       }
       memberProvider.setShowPending(true);
     });
@@ -184,26 +221,40 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
   }
 
   List<MemberView> _getDisplayMembers(MemberProvider memberProvider) {
-    final courseId = widget.course.id;
+    final course = widget.course;
+    final courseId = course?.id ?? '';
     final List<MemberView> list;
-    if (widget.mode == MemberSelectionMode.forSubManagerAdd) {
-      list = memberProvider.allMembers.where((v) {
-        if (v.isManager) return false;
-        if (v.manageableCourseIds.contains(courseId)) return false;
-        return true;
-      }).toList();
+    if (widget.mode == MemberSelectionMode.forFullManagerAdd) {
+      final adminIds = widget.currentAdminIds ?? [];
+      // 이미 전체 매니저(adminIds)만 제외. 코스매니저·일반 멤버·pending 모두 후보에 표시
+      list =
+          memberProvider.allMembers
+              .where((v) => !adminIds.contains(v.userId))
+              .toList();
+    } else if (widget.mode == MemberSelectionMode.forSubManagerAdd) {
+      list =
+          memberProvider.allMembers.where((v) {
+            if (v.isManager) return false;
+            if (v.manageableCourseIds.contains(courseId)) return false;
+            return true;
+          }).toList();
     } else {
-      list = memberProvider.allMembers
-          .where((v) => !widget.existingReservationUserIds.contains(v.userId))
-          .toList();
+      list =
+          memberProvider.allMembers
+              .where(
+                (v) => !widget.existingReservationUserIds.contains(v.userId),
+              )
+              .toList();
     }
-    // 등록됨(이 코스 수강 중) 멤버를 상단에 정렬
-    list.sort((a, b) {
-      final aEnrolled = a.enrolledCourseIds.contains(courseId);
-      final bEnrolled = b.enrolledCourseIds.contains(courseId);
-      if (aEnrolled == bEnrolled) return 0;
-      return aEnrolled ? -1 : 1;
-    });
+    if (course != null) {
+      // 등록됨(이 코스 수강 중) 멤버를 상단에 정렬
+      list.sort((a, b) {
+        final aEnrolled = a.enrolledCourseIds.contains(courseId);
+        final bEnrolled = b.enrolledCourseIds.contains(courseId);
+        if (aEnrolled == bEnrolled) return 0;
+        return aEnrolled ? -1 : 1;
+      });
+    }
     return list;
   }
 
@@ -222,11 +273,11 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
 
   /// 코스별 남은 횟수 (MemberProvider.enrollments 단일 소스 — 멤버관리 등과 동일)
   int _getRemainingForCourse(MemberView v, List<CourseEnrollment> enrollments) {
+    final cid = widget.course?.id;
+    if (cid == null || cid.isEmpty) return 0;
     final matches =
         enrollments
-            .where(
-              (e) => e.userId == v.userId && e.courseId == widget.course.id,
-            )
+            .where((e) => e.userId == v.userId && e.courseId == cid)
             .toList();
     if (matches.isEmpty) return 0;
     return matches.first.remainingReservations;
@@ -327,35 +378,109 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
 
   void _showDirectPhoneInputDialog() {
     final placeId = widget.placeId;
-    final courseId = widget.course.id;
-    // 사이드 패널 먼저 닫기
+    final isFullManagerMode =
+        widget.mode == MemberSelectionMode.forFullManagerAdd;
+    final course = widget.course;
     Navigator.of(context).pop();
-    // 닫힌 뒤 바텀시트로 직접 입력 화면 표시
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ctx = navigatorKey.currentContext;
       if (ctx == null) return;
-      showModalBottomSheet<void>(
+      if (isFullManagerMode) {
+        DirectPhoneInputBottomSheet.show(
+          context: ctx,
+          title: '전화번호로 전체 매니저 추가',
+          submitButtonText: '전체 매니저로 추가',
+          showNameField: true,
+          onSubmit: (submitCtx, normalizedPhone, name) async {
+            try {
+              final phone = FormatUtils.formatPhoneNumber(normalizedPhone);
+              final ok = await MemberService().inviteFullManager(
+                placeId: placeId,
+                phoneNumber: phone,
+                adminDisplayName:
+                    (name != null && name.trim().isNotEmpty)
+                        ? name.trim()
+                        : null,
+              );
+              if (!submitCtx.mounted) return null;
+              if (ok) return null;
+              return '전체 매니저 추가에 실패했습니다.';
+            } on FirebaseFunctionsException catch (e) {
+              if (e.code == 'internal') {
+                return '서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.';
+              }
+              return (e.message ?? '').trim().isNotEmpty
+                  ? e.message!
+                  : '전체 매니저 추가 중 오류가 발생했습니다.';
+            } catch (e) {
+              return '전체 매니저 추가 중 오류가 발생했습니다.';
+            }
+          },
+          onSuccess: () {
+            final c = navigatorKey.currentContext;
+            if (c != null) {
+              Provider.of<PlaceProvider>(c, listen: false).loadPlace(placeId);
+              SnackbarUtil.showSuccess(c, '전체 매니저로 추가했습니다.');
+            }
+          },
+        );
+        return;
+      }
+      final courseId = course!.id;
+      DirectPhoneInputBottomSheet.show(
         context: ctx,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        builder:
-            (sheetContext) => _DirectPhoneInputBottomSheet(
+        title: '코스매니저로 초대',
+        submitButtonText: '코스매니저로 초대',
+        showNameField: true,
+        checkPhoneError: (normalizedPhone) {
+          final c = navigatorKey.currentContext;
+          if (c == null) return null;
+          final memberProvider = Provider.of<MemberProvider>(c, listen: false);
+          for (final v in memberProvider.allMembers) {
+            final pn = (v.phoneNumber).trim();
+            if (pn.isEmpty) continue;
+            if (FormatUtils.normalizePhoneForCompare(pn) == normalizedPhone) {
+              if (v.isManager) {
+                return '이미 이 플레이스의 전체 매니저입니다.';
+              }
+              return '이미 등록된 멤버입니다. 목록에서 선택해주세요';
+            }
+          }
+          return null;
+        },
+        onSubmit: (context, normalizedPhone, name) async {
+          final phone = FormatUtils.formatPhoneNumber(normalizedPhone);
+          try {
+            final ok = await MemberService().inviteSubManagerForCourse(
               placeId: placeId,
               courseId: courseId,
-              onSuccess: () {
-                Navigator.of(sheetContext).pop();
-                SnackbarUtil.showSuccess(ctx, '코스매니저로 초대했습니다.');
-                final memberProvider = Provider.of<MemberProvider>(
-                  ctx,
-                  listen: false,
-                );
-                memberProvider.setPlaceId(placeId, force: true);
-              },
-              onError: (String message) {
-                Navigator.of(sheetContext).pop();
-                SnackbarUtil.showInfo(ctx, message);
-              },
-            ),
+              phoneNumber: phone,
+              adminDisplayName: name,
+            );
+            if (!context.mounted) return null;
+            if (ok) return null;
+            return '초대에 실패했습니다.';
+          } on FirebaseFunctionsException catch (e) {
+            if (e.code == 'internal') {
+              return '서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.';
+            }
+            return (e.message ?? '').trim().isNotEmpty
+                ? e.message!
+                : '초대 중 오류가 발생했습니다.';
+          } catch (e) {
+            return '초대 중 오류가 발생했습니다.';
+          }
+        },
+        onSuccess: () {
+          final c = navigatorKey.currentContext;
+          if (c != null) {
+            SnackbarUtil.showSuccess(c, '코스매니저로 초대했습니다.');
+            Provider.of<MemberProvider>(
+              c,
+              listen: false,
+            ).setPlaceId(placeId, force: true);
+          }
+        },
       );
     });
   }
@@ -381,8 +506,11 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
             );
           }
           if (filtered.isEmpty) {
+            final isAddMode =
+                widget.mode == MemberSelectionMode.forSubManagerAdd ||
+                widget.mode == MemberSelectionMode.forFullManagerAdd;
             final emptyText =
-                widget.mode == MemberSelectionMode.forSubManagerAdd
+                isAddMode
                     ? (_searchQuery.isEmpty
                         ? '추가할 수 있는 멤버가 없어요'
                         : '검색 결과가 없습니다')
@@ -444,11 +572,27 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
               builder: (context) {
                 final isSubManagerMode =
                     widget.mode == MemberSelectionMode.forSubManagerAdd;
+                final isFullManagerMode =
+                    widget.mode == MemberSelectionMode.forFullManagerAdd;
                 final hasSelection = _selectedUserIds.isNotEmpty;
-                // 코스매니저 추가 모드: 선택 없음 → 직접 전화번호 입력, 선택 있음 → 코스매니저로 추가
                 final String buttonText;
                 final VoidCallback? onPressed;
-                if (isSubManagerMode) {
+                if (isFullManagerMode) {
+                  if (hasSelection) {
+                    buttonText = '추가 (${_selectedUserIds.length}명)';
+                    onPressed = () {
+                      final selected =
+                          displayList
+                              .where((v) => _selectedUserIds.contains(v.userId))
+                              .toList();
+                      if (context.mounted) Navigator.of(context).pop();
+                      widget.onMembersSelected(selected);
+                    };
+                  } else {
+                    buttonText = '직접 전화번호 입력';
+                    onPressed = () => _showDirectPhoneInputDialog();
+                  }
+                } else if (isSubManagerMode) {
                   if (hasSelection) {
                     buttonText = '코스매니저로 추가';
                     onPressed = () {
@@ -512,8 +656,14 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
   Widget _buildMemberItem(MemberView member, MemberProvider memberProvider) {
     final isSelected = _selectedUserIds.contains(member.userId);
     final isForSubManager = widget.mode == MemberSelectionMode.forSubManagerAdd;
+    final isFullManagerMode =
+        widget.mode == MemberSelectionMode.forFullManagerAdd;
+    final courseId = widget.course?.id ?? '';
     final isEnrolled =
-        !isForSubManager && member.enrolledCourseIds.contains(widget.course.id);
+        !isForSubManager &&
+        !isFullManagerMode &&
+        courseId.isNotEmpty &&
+        member.enrolledCourseIds.contains(courseId);
     final remaining =
         isEnrolled
             ? _getRemainingForCourse(member, memberProvider.enrollments)
@@ -621,7 +771,18 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
                       fontWeight: FontWeight.w600,
                     ),
                   ),
-                  if (!isForSubManager) ...[
+                  if (isFullManagerMode && member.isSubManager)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        '코스매니저 → 전체 매니저로 승격됩니다',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: AppColors.primaryGreen,
+                        ),
+                      ),
+                    ),
+                  if (!isForSubManager && !isFullManagerMode) ...[
                     const SizedBox(height: 6),
                     Text(
                       isEnrolled ? '남은 횟수: $remaining' : '이 코스에 등록되지 않음',
@@ -636,293 +797,6 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 직접 전화번호·이름 입력 바텀시트 (코스매니저 초대)
-class _DirectPhoneInputBottomSheet extends StatefulWidget {
-  final String placeId;
-  final String courseId;
-  final VoidCallback onSuccess;
-  final void Function(String message) onError;
-
-  const _DirectPhoneInputBottomSheet({
-    required this.placeId,
-    required this.courseId,
-    required this.onSuccess,
-    required this.onError,
-  });
-
-  @override
-  State<_DirectPhoneInputBottomSheet> createState() =>
-      _DirectPhoneInputBottomSheetState();
-}
-
-class _DirectPhoneInputBottomSheetState
-    extends State<_DirectPhoneInputBottomSheet> {
-  final _nameController = TextEditingController();
-  final _phoneController = TextEditingController();
-  final _formKey = GlobalKey<FormState>();
-  bool _isSubmitting = false;
-
-  /// 전화번호 중복만 실시간 표시 (나머지 에러는 버튼 클릭 시에만)
-  String? _phoneDuplicateError;
-
-  void _onFieldChanged() => setState(() {});
-
-  /// 두 텍스트 필드가 모두 채워지고 에러가 없을 때만 true
-  bool get _canSubmit {
-    if (_isSubmitting) return false;
-    final nameFilled = _nameController.text.trim().isNotEmpty;
-    final phoneNorm = _normalizePhoneForCompare(_phoneController.text.trim());
-    final phoneFilled = phoneNorm.length == 11;
-    final noError = _phoneDuplicateError == null;
-    return nameFilled && phoneFilled && noError;
-  }
-
-  String _normalizePhoneForCompare(String phoneNumber) {
-    var digits = phoneNumber.replaceAll(RegExp(r'[^\d]'), '');
-    if (digits.startsWith('82')) {
-      digits = '0${digits.substring(2)}';
-    }
-    if (digits.isNotEmpty && !digits.startsWith('0')) {
-      digits = '0$digits';
-    }
-    return digits;
-  }
-
-  bool _existsInMemberProviderByPhone(String normalizedPhone) {
-    if (normalizedPhone.isEmpty) return false;
-    final memberProvider = Provider.of<MemberProvider>(context, listen: false);
-    for (final v in memberProvider.allMembers) {
-      final pn = (v.phoneNumber).trim();
-      if (pn.isEmpty) continue;
-      if (_normalizePhoneForCompare(pn) == normalizedPhone) return true;
-    }
-    return false;
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _nameController.addListener(_onFieldChanged);
-    _phoneController.addListener(_onFieldChanged);
-  }
-
-  @override
-  void dispose() {
-    _nameController.removeListener(_onFieldChanged);
-    _phoneController.removeListener(_onFieldChanged);
-    _nameController.dispose();
-    _phoneController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _submit() async {
-    if (_formKey.currentState?.validate() != true) return;
-    final phone = _phoneController.text.trim();
-    final name = _nameController.text.trim();
-    setState(() => _isSubmitting = true);
-    try {
-      final ok = await MemberService().inviteSubManagerForCourse(
-        placeId: widget.placeId,
-        courseId: widget.courseId,
-        phoneNumber: phone,
-        adminDisplayName: name,
-      );
-      if (!mounted) return;
-      if (ok) {
-        widget.onSuccess();
-      } else {
-        widget.onError('초대에 실패했습니다.');
-      }
-    } on FirebaseFunctionsException catch (e) {
-      if (mounted) {
-        widget.onError(
-          (e.message ?? '').trim().isNotEmpty ? e.message! : '초대 중 오류가 발생했습니다.',
-        );
-      }
-    } catch (e) {
-      if (mounted) widget.onError('초대 중 오류가 발생했습니다.');
-    } finally {
-      if (mounted) setState(() => _isSubmitting = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final mq = MediaQuery.of(context);
-    final paddingBottom = mq.padding.bottom;
-    final viewInsetsBottom = mq.viewInsets.bottom;
-
-    // 키보드 올라올 때 시트 전체를 viewInsets만큼 위로 밀어 입력란 가림 방지
-    return Padding(
-      padding: EdgeInsets.only(bottom: viewInsetsBottom),
-      child: Container(
-        decoration: const BoxDecoration(
-          color: AppColors.backgroundWhite,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        padding: EdgeInsets.only(
-          left: 20,
-          right: 20,
-          top: 24,
-          bottom: 24 + paddingBottom,
-        ),
-        child: Form(
-          key: _formKey,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    const Text(
-                      '코스매니저로 초대',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.of(context).pop(),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 20),
-                TextFormField(
-                  controller: _nameController,
-                  decoration: TextFieldDecorationUtil.defaultDecoration(
-                    hintText: '이름',
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 14,
-                    ),
-                  ),
-                  textInputAction: TextInputAction.next,
-                  validator: (v) {
-                    if ((v ?? '').trim().isEmpty) {
-                      return '이름을 입력해주세요';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: _phoneController,
-                  decoration: TextFieldDecorationUtil.defaultDecoration(
-                    hintText: '전화번호',
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 14,
-                    ),
-                    errorText: _phoneDuplicateError,
-                  ),
-                  keyboardType: TextInputType.number,
-                  autofillHints: const [AutofillHints.telephoneNumber],
-                  textInputAction: TextInputAction.done,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(13),
-                  ],
-                  onChanged: (value) {
-                    // 자동 포맷팅: 010-0000-0000 형식
-                    final digitsOnly = value.replaceAll(RegExp(r'[^\d]'), '');
-                    String formatted = digitsOnly;
-                    if (formatted.isEmpty) {
-                      formatted = '010';
-                    }
-
-                    String result = '';
-                    if (formatted.length <= 3) {
-                      result = formatted;
-                    } else if (formatted.length <= 7) {
-                      result =
-                          '${formatted.substring(0, 3)}-${formatted.substring(3)}';
-                    } else if (formatted.length <= 11) {
-                      result =
-                          '${formatted.substring(0, 3)}-${formatted.substring(3, 7)}-${formatted.substring(7)}';
-                    } else {
-                      result =
-                          '${formatted.substring(0, 3)}-${formatted.substring(3, 7)}-${formatted.substring(7, 11)}';
-                    }
-
-                    if (_phoneController.text != result) {
-                      _phoneController.value = TextEditingValue(
-                        text: result,
-                        selection: TextSelection.collapsed(
-                          offset: result.length,
-                        ),
-                      );
-                    }
-
-                    // 중복 체크 (실시간)
-                    final normalized = _normalizePhoneForCompare(result);
-                    final String? next =
-                        normalized.length == 11 &&
-                                _existsInMemberProviderByPhone(normalized)
-                            ? '이미 등록된 멤버입니다. 목록에서 선택해주세요'
-                            : null;
-                    if (_phoneDuplicateError != next) {
-                      setState(() => _phoneDuplicateError = next);
-                    }
-                  },
-                  validator: (v) {
-                    final raw = (v ?? '').trim();
-                    if (raw.isEmpty) return '전화번호를 입력해주세요';
-                    final normalized = _normalizePhoneForCompare(raw);
-                    if (normalized.length != 11) {
-                      return '올바른 전화번호를 입력해주세요';
-                    }
-                    if (_phoneDuplicateError != null)
-                      return _phoneDuplicateError;
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton(
-                    onPressed: _canSubmit ? _submit : null,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.primaryGreen,
-                      foregroundColor: Colors.white,
-                      disabledBackgroundColor: AppColors.backgroundLight,
-                      disabledForegroundColor: AppColors.textSecondary,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                    ),
-                    child:
-                        _isSubmitting
-                            ? const SizedBox(
-                              width: 24,
-                              height: 24,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: AppColors.primaryGreen,
-                              ),
-                            )
-                            : const Text(
-                              '코스매니저로 초대',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                  ),
-                ),
-              ],
-            ),
-          ),
         ),
       ),
     );

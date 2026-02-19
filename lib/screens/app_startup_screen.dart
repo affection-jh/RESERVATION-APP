@@ -554,7 +554,6 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
           .map((o) => CalendarUtils.formatDateYMD(CalendarUtils.weekStartFrom(now, o)))
           .toList();
       courseProvider.subscribeToOverrides(placeId, weekStartDates);
-      courseProvider.subscribeToBookingWeekOpens(placeId, course.id);
 
       for (var i = 0; i < offsets.length; i++) {
         final ws = CalendarUtils.weekStartFrom(now, offsets[i]);

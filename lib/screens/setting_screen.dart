@@ -496,6 +496,8 @@ Future<void> _withdraw(BuildContext context, bool isAdminMode) async {
       }
       SnackbarUtil.showInfo(context, message);
     }
+  } finally {
+    SnackbarUtil.dismissLoading();
   }
 }
 

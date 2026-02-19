@@ -34,10 +34,6 @@ class CourseProvider with ChangeNotifier {
   static const Duration _overrideDebounceDuration = Duration(milliseconds: 150);
   final Map<String, Timer> _overrideDebounceTimers = {};
 
-  /// (placeId|courseId) 별 주차 오픈 구독 — 화면 중복 구독 제거
-  final Map<String, StreamSubscription<Set<String>>> _bookingWeekOpensSubs = {};
-  final Map<String, Set<String>> _bookingWeekOpensByKey = {};
-
   List<Course> get courses => List.unmodifiable(_courses);
   bool get isLoading => _isLoading;
   String? get error => _error;
@@ -120,37 +116,6 @@ class CourseProvider with ChangeNotifier {
     list.add(override);
     _overridesByWeek[weekStartDate] = list;
     notifyListeners();
-  }
-
-  /// 주차 예약 오픈 구독 (한 placeId+courseId당 1회만 구독, 화면 공유)
-  void subscribeToBookingWeekOpens(String placeId, String courseId) {
-    final key = '$placeId|$courseId';
-    if (_bookingWeekOpensSubs.containsKey(key)) return;
-    _bookingWeekOpensSubs[key] = _firestoreService
-        .streamBookingWeekOpens(placeId: placeId, courseId: courseId)
-        .listen(
-          (opened) {
-            _bookingWeekOpensByKey[key] = opened;
-            notifyListeners();
-          },
-          onError: (_) {
-            _bookingWeekOpensByKey[key] = {};
-            notifyListeners();
-          },
-        );
-  }
-
-  /// 주차 예약 오픈된 weekStartDate 집합 (subscribeToBookingWeekOpens 호출 후 사용)
-  Set<String> getBookingWeekOpens(String placeId, String courseId) {
-    return _bookingWeekOpensByKey['$placeId|$courseId'] ?? {};
-  }
-
-  void _cancelBookingWeekOpensSubscriptions() {
-    for (final sub in _bookingWeekOpensSubs.values) {
-      sub.cancel();
-    }
-    _bookingWeekOpensSubs.clear();
-    _bookingWeekOpensByKey.clear();
   }
 
   /// 코스 정책 가져오기 (코스에 embed된 policy 우선, 없으면 캐시)
@@ -482,7 +447,6 @@ class CourseProvider with ChangeNotifier {
     _cancelAllOverrideSubscriptions();
     _overridesByWeek.clear();
     _overridesPlaceId = null;
-    _cancelBookingWeekOpensSubscriptions();
     notifyListeners();
   }
 
@@ -501,7 +465,6 @@ class CourseProvider with ChangeNotifier {
   void dispose() {
     _coursesSubscription?.cancel();
     _cancelAllOverrideSubscriptions();
-    _cancelBookingWeekOpensSubscriptions();
     super.dispose();
   }
 

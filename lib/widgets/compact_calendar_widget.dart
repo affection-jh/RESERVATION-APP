@@ -607,7 +607,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     );
 
     _subscribeWeekOverrides();
-    _subscribeBookingWeekOpens();
   }
 
   /// 비정기 일정 구독
@@ -695,22 +694,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       }
       // Provider 기반이므로 지연 페이드인 없이 즉시 표시
     }
-  }
-
-  /// bookingWeekOpens 구독 (CourseProvider에서 단일 구독 공유)
-  void _subscribeBookingWeekOpens() {
-    final course = _selectedCourse;
-    if (course == null) return;
-    if (widget.weeklyViewMode) return;
-
-    final placeId =
-        Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
-    if (placeId == null) return;
-
-    Provider.of<CourseProvider>(
-      context,
-      listen: false,
-    ).subscribeToBookingWeekOpens(placeId, course.id);
   }
 
   /// 특정 주 비정기 일정은 CourseProvider 스트림으로만 사용 (초기 로드 시 주차만 표시)
@@ -3864,25 +3847,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
       enrollmentCanReserve: enrollmentCanReserve,
     );
 
-    // ✅ 관리자가 미리 예약 열기를 한 경우 잠금 해제
-    bool isBookingWeekOpened = false;
-    if (eligibility.reason == ReservationLockReason.notOpenedYet) {
-      final weekStart = CalendarUtils.startOfWeekMonday(date);
-      final weekStartDateString = CalendarUtils.formatDateYMD(weekStart);
-      final placeId =
-          Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
-      isBookingWeekOpened =
-          placeId != null &&
-          Provider.of<CourseProvider>(context, listen: false)
-              .getBookingWeekOpens(placeId, courseId)
-              .contains(weekStartDateString);
-    }
-
-    // 미리 열린 주차인 경우 잠금 해제
-    final effectiveCanReserve =
-        eligibility.canReserve ||
-        (isBookingWeekOpened &&
-            eligibility.reason == ReservationLockReason.notOpenedYet);
+    final effectiveCanReserve = eligibility.canReserve;
 
     final isLocked = !effectiveCanReserve;
     final isFull = eligibility.reason == ReservationLockReason.full;
@@ -4108,7 +4073,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                     sessionHeightPx,
                     blockStyle,
                     eligibility,
-                    isBookingWeekOpened,
                     canTapWithPastCheck,
                     isCurrentReservation,
                     isLocked,
@@ -4133,7 +4097,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                   sessionHeightPx,
                   blockStyle,
                   eligibility,
-                  isBookingWeekOpened,
                   canTapWithPastCheck,
                   isCurrentReservation,
                   isLocked,
@@ -4161,7 +4124,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
     double sessionHeightPx,
     SessionBlockStyle blockStyle,
     ReservationEligibility eligibility,
-    bool isBookingWeekOpened,
     bool canTapWithPastCheck,
     bool isCurrentReservation,
     bool isLocked,
@@ -4227,8 +4189,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
                     // 홈 화면일 때: 현재신청/정원을 크게 표시 (예약이 아직 안 열린 경우 lock 아이콘 표시)
                     if (!widget.hideCourseSelector) ...[
                       if (eligibility.reason ==
-                              ReservationLockReason.notOpenedYet &&
-                          !isBookingWeekOpened)
+                              ReservationLockReason.notOpenedYet)
                         SvgPicture.asset(
                           'assets/icons/lock.svg',
                           width:
@@ -4311,8 +4272,7 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
           else if (adminSelectNewSlotLockFilled == null &&
               !canTapWithPastCheck &&
               !isCurrentReservation &&
-              isLocked &&
-              !isBookingWeekOpened)
+              isLocked)
             Positioned(
               top: 0,
               right: 0,
@@ -4324,7 +4284,6 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
             ),
           if (!canTap &&
               !isCurrentReservation &&
-              !isBookingWeekOpened &&
               eligibility.reason == ReservationLockReason.notOpenedYet &&
               eligibility.openAt != null &&
               sessionHeightPx >= 70)

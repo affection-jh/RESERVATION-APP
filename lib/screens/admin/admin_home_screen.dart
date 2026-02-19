@@ -50,11 +50,6 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
   // 정책 기반 주차 범위
   final FirestoreService _firestoreService = FirestoreService();
   List<int> _availableWeekOffsets = [0, 1, 2]; // 기본값: 이번주, 다음주, 다다음주
-  CoursePolicy? _currentCoursePolicy; // 현재 코스의 정책
-  String? _bookingWeekOpensPlaceId;
-  String? _bookingWeekOpensCourseId;
-  Set<String> _lastOpenedWeekStartDates = {};
-
   @override
   bool get wantKeepAlive => true; // 상태 유지 활성화
 
@@ -152,8 +147,6 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
 
         // 초기 코스의 정책에 따라 주차 범위 설정
         await _calculateWeekOffsetsForCourse(initialCourse, currentPlace.id);
-        // 미리 열린 주차 구독 시작
-        _subscribeBookingWeekOpens(initialCourse, currentPlace.id);
       } else {
         setState(() => _availableWeekOffsets = [0, 1, 2]);
       }
@@ -178,7 +171,6 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
     if (course == null) {
       setState(() {
         _availableWeekOffsets = [0, 1, 2];
-        _currentCoursePolicy = null;
       });
       return;
     }
@@ -188,7 +180,6 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
         courseId: course.id,
         placeId: placeId,
       );
-      _currentCoursePolicy = policy;
       // 주차 탭과 동일한 최신 정책을 캘린더에도 반영 → 마지막 주차에 자물쇠가 잘못 생기지 않음
       Provider.of<CourseProvider>(context, listen: false)
           .applyCoursePolicy(course.id, policy);
@@ -200,15 +191,12 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
     } catch (_) {
       // 정책 로드 실패 시 기본값 사용
       if (mounted) {
-        setState(() {
-          _availableWeekOffsets = [0, 1, 2];
-          _currentCoursePolicy = null;
-        });
+        setState(() => _availableWeekOffsets = [0, 1, 2]);
       }
     }
   }
 
-  /// 정책 기반 주차 범위 계산 (미리 열린 주차 포함)
+  /// 정책 기반 주차 범위 계산
   void _updateAvailableWeekOffsets(
     CoursePolicy? policy, {
     String? placeId,
@@ -219,51 +207,17 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
       return;
     }
 
-    final openedWeekStartDates =
-        (placeId != null && courseId != null)
-            ? Provider.of<CourseProvider>(
-              context,
-              listen: false,
-            ).getBookingWeekOpens(placeId, courseId)
-            : <String>{};
-
-    // 정책 기반 기본 주차 범위
     final baseOffsets = WeekRangeCalculator.getAvailableWeekOffsets(policy);
     final now = TimezoneUtils.getSeoulDateTime();
     final daysFromMonday = now.weekday - 1;
     final thisWeekMonday = now.subtract(Duration(days: daysFromMonday));
 
-    // 미리 열린 주차의 weekOffset 계산 (관리자가 "미리 예약 열기"로 연 주)
-    final openedOffsets = <int>{};
-    for (final weekStartDateStr in openedWeekStartDates) {
-      try {
-        final parts = weekStartDateStr.split('-');
-        final weekStartDate = DateTime(
-          int.parse(parts[0]),
-          int.parse(parts[1]),
-          int.parse(parts[2]),
-        );
-        final diffDays = weekStartDate.difference(thisWeekMonday).inDays;
-        final weekOffset = (diffDays / 7).round();
-        if (weekOffset >= 0) {
-          openedOffsets.add(weekOffset);
-        }
-      } catch (_) {
-        // 날짜 파싱 실패 시 스킵
-      }
-    }
-
     // 정책상 "지금 시점에 실제로 열린" 주차만 탭에 표시 (잠긴 주차 제거)
-    // - 미리 열린 주차(bookingWeekOpens)는 항상 포함
-    // - weeklyRelease: 해당 주의 오픈 시각(release)이 지났을 때만 포함
-    // - rollingWindow: baseOffsets 그대로 사용
+    // weeklyRelease: 해당 주의 오픈 시각(release)이 지났을 때만 포함
+    // rollingWindow: baseOffsets 그대로 사용
     final actuallyOpenedOffsets = <int>{};
     if (policy.openStrategy.type == BookingOpenStrategyType.weeklyRelease) {
       for (final offset in baseOffsets) {
-        if (openedOffsets.contains(offset)) {
-          actuallyOpenedOffsets.add(offset);
-          continue;
-        }
         final weekMonday = thisWeekMonday.add(Duration(days: 7 * offset));
         final eligibility = ReservationPolicyEngine.evaluateReservation(
           now: now,
@@ -281,7 +235,6 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
     } else {
       actuallyOpenedOffsets.addAll(baseOffsets);
     }
-    actuallyOpenedOffsets.addAll(openedOffsets);
 
     final sortedOffsets = actuallyOpenedOffsets.toList()..sort();
     final finalOffsets =
@@ -298,50 +251,9 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
     }
   }
 
-  /// 미리 열린 주차 구독 (CourseProvider에서 단일 구독 공유)
-  void _subscribeBookingWeekOpens(Course? course, String placeId) {
-    if (course == null) return;
-    _bookingWeekOpensPlaceId = placeId;
-    _bookingWeekOpensCourseId = course.id;
-    Provider.of<CourseProvider>(
-      context,
-      listen: false,
-    ).subscribeToBookingWeekOpens(placeId, course.id);
-    if (_currentCoursePolicy != null) {
-      _updateAvailableWeekOffsets(
-        _currentCoursePolicy,
-        placeId: placeId,
-        courseId: course.id,
-      );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     super.build(context); // AutomaticKeepAliveClientMixin을 위해 필요
-    final courseProvider = context.watch<CourseProvider>();
-    if (_currentCoursePolicy != null &&
-        _bookingWeekOpensPlaceId != null &&
-        _bookingWeekOpensCourseId != null) {
-      final currentOpened = courseProvider.getBookingWeekOpens(
-        _bookingWeekOpensPlaceId!,
-        _bookingWeekOpensCourseId!,
-      );
-      final openedChanged =
-          currentOpened.length != _lastOpenedWeekStartDates.length ||
-          currentOpened.any((e) => !_lastOpenedWeekStartDates.contains(e));
-      if (openedChanged) {
-        _lastOpenedWeekStartDates = Set.from(currentOpened);
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          _updateAvailableWeekOffsets(
-            _currentCoursePolicy,
-            placeId: _bookingWeekOpensPlaceId,
-            courseId: _bookingWeekOpensCourseId,
-          );
-        });
-      }
-    }
 
     // 플레이스 변경 감지하여 데이터 다시 로드
     final placeProvider = Provider.of<PlaceProvider>(context);
@@ -582,7 +494,6 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
                   });
                   if (pid != null) {
                     await _calculateWeekOffsetsForCourse(course, pid);
-                    _subscribeBookingWeekOpens(course, pid);
                   }
                 });
               },
