@@ -92,6 +92,14 @@ class PlaceProvider with ChangeNotifier {
     }
   }
 
+  /// Cloud Function 등으로 플레이스 생성 후 로컬 상태 반영
+  void setCreatedPlace(Place place) {
+    _places[place.id] = place;
+    _currentPlace = place;
+    _error = null;
+    notifyListeners();
+  }
+
   /// 플레이스 생성
   Future<Place> createPlace({
     required String name,

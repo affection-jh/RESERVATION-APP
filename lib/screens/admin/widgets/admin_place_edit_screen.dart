@@ -3,13 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:reservation/utils/text_field_decoration_util.dart';
 import '../../../theme/app_colors.dart';
 import '../../../models/place.dart';
-import '../../../models/place_member.dart';
-import '../../../services/member_service.dart';
 import '../../../utils/snackbar_util.dart';
-import '../../../utils/timezone_utils.dart';
 import '../../../widgets/cached_image_widget.dart' show PlaceImageWidget;
 import '../../../widgets/story_card.dart';
 import '../../../services/storage_service.dart';
@@ -890,49 +888,79 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         return;
       }
       if (widget.place == null) {
-        // 새로 등록
-        final newPlace = await placeProvider.createPlace(
-          name: _nameController.text.trim(),
-          description:
-              _descriptionController.text.trim().isEmpty
-                  ? null
-                  : _descriptionController.text.trim(),
-          appBarText:
-              _appBarTextController.text.trim().isEmpty
-                  ? null
-                  : _appBarTextController.text.trim(),
-          greetingText:
-              _greetingTextController.text.trim().isEmpty
-                  ? null
-                  : _greetingTextController.text.trim(),
-          hideGreeting: _hideGreeting,
-          imageUrl: _uploadedImageUrl,
-          adminId: currentAdmin.userId,
-        );
-        if (_leaveRequested) return;
-
-        // 생성자를 해당 플레이스 members에 manager로 추가 (접근 가능 플레이스 = members 기준)
-        // adminDisplayName은 반드시 생성자(매니저) 표시 이름으로 채움
+        // 새로 등록 — Cloud Function 사용 (권한·중복 방지)
         final creatorDisplayName =
             currentAdmin.username.trim().isNotEmpty
                 ? currentAdmin.username.trim()
                 : '관리자';
-        final now = TimezoneUtils.getSeoulDateTime();
-        final creatorMember = PlaceMember(
-          userId: currentAdmin.userId,
-          placeId: newPlace.id,
-          role: PlaceMemberRole.manager,
-          adminDisplayName: creatorDisplayName,
-          phoneNumber: currentAdmin.phoneNumber,
-          manageableCourseIds: const [],
-          createdAt: now,
-          updatedAt: null,
-        );
-        await MemberService().setPlaceMember(
-          newPlace.id,
-          currentAdmin.userId,
-          creatorMember,
-        );
+
+        Place newPlace;
+        try {
+          final result = await FirebaseFunctions.instance
+              .httpsCallable('createPlaceWithMember')
+              .call(<String, dynamic>{
+            'name': _nameController.text.trim(),
+            'description': _descriptionController.text.trim().isEmpty
+                ? null
+                : _descriptionController.text.trim(),
+            'appBarText': _appBarTextController.text.trim().isEmpty
+                ? null
+                : _appBarTextController.text.trim(),
+            'greetingText': _greetingTextController.text.trim().isEmpty
+                ? null
+                : _greetingTextController.text.trim(),
+            'hideGreeting': _hideGreeting,
+            'imageUrl': _uploadedImageUrl,
+            'adminDisplayName': creatorDisplayName,
+            'phoneNumber': currentAdmin.phoneNumber,
+          });
+
+          final data = result.data as Map<String, dynamic>?;
+          if (data == null || data['success'] != true) {
+            throw Exception('플레이스 생성에 실패했습니다.');
+          }
+
+          final placeMap = data['place'] as Map<String, dynamic>?;
+          if (placeMap == null) throw Exception('응답에 place가 없습니다.');
+
+          newPlace = Place.fromJson(placeMap);
+
+          if (_leaveRequested) return;
+
+          placeProvider.setCreatedPlace(newPlace);
+        } on FirebaseFunctionsException catch (e) {
+          if (mounted) {
+            setState(() => _isSaving = false);
+            String msg = '플레이스 등록 중 오류가 발생했습니다.';
+            switch (e.code) {
+              case 'already-exists':
+                msg = '같은 이름의 플레이스가 이미 존재합니다.';
+                break;
+              case 'unauthenticated':
+                msg = '로그인이 필요합니다.';
+                break;
+              case 'invalid-argument':
+                msg = e.message ?? '입력 정보를 확인해주세요.';
+                break;
+              default:
+                msg = e.message ?? msg;
+            }
+            SnackbarUtil.showInfo(context, msg);
+          }
+          return;
+        } catch (e) {
+          if (mounted) {
+            setState(() => _isSaving = false);
+            SnackbarUtil.showInfo(
+              context,
+              e.toString().contains('already-exists')
+                  ? '같은 이름의 플레이스가 이미 존재합니다.'
+                  : '플레이스 등록 중 오류가 발생했습니다.',
+            );
+          }
+          return;
+        }
+
         if (_leaveRequested) return;
 
         final updatedAdmin = currentAdmin.addPlace(newPlace.id);

@@ -25,6 +25,7 @@ service cloud.firestore {
     // 플레이스 소유자: place.adminId == request.auth.uid (place 생성 시 설정)
     function isPlaceOwner(placeId) {
       return signedIn() &&
+        exists(/databases/$(database)/documents/places/$(placeId)) &&
         get(/databases/$(database)/documents/places/$(placeId)).data.adminId == request.auth.uid;
     }
 
@@ -88,13 +89,24 @@ service cloud.firestore {
       // ==================== Places 서브컬렉션: Members ====================
       // places/{placeId}/members/{uid} — 매니저·부매니저·일반멤버 통일
       // create: 소유자(플레이스 생성 직후 첫 멤버 추가) 또는 기존 매니저만
+      // 주의: isPlaceOwner는 exists 체크를 포함하므로 첫 멤버 생성 시에도 안전하게 동작
       match /members/{memberId} {
         allow read: if signedIn() && (
           memberId == request.auth.uid ||
           isPlaceManager(placeId) ||
           isPlaceOwner(placeId)
         );
-        allow create, update, delete: if signedIn() && (isPlaceManager(placeId) || isPlaceOwner(placeId));
+        // create: 플레이스 소유자이거나 기존 매니저만 허용
+        // isPlaceOwner는 exists 체크를 포함하므로 첫 멤버 생성 시에도 안전
+        allow create: if signedIn() && (
+          isPlaceOwner(placeId) || 
+          isPlaceManager(placeId)
+        );
+        // update, delete: 기존 매니저 또는 소유자만
+        allow update, delete: if signedIn() && (
+          isPlaceManager(placeId) || 
+          isPlaceOwner(placeId)
+        );
       }
 
       // ==================== Places 서브컬렉션: Pending Members (초대 토큰) ====================

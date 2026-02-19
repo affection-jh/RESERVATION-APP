@@ -4290,6 +4290,98 @@ export const registerMemberByAdmin = functions.https.onCall(async (data, context
 });
 
 /**
+ * 플레이스 생성 + 생성자 멤버(manager) 등록 (트랜잭션, 중복 방지)
+ * - 클라이언트 Firestore 권한 이슈 회피
+ * - 같은 adminId + 동일 이름 플레이스 중복 시 already-exists
+ */
+export const createPlaceWithMember = functions.https.onCall(async (data, context) => {
+    const functionName = 'createPlaceWithMember';
+    logFunctionStart(functionName, {});
+
+    if (!context.auth?.uid) {
+        throw new functions.https.HttpsError('unauthenticated', '로그인이 필요합니다.');
+    }
+
+    const adminId = context.auth.uid;
+    const name = String(data?.name ?? '').trim();
+    if (!name) {
+        throw new functions.https.HttpsError('invalid-argument', '플레이스 이름이 필요합니다.');
+    }
+
+    const description = data?.description != null ? String(data.description).trim() : null;
+    const appBarText = data?.appBarText != null ? String(data.appBarText).trim() : null;
+    const greetingText = data?.greetingText != null ? String(data.greetingText).trim() : null;
+    const hideGreeting = data?.hideGreeting === true;
+    const imageUrl = data?.imageUrl != null ? String(data.imageUrl).trim() : null;
+    const adminDisplayName = (data?.adminDisplayName != null ? String(data.adminDisplayName).trim() : null) || '관리자';
+    const phoneNumber = data?.phoneNumber != null ? String(data.phoneNumber).trim() : null;
+
+    const db = admin.firestore();
+
+    // 중복: 같은 adminId + 같은 이름(대소문자 무시)
+    const existingSnap = await db.collection('places').where('adminId', '==', adminId).get();
+    const nameLower = name.toLowerCase();
+    for (const doc of existingSnap.docs) {
+        if ((String(doc.data().name || '')).toLowerCase() === nameLower) {
+            logFunctionError(functionName, new Error('Duplicate place name'), { name, adminId });
+            throw new functions.https.HttpsError('already-exists', '같은 이름의 플레이스가 이미 존재합니다.');
+        }
+    }
+
+    const placeId = `place_${Date.now()}`;
+    const now = admin.firestore.Timestamp.now();
+
+    const placeData: Record<string, unknown> = {
+        id: placeId,
+        name,
+        adminId,
+        hideGreeting,
+        courses: [],
+    };
+    if (description != null && description !== '') placeData.description = description;
+    if (appBarText != null && appBarText !== '') placeData.appBarText = appBarText;
+    if (greetingText != null && greetingText !== '') placeData.greetingText = greetingText;
+    if (imageUrl != null && imageUrl !== '') placeData.imageUrl = imageUrl;
+
+    const memberData: Record<string, unknown> = {
+        userId: adminId,
+        role: 'manager',
+        adminDisplayName,
+        manageableCourseIds: [],
+        createdAt: now,
+    };
+    if (phoneNumber != null && phoneNumber !== '') {
+        memberData.phoneNumber = normalizePhoneForStorage(phoneNumber);
+    }
+
+    await db.runTransaction(async (tx) => {
+        const placeRef = db.collection('places').doc(placeId);
+        tx.set(placeRef, placeData);
+        tx.set(placeRef.collection('members').doc(adminId), memberData);
+    });
+
+    logFunctionSuccess(functionName, { placeId, name });
+
+    const placePayload: Record<string, unknown> = {
+        id: placeId,
+        name,
+        adminId,
+        description: description ?? null,
+        greetingText: greetingText ?? null,
+        hideGreeting,
+        imageUrl: imageUrl ?? null,
+        courses: [],
+    };
+    if (appBarText != null) placePayload.appBarText = appBarText;
+
+    return {
+        success: true,
+        placeId,
+        place: placePayload,
+    };
+});
+
+/**
  * 코스별 부매니저 초대 (pendingMembers에 role: subManager, managedCourseIds에 courseId 추가/병합)
  * - 매니저만 호출 가능. 기존 pending이 있으면 managedCourseIds에만 courseId 추가.
  */
