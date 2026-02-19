@@ -364,7 +364,8 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         );
         memberProvider.setPlaceId(placeId);
         // 나갔어도 로딩 스낵바를 닫고 결과 표시
-        final resultCtxPending = mounted ? context : navigatorKey.currentContext;
+        final resultCtxPending =
+            mounted ? context : navigatorKey.currentContext;
         if (resultCtxPending != null) {
           SnackbarUtil.showSuccess(resultCtxPending, '대기 등록 정보가 변경되었습니다.');
         }
@@ -436,6 +437,9 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
       }
     } finally {
       SnackbarUtil.dismissLoading();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        SnackbarUtil.dismissLoading();
+      });
       if (mounted) {
         setState(() {
           _isSaving = false;
@@ -588,7 +592,8 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         return;
       }
       final loadCtxPeriod = navigatorKey.currentContext;
-      if (loadCtxPeriod != null) SnackbarUtil.showLoading(loadCtxPeriod, '저장 중…');
+      if (loadCtxPeriod != null)
+        SnackbarUtil.showLoading(loadCtxPeriod, '저장 중…');
 
       final enrollmentService = EnrollmentService();
 
@@ -617,9 +622,13 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
 
         Provider.of<MemberProvider>(context, listen: false).setPlaceId(placeId);
         // 나갔어도 로딩 스낵바를 닫고 결과 표시
-        final resultCtxPendingPeriod = mounted ? context : navigatorKey.currentContext;
+        final resultCtxPendingPeriod =
+            mounted ? context : navigatorKey.currentContext;
         if (resultCtxPendingPeriod != null) {
-          SnackbarUtil.showSuccess(resultCtxPendingPeriod, '대기 등록 정보가 변경되었습니다.');
+          SnackbarUtil.showSuccess(
+            resultCtxPendingPeriod,
+            '대기 등록 정보가 변경되었습니다.',
+          );
         }
         if (_leaveRequested) return;
       } else {
@@ -671,7 +680,8 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         }
       }
     } catch (e) {
-      final resultCtxPeriodErr = mounted ? context : navigatorKey.currentContext;
+      final resultCtxPeriodErr =
+          mounted ? context : navigatorKey.currentContext;
       if (resultCtxPeriodErr != null) {
         SnackbarUtil.showInfoFromError(
           resultCtxPeriodErr,
@@ -681,6 +691,9 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
       }
     } finally {
       SnackbarUtil.dismissLoading();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        SnackbarUtil.dismissLoading();
+      });
       if (mounted) {
         setState(() {
           _isSaving = false;

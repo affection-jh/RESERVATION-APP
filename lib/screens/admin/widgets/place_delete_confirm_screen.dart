@@ -128,6 +128,9 @@ class _PlaceDeleteConfirmScreenState extends State<PlaceDeleteConfirmScreen> {
       }
     } finally {
       SnackbarUtil.dismissLoading();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        SnackbarUtil.dismissLoading();
+      });
       if (mounted) setState(() => _isLoading = false);
     }
   }

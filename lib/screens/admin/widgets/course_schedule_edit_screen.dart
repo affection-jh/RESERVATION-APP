@@ -81,7 +81,10 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
   void _subscribeReservedSessionIds() {
     _reservedSessionIdsSub?.cancel();
     _reservedSessionIdsSub = _firestoreService
-        .watchReservedSessionIdsForCourse(widget.course.placeId, widget.course.id)
+        .watchReservedSessionIdsForCourse(
+          widget.course.placeId,
+          widget.course.id,
+        )
         .listen(
           (ids) {
             if (!mounted) return;
@@ -331,7 +334,7 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
                             ),
                             const SizedBox(width: 8),
                             Text(
-                              '저장 중...',
+                              '저장 중',
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w600,
@@ -671,119 +674,89 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
       isDismissible: true,
       enableDrag: true,
       useSafeArea: true,
-      builder: (context) => SessionEditBottomSheet(
-        initialStartTime: startTime,
-              initialEndTime: endTime,
-              initialCapacity: capacity,
-              courseName: widget.course.name,
-              dayOfWeek: dayOfWeek,
-              selectedDays: selectedDays,
-              courseColor: Color(widget.course.color),
-              existingSessions: _daySessions[dayOfWeek] ?? [],
-              allDaySessions: _daySessions, // 모든 요일의 세션 정보 전달
-              isEditMode: isEditMode,
-              onCancel: () {
-                _clearSelectionForDay(dayOfWeek);
-              },
-              onRegister: (newStartTime, newEndTime, newCapacity, bulkDays) {
-                // 시간 유효성 검증
-                final startMinutes = CalendarUtils.parseTimeToMinutes(newStartTime);
-                final endMinutes = CalendarUtils.parseTimeToMinutes(newEndTime);
-                if (startMinutes >= endMinutes) {
-                  SnackbarUtil.showInfo(context, '시작 시간이 종료 시간보다 빨라야 해요.');
-                  return;
-                }
+      builder:
+          (context) => SessionEditBottomSheet(
+            initialStartTime: startTime,
+            initialEndTime: endTime,
+            initialCapacity: capacity,
+            courseName: widget.course.name,
+            dayOfWeek: dayOfWeek,
+            selectedDays: selectedDays,
+            courseColor: Color(widget.course.color),
+            existingSessions: _daySessions[dayOfWeek] ?? [],
+            allDaySessions: _daySessions, // 모든 요일의 세션 정보 전달
+            isEditMode: isEditMode,
+            onCancel: () {
+              _clearSelectionForDay(dayOfWeek);
+            },
+            onRegister: (newStartTime, newEndTime, newCapacity, bulkDays) {
+              // 시간 유효성 검증
+              final startMinutes = CalendarUtils.parseTimeToMinutes(
+                newStartTime,
+              );
+              final endMinutes = CalendarUtils.parseTimeToMinutes(newEndTime);
+              if (startMinutes >= endMinutes) {
+                SnackbarUtil.showInfo(context, '시작 시간이 종료 시간보다 빨라야 해요.');
+                return;
+              }
 
-                // 정원 유효성 검증
-                if (newCapacity <= 0) {
-                  SnackbarUtil.showInfo(context, '정원은 1명 이상이어야 해요.');
-                  return;
-                }
+              // 정원 유효성 검증
+              if (newCapacity <= 0) {
+                SnackbarUtil.showInfo(context, '정원은 1명 이상이어야 해요.');
+                return;
+              }
 
-                if (newCapacity > 999) {
-                  SnackbarUtil.showInfo(context, '정원은 999명 이하여야 해요.');
-                  return;
-                }
+              if (newCapacity > 999) {
+                SnackbarUtil.showInfo(context, '정원은 999명 이하여야 해요.');
+                return;
+              }
 
-                setState(() {
-                  _defaultCapacity = newCapacity;
+              setState(() {
+                _defaultCapacity = newCapacity;
 
-                  // 일괄 적용 (등록/수정 모두)
-                  if (bulkDays != null && bulkDays.isNotEmpty) {
-                    const dayNames = ['', '월', '화', '수', '목', '금', '토', '일'];
-                    if (isEditMode) {
-                      // 수정 모드: 모든 요일에 동일하게 적용
-                      for (final bulkDay in bulkDays) {
-                        _daySessions.putIfAbsent(
-                          bulkDay,
-                          () => <SessionDraft>[],
+                // 일괄 적용 (등록/수정 모두)
+                if (bulkDays != null && bulkDays.isNotEmpty) {
+                  const dayNames = ['', '월', '화', '수', '목', '금', '토', '일'];
+                  if (isEditMode) {
+                    // 수정 모드: 모든 요일에 동일하게 적용
+                    for (final bulkDay in bulkDays) {
+                      _daySessions.putIfAbsent(bulkDay, () => <SessionDraft>[]);
+                      final sessions = _daySessions[bulkDay] ?? [];
+
+                      // 기존 세션 찾기 (원본 시간대 기준)
+                      final existingIndex = sessions.indexWhere(
+                        (s) => s.startTime == startTime && s.endTime == endTime,
+                      );
+
+                      if (existingIndex != -1) {
+                        final temp = List<SessionDraft>.from(sessions);
+                        temp[existingIndex] = SessionDraft(
+                          startTime: newStartTime,
+                          endTime: newEndTime,
+                          capacity: newCapacity,
                         );
-                        final sessions = _daySessions[bulkDay] ?? [];
-
-                        // 기존 세션 찾기 (원본 시간대 기준)
-                        final existingIndex = sessions.indexWhere(
-                          (s) =>
-                              s.startTime == startTime && s.endTime == endTime,
+                        // 자기 자신을 제외하고 겹침 체크
+                        final overlapInfo = _findOverlapInDay(
+                          temp,
+                          excludeIndex: existingIndex,
                         );
-
-                        if (existingIndex != -1) {
-                          final temp = List<SessionDraft>.from(sessions);
-                          temp[existingIndex] = SessionDraft(
-                            startTime: newStartTime,
-                            endTime: newEndTime,
-                            capacity: newCapacity,
-                          );
-                          // 자기 자신을 제외하고 겹침 체크
-                          final overlapInfo = _findOverlapInDay(
-                            temp,
-                            excludeIndex: existingIndex,
-                          );
-                          if (overlapInfo == null) {
-                            sessions[existingIndex] = temp[existingIndex];
-                          } else {
-                            SnackbarUtil.showInfo(
-                              context,
-                              '${dayNames[bulkDay]}요일 ${overlapInfo['overlapStart']}~${overlapInfo['overlapEnd']}와 겹쳐요.',
-                            );
-                          }
+                        if (overlapInfo == null) {
+                          sessions[existingIndex] = temp[existingIndex];
                         } else {
-                          // 없으면 새로 추가 (겹침 체크)
-                          final overlapInfo = _findOverlap(
-                            bulkDay,
-                            newStartTime,
-                            newEndTime,
+                          SnackbarUtil.showInfo(
+                            context,
+                            '${dayNames[bulkDay]}요일 ${overlapInfo['overlapStart']}~${overlapInfo['overlapEnd']}와 겹쳐요.',
                           );
-                          if (overlapInfo == null) {
-                            sessions.add(
-                              SessionDraft(
-                                startTime: newStartTime,
-                                endTime: newEndTime,
-                                capacity: newCapacity,
-                              ),
-                            );
-                          } else {
-                            SnackbarUtil.showInfo(
-                              context,
-                              '${dayNames[bulkDay]}요일 ${overlapInfo['overlapStart']}~${overlapInfo['overlapEnd']}와 겹쳐요.',
-                            );
-                          }
                         }
-                        _daySessions[bulkDay] = sessions;
-                      }
-                    } else {
-                      // 등록 모드: 겹치지 않는 요일에만 추가
-                      for (final bulkDay in bulkDays) {
-                        _daySessions.putIfAbsent(
-                          bulkDay,
-                          () => <SessionDraft>[],
-                        );
+                      } else {
+                        // 없으면 새로 추가 (겹침 체크)
                         final overlapInfo = _findOverlap(
                           bulkDay,
                           newStartTime,
                           newEndTime,
                         );
                         if (overlapInfo == null) {
-                          _daySessions[bulkDay]!.add(
+                          sessions.add(
                             SessionDraft(
                               startTime: newStartTime,
                               endTime: newEndTime,
@@ -797,54 +770,57 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
                           );
                         }
                       }
+                      _daySessions[bulkDay] = sessions;
                     }
-                    return;
-                  }
-
-                  if (isEditMode) {
-                    // 기존 세션 수정 (단일 요일)
-                    final sessions = _daySessions[dayOfWeek] ?? [];
-                    final index = sessions.indexWhere(
-                      (s) => s.startTime == startTime && s.endTime == endTime,
-                    );
-                    if (index != -1) {
-                      final temp = List<SessionDraft>.from(sessions);
-                      temp[index] = SessionDraft(
-                        startTime: newStartTime,
-                        endTime: newEndTime,
-                        capacity: newCapacity,
-                      );
-                      // 자기 자신을 제외하고 겹침 체크
-                      final overlapInfo = _findOverlapInDay(
-                        temp,
-                        excludeIndex: index,
+                  } else {
+                    // 등록 모드: 겹치지 않는 요일에만 추가
+                    for (final bulkDay in bulkDays) {
+                      _daySessions.putIfAbsent(bulkDay, () => <SessionDraft>[]);
+                      final overlapInfo = _findOverlap(
+                        bulkDay,
+                        newStartTime,
+                        newEndTime,
                       );
                       if (overlapInfo == null) {
-                        sessions[index] = temp[index];
-                        _daySessions[dayOfWeek] = sessions;
+                        _daySessions[bulkDay]!.add(
+                          SessionDraft(
+                            startTime: newStartTime,
+                            endTime: newEndTime,
+                            capacity: newCapacity,
+                          ),
+                        );
                       } else {
                         SnackbarUtil.showInfo(
                           context,
-                          '${overlapInfo['overlapStart']}~${overlapInfo['overlapEnd']}와 겹쳐요.',
+                          '${dayNames[bulkDay]}요일 ${overlapInfo['overlapStart']}~${overlapInfo['overlapEnd']}와 겹쳐요.',
                         );
                       }
                     }
-                  } else {
-                    // 새 세션 추가 (단일 요일)
-                    _daySessions.putIfAbsent(dayOfWeek, () => <SessionDraft>[]);
-                    final overlapInfo = _findOverlap(
-                      dayOfWeek,
-                      newStartTime,
-                      newEndTime,
+                  }
+                  return;
+                }
+
+                if (isEditMode) {
+                  // 기존 세션 수정 (단일 요일)
+                  final sessions = _daySessions[dayOfWeek] ?? [];
+                  final index = sessions.indexWhere(
+                    (s) => s.startTime == startTime && s.endTime == endTime,
+                  );
+                  if (index != -1) {
+                    final temp = List<SessionDraft>.from(sessions);
+                    temp[index] = SessionDraft(
+                      startTime: newStartTime,
+                      endTime: newEndTime,
+                      capacity: newCapacity,
+                    );
+                    // 자기 자신을 제외하고 겹침 체크
+                    final overlapInfo = _findOverlapInDay(
+                      temp,
+                      excludeIndex: index,
                     );
                     if (overlapInfo == null) {
-                      _daySessions[dayOfWeek]!.add(
-                        SessionDraft(
-                          startTime: newStartTime,
-                          endTime: newEndTime,
-                          capacity: newCapacity,
-                        ),
-                      );
+                      sessions[index] = temp[index];
+                      _daySessions[dayOfWeek] = sessions;
                     } else {
                       SnackbarUtil.showInfo(
                         context,
@@ -852,24 +828,47 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
                       );
                     }
                   }
-                });
+                } else {
+                  // 새 세션 추가 (단일 요일)
+                  _daySessions.putIfAbsent(dayOfWeek, () => <SessionDraft>[]);
+                  final overlapInfo = _findOverlap(
+                    dayOfWeek,
+                    newStartTime,
+                    newEndTime,
+                  );
+                  if (overlapInfo == null) {
+                    _daySessions[dayOfWeek]!.add(
+                      SessionDraft(
+                        startTime: newStartTime,
+                        endTime: newEndTime,
+                        capacity: newCapacity,
+                      ),
+                    );
+                  } else {
+                    SnackbarUtil.showInfo(
+                      context,
+                      '${overlapInfo['overlapStart']}~${overlapInfo['overlapEnd']}와 겹쳐요.',
+                    );
+                  }
+                }
+              });
 
-                _clearSelectionForDay(dayOfWeek);
-              },
-              onDelete:
-                  isEditMode
-                      ? (bulkDays) {
-                        // UI에서만 제거. 실제 삭제는 '저장' 버튼 시 서버 반영되며,
-                        // 예약이 있으면 저장 시 requiresBulkMove로 일괄 취소 유도
-                        setState(() {
-                          final sessions = _daySessions[dayOfWeek] ?? [];
-                          sessions.remove(existingSession);
-                          _daySessions[dayOfWeek] = sessions;
-                        });
-                        _clearSelectionForDay(dayOfWeek);
-                      }
-                      : null,
-      ),
+              _clearSelectionForDay(dayOfWeek);
+            },
+            onDelete:
+                isEditMode
+                    ? (bulkDays) {
+                      // UI에서만 제거. 실제 삭제는 '저장' 버튼 시 서버 반영되며,
+                      // 예약이 있으면 저장 시 requiresBulkMove로 일괄 취소 유도
+                      setState(() {
+                        final sessions = _daySessions[dayOfWeek] ?? [];
+                        sessions.remove(existingSession);
+                        _daySessions[dayOfWeek] = sessions;
+                      });
+                      _clearSelectionForDay(dayOfWeek);
+                    }
+                    : null,
+          ),
     ).then((_) {
       // 바텀시트가 닫힐 때(dismiss 포함) 선택 영역 초기화
       _clearSelectionForDay(dayOfWeek);
@@ -1203,10 +1202,15 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
       await courseProvider.loadCourses(currentPlace.id);
       if (_leaveRequested) return;
 
+      SnackbarUtil.dismissLoading();
       if (mounted) {
         _modifyRetryPending = false;
         SnackbarUtil.showSuccess(context, '저장했어요.');
-        Navigator.of(context).pop(true); // 저장 성공을 알리기 위해 true 반환
+        final nav = Navigator.of(context);
+        nav.pop(true); // 1) 다이얼로그가 열려 있으면 먼저 제거
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (nav.canPop()) nav.pop(true); // 2) 화면까지 닫기
+        });
       }
     } on FirebaseFunctionsException catch (e) {
       final details = e.details;
@@ -1288,6 +1292,10 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
         SnackbarUtil.showInfo(context, '저장하지 못했어요.');
       }
     } finally {
+      SnackbarUtil.dismissLoading();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        SnackbarUtil.dismissLoading();
+      });
       if (mounted) {
         setState(() {
           _isSaving = false;

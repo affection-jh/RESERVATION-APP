@@ -1237,9 +1237,14 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         await placeProvider.updatePlace(updatedPlace);
         if (_leaveRequested) return;
 
+        SnackbarUtil.dismissLoading();
         if (mounted) {
-          Navigator.of(context).pop(updatedPlace);
           SnackbarUtil.showSuccess(context, '플레이스 정보가 수정되었습니다.');
+          final nav = Navigator.of(context);
+          nav.pop(updatedPlace); // 1) 다이얼로그가 열려 있으면 먼저 제거
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (nav.canPop()) nav.pop(updatedPlace); // 2) 화면까지 닫기
+          });
         }
       }
     } catch (e) {
@@ -1255,6 +1260,10 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         );
       }
     } finally {
+      SnackbarUtil.dismissLoading();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        SnackbarUtil.dismissLoading();
+      });
       if (mounted) {
         setState(() {
           _isSaving = false;

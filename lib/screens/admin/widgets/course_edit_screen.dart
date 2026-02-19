@@ -340,9 +340,10 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
   /// 이미지 제거 (UI에서만 제거). 이미 등록된 코스의 기존 이미지는 Storage 삭제하지 않음 → 저장 시에만 삭제.
   Future<void> _deleteImage() async {
     // 새로 올린 이미지만 Storage에서 즉시 삭제 (기존 코스 이미지 X 누른 경우는 저장 시에만 삭제)
-    final urlToDelete = _uploadedImageUrl != null && _uploadedImageUrl != _existingImageUrl
-        ? _uploadedImageUrl
-        : null;
+    final urlToDelete =
+        _uploadedImageUrl != null && _uploadedImageUrl != _existingImageUrl
+            ? _uploadedImageUrl
+            : null;
     if (urlToDelete != null) {
       try {
         final storageService = StorageService();
@@ -561,6 +562,9 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
       if (_leaveRequested) return;
     } finally {
       SnackbarUtil.dismissLoading();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        SnackbarUtil.dismissLoading();
+      });
       if (mounted) {
         setState(() {
           _isDeleting = false;
@@ -1057,12 +1061,16 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
         final managersForCourse =
             all
                 .where(
-                  (v) => v.isSubManager && v.manageableCourseIds.contains(courseId),
+                  (v) =>
+                      v.isSubManager &&
+                      v.manageableCourseIds.contains(courseId),
                 )
                 .toList();
 
         // 네트워크 반영 전 UI 즉시 표시용(추가 진행중): 로컬 pending add 목록도 포함
-        final pendingAddIds = memberProvider.getPendingSubManagerUserIds(courseId);
+        final pendingAddIds = memberProvider.getPendingSubManagerUserIds(
+          courseId,
+        );
         final pendingAddMembers =
             all.where((v) => pendingAddIds.contains(v.userId)).toList();
 
@@ -1072,13 +1080,14 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
         }
         // 같은 사람이 place 멤버 + pending 양쪽에 있으면 카드가 2개 보였다가 1개로 바뀌는 깜빡임 방지: 전화번호 기준 1명만 표시(place 우선)
         final seenPhones = <String>{};
-        final deduped = combined.where((v) {
-          final key = v.phoneNumber.trim();
-          if (key.isEmpty) return true;
-          if (seenPhones.contains(key)) return false;
-          seenPhones.add(key);
-          return true;
-        }).toList();
+        final deduped =
+            combined.where((v) {
+              final key = v.phoneNumber.trim();
+              if (key.isEmpty) return true;
+              if (seenPhones.contains(key)) return false;
+              seenPhones.add(key);
+              return true;
+            }).toList();
 
         return SizedBox(
           width: double.infinity,

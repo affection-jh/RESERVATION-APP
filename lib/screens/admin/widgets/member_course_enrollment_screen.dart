@@ -267,6 +267,9 @@ class _MemberCourseEnrollmentScreenState
       }
     } finally {
       SnackbarUtil.dismissLoading();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        SnackbarUtil.dismissLoading();
+      });
       if (mounted) {
         setState(() {
           _isSaving = false;
@@ -321,7 +324,7 @@ class _MemberCourseEnrollmentScreenState
     );
     if (leave && mounted) {
       final loadCtx = navigatorKey.currentContext;
-      if (loadCtx != null) SnackbarUtil.showLoading(loadCtx, '등록 중…');
+      if (loadCtx != null) SnackbarUtil.showLoading(loadCtx, '등록 중');
       setState(() => _isSaving = false);
       return true;
     }

@@ -1239,6 +1239,9 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
       }
     } finally {
       SnackbarUtil.dismissLoading();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        SnackbarUtil.dismissLoading();
+      });
       if (mounted) setState(() => _isDeletingSession = false);
     }
   }

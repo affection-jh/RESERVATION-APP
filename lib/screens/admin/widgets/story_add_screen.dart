@@ -376,148 +376,151 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
     try {
       if (_leaveRequested) return;
       // 모든 이미지 URL 리스트 (기존 업로드된 것 + 새로 업로드할 것)
-    final List<String> allImageUrls = List<String>.from(_uploadedImageUrls);
+      final List<String> allImageUrls = List<String>.from(_uploadedImageUrls);
 
-    // 선택한 로컬 이미지들을 저장 시에만 업로드 (병렬로)
-    if (_selectedImages.isNotEmpty) {
-      // 모든 이미지를 병렬로 업로드
-      final uploadFutures =
-          _selectedImages.asMap().entries.map((entry) async {
-            final index = entry.key;
-            final file = entry.value;
+      // 선택한 로컬 이미지들을 저장 시에만 업로드 (병렬로)
+      if (_selectedImages.isNotEmpty) {
+        // 모든 이미지를 병렬로 업로드
+        final uploadFutures =
+            _selectedImages.asMap().entries.map((entry) async {
+              final index = entry.key;
+              final file = entry.value;
 
-            try {
-              final storageService = firebase_storage.StorageService();
-              final imageUrl = await storageService.uploadImage(
-                imageFile: file,
-                folder: 'stories',
-              );
-              return {
-                'success': true,
-                'url': imageUrl,
-                'index': index,
-                'file': file,
-              };
-            } catch (e) {
-              // 업로드 실패 시 파일 삭제
               try {
-                if (await file.exists()) {
-                  await file.delete();
+                final storageService = firebase_storage.StorageService();
+                final imageUrl = await storageService.uploadImage(
+                  imageFile: file,
+                  folder: 'stories',
+                );
+                return {
+                  'success': true,
+                  'url': imageUrl,
+                  'index': index,
+                  'file': file,
+                };
+              } catch (e) {
+                // 업로드 실패 시 파일 삭제
+                try {
+                  if (await file.exists()) {
+                    await file.delete();
+                  }
+                } catch (deleteError) {
+                  debugPrint('파일 삭제 실패: $deleteError');
                 }
-              } catch (deleteError) {
-                debugPrint('파일 삭제 실패: $deleteError');
+                if (mounted) {
+                  SnackbarUtil.showInfo(context, '이미지 업로드에 실패했습니다');
+                }
+                return {
+                  'success': false,
+                  'url': null,
+                  'index': index,
+                  'file': file,
+                };
               }
-              if (mounted) {
-                SnackbarUtil.showInfo(context, '이미지 업로드에 실패했습니다');
-              }
-              return {
-                'success': false,
-                'url': null,
-                'index': index,
-                'file': file,
-              };
+            }).toList();
+
+        try {
+          final results = await Future.wait(uploadFutures);
+          final failedUploads =
+              results.where((r) => r['success'] == false).toList();
+
+          if (_leaveRequested) return;
+          if (failedUploads.isNotEmpty) {
+            // 일부만 업로드된 경우 성공한 URL은 Storage에서 삭제 (고아 이미지 방지)
+            final orphanUrls =
+                results
+                    .where((r) => r['success'] == true && r['url'] != null)
+                    .map((r) => r['url'] as String)
+                    .where((s) => s.isNotEmpty)
+                    .toList();
+            if (orphanUrls.isNotEmpty) {
+              firebase_storage.StorageService.deleteImagesInBackground(
+                orphanUrls,
+              );
             }
-          }).toList();
-
-      try {
-        final results = await Future.wait(uploadFutures);
-        final failedUploads =
-            results.where((r) => r['success'] == false).toList();
-
-        if (_leaveRequested) return;
-        if (failedUploads.isNotEmpty) {
-          // 일부만 업로드된 경우 성공한 URL은 Storage에서 삭제 (고아 이미지 방지)
-          final orphanUrls =
-              results
-                  .where((r) => r['success'] == true && r['url'] != null)
-                  .map((r) => r['url'] as String)
-                  .where((s) => s.isNotEmpty)
-                  .toList();
-          if (orphanUrls.isNotEmpty) {
-            firebase_storage.StorageService.deleteImagesInBackground(
-              orphanUrls,
-            );
+            setState(() {
+              for (final result in failedUploads.reversed) {
+                final index = result['index'] as int;
+                if (index < _selectedImages.length) {
+                  _selectedImages.removeAt(index);
+                }
+              }
+              _isSaving = false;
+            });
+            return;
           }
-          setState(() {
-            for (final result in failedUploads.reversed) {
-              final index = result['index'] as int;
-              if (index < _selectedImages.length) {
-                _selectedImages.removeAt(index);
+
+          final uploadedUrls =
+              results
+                  .where((r) => r['success'] == true)
+                  .map((r) => r['url'] as String)
+                  .toList();
+          allImageUrls.addAll(uploadedUrls);
+          if (_leaveRequested) return;
+        } catch (e) {
+          if (_leaveRequested) return;
+          // 모든 이미지 파일 삭제 시도
+          for (final file in _selectedImages) {
+            try {
+              if (await file.exists()) {
+                await file.delete();
               }
+            } catch (deleteError) {
+              debugPrint('파일 삭제 실패: $deleteError');
             }
-            _isSaving = false;
-          });
+          }
+          if (mounted) {
+            setState(() {
+              _isSaving = false;
+            });
+          }
           return;
         }
+      }
 
-        final uploadedUrls =
-            results
-                .where((r) => r['success'] == true)
-                .map((r) => r['url'] as String)
-                .toList();
-        allImageUrls.addAll(uploadedUrls);
-        if (_leaveRequested) return;
-      } catch (e) {
-        if (_leaveRequested) return;
-        // 모든 이미지 파일 삭제 시도
-        for (final file in _selectedImages) {
-          try {
-            if (await file.exists()) {
-              await file.delete();
-            }
-          } catch (deleteError) {
-            debugPrint('파일 삭제 실패: $deleteError');
-          }
+      // 배경 이미지는 첫 번째 첨부 이미지를 자동으로 사용
+      final String? finalBackgroundImageUrl =
+          allImageUrls.isNotEmpty ? allImageUrls[0] : null;
+
+      if (_leaveRequested) return;
+      final story = StoryData(
+        title: title,
+        content: content,
+        date: DateTime.now().toString(),
+        imageUrls: allImageUrls,
+        backgroundImageUrl: finalBackgroundImageUrl,
+      );
+
+      // 나가기 후에도 요청이 이미 나간 상태면 로딩 스낵바로 진행 중임을 표시 (완료 시 success/error로 대체됨)
+      final loadCtx = navigatorKey.currentContext;
+      if (loadCtx != null) SnackbarUtil.showLoading(loadCtx, '저장 중…');
+
+      try {
+        await widget.onSave(story);
+        // 나가기한 뒤 완료된 경우에도 결과 알림
+        final resultCtx = mounted ? context : navigatorKey.currentContext;
+        if (resultCtx != null) {
+          SnackbarUtil.showSuccess(resultCtx, '저장되었습니다.');
         }
         if (mounted) {
-          setState(() {
-            _isSaving = false;
-          });
+          setState(() => _isSaving = false);
+          Navigator.of(context).pop();
         }
-        return;
-      }
-    }
-
-    // 배경 이미지는 첫 번째 첨부 이미지를 자동으로 사용
-    final String? finalBackgroundImageUrl =
-        allImageUrls.isNotEmpty ? allImageUrls[0] : null;
-
-    if (_leaveRequested) return;
-    final story = StoryData(
-      title: title,
-      content: content,
-      date: DateTime.now().toString(),
-      imageUrls: allImageUrls,
-      backgroundImageUrl: finalBackgroundImageUrl,
-    );
-
-    // 나가기 후에도 요청이 이미 나간 상태면 로딩 스낵바로 진행 중임을 표시 (완료 시 success/error로 대체됨)
-    final loadCtx = navigatorKey.currentContext;
-    if (loadCtx != null) SnackbarUtil.showLoading(loadCtx, '저장 중…');
-
-    try {
-      await widget.onSave(story);
-      // 나가기한 뒤 완료된 경우에도 결과 알림
-      final resultCtx = mounted ? context : navigatorKey.currentContext;
-      if (resultCtx != null) {
-        SnackbarUtil.showSuccess(resultCtx, '저장되었습니다.');
-      }
-      if (mounted) {
-        setState(() => _isSaving = false);
-        Navigator.of(context).pop();
-      }
-    } catch (e) {
-      final resultCtx = mounted ? context : navigatorKey.currentContext;
-      if (resultCtx != null) {
-        SnackbarUtil.showInfo(resultCtx, '저장에 실패했습니다. 다시 시도해 주세요.');
+      } catch (e) {
+        final resultCtx = mounted ? context : navigatorKey.currentContext;
+        if (resultCtx != null) {
+          SnackbarUtil.showInfo(resultCtx, '저장에 실패했습니다. 다시 시도해 주세요.');
+        }
+      } finally {
+        SnackbarUtil.dismissLoading();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          SnackbarUtil.dismissLoading();
+        });
+        if (mounted) setState(() => _isSaving = false);
       }
     } finally {
-      SnackbarUtil.dismissLoading();
       if (mounted) setState(() => _isSaving = false);
     }
-  } finally {
-    if (mounted) setState(() => _isSaving = false);
-  }
   }
 
   @override
@@ -618,7 +621,8 @@ class _StoryAddScreenState extends State<StoryAddScreen> {
                                   '삭제에 실패했습니다. 다시 시도해 주세요.',
                                 );
                               } finally {
-                                if (mounted) setState(() => _isDeleting = false);
+                                if (mounted)
+                                  setState(() => _isDeleting = false);
                               }
                             },
                     style: OutlinedButton.styleFrom(

@@ -1719,14 +1719,20 @@ class _WeeklyOverrideScheduleScreenState
           _weekStartDateString,
         );
       }
+      // 저장 성공 직후 무조건 로딩 스낵바 제거 (다이얼로그만 떠 있던 경우에도 남지 않도록)
+      SnackbarUtil.dismissLoading();
       // 나가기한 뒤 저장 중이었을 때만 스낵바로 결과 표시 (화면 안에 있으면 pop만 함)
       if (_leaveRequested) {
+        // pop 후/다른 화면에서 완료돼도 로딩이 남지 않도록 다음 프레임에서 한 번 더 닫기
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          SnackbarUtil.dismissLoading();
+        });
         final ctx = navigatorKey.currentContext;
         if (ctx != null) SnackbarUtil.showSuccess(ctx, '저장되었습니다.');
         if (mounted) setState(() => _isLeaving = false);
         return;
       }
-      // _popOnce 쓰지 않음: 저장 성공 후 pop 시 _isLeaving을 세우면, pop이 실패할 때 이후 나가기가 영원히 막힘
+      // 자동 화면 나가기: 다이얼로그가 떠 있으면 먼저 닫고, 그 다음 화면 닫기
       if (mounted) {
         setState(() {
           _initialDaySessions = Map.fromEntries(
@@ -1750,8 +1756,13 @@ class _WeeklyOverrideScheduleScreenState
               (e) => MapEntry(e.key, Set.from(e.value)),
             ),
           );
+          _isSaving = false;
         });
-        Navigator.of(context).pop(true);
+        final nav = Navigator.of(context);
+        nav.pop(true); // 1) 다이얼로그가 열려 있으면 그것부터 제거
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (nav.canPop()) nav.pop(true); // 2) 화면까지 닫기
+        });
       }
     } catch (e) {
       debugPrint('저장 중 오류: $e');
@@ -1779,6 +1790,10 @@ class _WeeklyOverrideScheduleScreenState
       }
     } finally {
       SnackbarUtil.dismissLoading();
+      // pop/다이얼로그 직후 타이밍 이슈로 로딩이 남을 수 있으므로 다음 프레임에서 한 번 더
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        SnackbarUtil.dismissLoading();
+      });
       // 화면을 나갔어도 항상 clear (홈 캘린더 로딩 해제)
       courseProvider.clearSavingOverrides(_weekStartDateString);
       if (mounted) setState(() => _isSaving = false);

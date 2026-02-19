@@ -440,7 +440,11 @@ class _CourseMemberRegistrationScreenState
         memberProvider.setPlaceId(placeId);
         if (!context.mounted) return;
         SnackbarUtil.showSuccess(context, '추가되었습니다.');
-        Navigator.of(context).pop();
+        final nav = Navigator.of(context);
+        nav.pop(); // 1) 다이얼로그가 열려 있으면 먼저 제거
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (nav.canPop()) nav.pop(); // 2) 화면까지 닫기
+        });
       } else {
         // 신규 멤버 등록 (기존 로직)
         final payload = [
@@ -463,7 +467,11 @@ class _CourseMemberRegistrationScreenState
 
         memberProvider.setPlaceId(_placeId());
         if (!context.mounted) return;
-        Navigator.of(context).pop();
+        final nav = Navigator.of(context);
+        nav.pop(); // 1) 다이얼로그가 열려 있으면 먼저 제거
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (nav.canPop()) nav.pop(); // 2) 화면까지 닫기
+        });
       }
     } catch (e) {
       if (!context.mounted) return;

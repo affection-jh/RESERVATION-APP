@@ -265,7 +265,11 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
 
       if (_leaveRequested) return false;
       if (popAfterSave) {
-        Navigator.of(context).pop();
+        final nav = Navigator.of(context);
+        nav.pop(); // 1) 다이얼로그가 열려 있으면 먼저 제거
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (nav.canPop()) nav.pop(); // 2) 화면까지 닫기
+        });
       }
       return true;
     } catch (e) {

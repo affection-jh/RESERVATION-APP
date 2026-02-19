@@ -485,6 +485,9 @@ class _MemberRegistrationScreenState extends State<MemberRegistrationScreen> {
       }
     } finally {
       SnackbarUtil.dismissLoading();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        SnackbarUtil.dismissLoading();
+      });
       if (mounted) {
         setState(() {
           _isSaving = false;
