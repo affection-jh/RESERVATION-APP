@@ -1,11 +1,13 @@
+import 'dart:io';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:provider/provider.dart';
 import 'package:reservation/services/user_service.dart';
 import 'package:reservation/widgets/story_card.dart';
-import 'dart:io';
 import '../../../theme/app_colors.dart';
 
+import '../../../models/place.dart';
 import '../../../widgets/cached_image_widget.dart';
 import '../../../providers/place_provider.dart';
 import '../../../providers/auth_provider.dart';
@@ -16,12 +18,10 @@ import '../../../providers/notification_provider.dart';
 import '../../../providers/reservation_provider.dart';
 import '../../../providers/reservation_summary_provider.dart';
 import '../../../providers/story_provider.dart';
-import '../../../models/place_member.dart';
 import '../../../services/auth_service.dart';
-import '../../../services/member_service.dart';
 import '../../../services/storage_service.dart';
 import '../../../utils/snackbar_util.dart';
-import '../../../utils/timezone_utils.dart';
+import '../../../utils/cloud_functions_util.dart';
 
 class AdminGreetingSettingScreen extends StatefulWidget {
   final String placeName;
@@ -164,7 +164,10 @@ class _AdminGreetingSettingScreenState
 
                 // 환영메시지 숨기기 (Expanded 아래, 버튼 바로 위에 고정)
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 12,
+                  ),
                   child: _buildHideGreetingCheckbox(),
                 ),
 
@@ -243,16 +246,19 @@ class _AdminGreetingSettingScreenState
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: _hideGreeting
-                      ? AppColors.primaryGreen
-                      : AppColors.textSecondary.withOpacity(0.5),
+                  color:
+                      _hideGreeting
+                          ? AppColors.primaryGreen
+                          : AppColors.textSecondary.withOpacity(0.5),
                   width: 2,
                 ),
-                color: _hideGreeting ? AppColors.primaryGreen : Colors.transparent,
+                color:
+                    _hideGreeting ? AppColors.primaryGreen : Colors.transparent,
               ),
-              child: _hideGreeting
-                  ? Icon(Icons.check, size: 16, color: Colors.white)
-                  : null,
+              child:
+                  _hideGreeting
+                      ? Icon(Icons.check, size: 16, color: Colors.white)
+                      : null,
             ),
           ),
           const SizedBox(width: 12),
@@ -518,9 +524,8 @@ class _AdminGreetingSettingScreenState
           flex: 2,
           child: FilledButton(
             onPressed:
-                _isFormValid()
+                _isFormValid() && !_isSubmitting
                     ? () async {
-                      if (_isSubmitting) return;
                       _removeFocus();
 
                       try {
@@ -561,41 +566,67 @@ class _AdminGreetingSettingScreenState
                           }
                         }
 
-                        // 플레이스 생성
-                        final place = await placeProvider.createPlace(
-                          name: widget.placeName,
-                          description: widget.placeDescription,
-                          appBarText: widget.placeName,
-                          greetingText: _greetingTextController.text.trim(),
-                          hideGreeting: _hideGreeting,
-                          imageUrl: imageUrl,
-                          adminId: admin.userId,
-                        );
+                        // 플레이스 생성 (Cloud Function 호출 — 권한·중복 방지)
+                        final creatorDisplayName =
+                            admin.username.trim().isNotEmpty
+                                ? admin.username.trim()
+                                : '관리자';
+                        Place place;
+                        try {
+                          final result = await FirebaseFunctions.instance
+                              .httpsCallable('createPlaceWithMember')
+                              .call(<String, dynamic>{
+                                'name': widget.placeName,
+                                'description':
+                                    widget.placeDescription.trim().isEmpty
+                                        ? null
+                                        : widget.placeDescription.trim(),
+                                'appBarText': widget.placeName,
+                                'greetingText':
+                                    _greetingTextController.text.trim().isEmpty
+                                        ? null
+                                        : _greetingTextController.text.trim(),
+                                'hideGreeting': _hideGreeting,
+                                'imageUrl': imageUrl,
+                                'adminDisplayName': creatorDisplayName,
+                                'phoneNumber': admin.phoneNumber,
+                              });
 
-                        // 생성자를 해당 플레이스 members에 manager로 추가 (접근 가능 플레이스 = members 기준)
-                        // adminDisplayName은 반드시 생성자(매니저) 표시 이름으로 채움
-                        final creatorDisplayName = admin.username.trim().isNotEmpty
-                            ? admin.username.trim()
-                            : '관리자';
-                        final now = TimezoneUtils.getSeoulDateTime();
-                        final creatorMember = PlaceMember(
-                          userId: admin.userId,
-                          placeId: place.id,
-                          role: PlaceMemberRole.manager,
-                          adminDisplayName: creatorDisplayName,
-                          phoneNumber: admin.phoneNumber,
-                          manageableCourseIds: const [],
-                          createdAt: now,
-                          updatedAt: null,
-                        );
-                        await MemberService().setPlaceMember(place.id, admin.userId, creatorMember);
+                          final data = ensureCallableResultMap(result.data);
+                          if (data == null || data['success'] != true) {
+                            throw Exception('플레이스 생성에 실패했습니다.');
+                          }
+                          final placeMap = ensureCallableResultMap(
+                            data['place'],
+                          );
+                          if (placeMap == null)
+                            throw Exception('응답에 place가 없습니다.');
+                          place = Place.fromJson(placeMap);
+                        } on FirebaseFunctionsException catch (e) {
+                          if (mounted) {
+                            String msg = '플레이스 등록 중 오류가 발생했습니다.';
+                            switch (e.code) {
+                              case 'already-exists':
+                                msg = '같은 이름의 플레이스가 이미 존재합니다.';
+                                break;
+                              case 'unauthenticated':
+                                msg = '로그인이 필요합니다.';
+                                break;
+                              case 'invalid-argument':
+                                msg = e.message ?? '입력 정보를 확인해주세요.';
+                                break;
+                              default:
+                                msg = e.message ?? msg;
+                            }
+                            SnackbarUtil.showInfo(context, msg);
+                          }
+                          return;
+                        }
 
-                        // 관리자의 placeIds에 추가
+                        // 관리자의 placeIds에 추가 및 AuthProvider 업데이트
                         final updatedAdmin = admin.addPlace(place.id);
                         final userService = UserService();
                         await userService.updateAdmin(updatedAdmin);
-
-                        // AuthProvider 업데이트
                         authProvider.setCurrentAdmin(updatedAdmin);
                         authProvider.addAdminManagedPlace(place.id);
 
@@ -607,9 +638,10 @@ class _AdminGreetingSettingScreenState
                                 .toSet()
                                 .toList();
                         if (!memberPlaceIds.contains(place.id)) {
-                          authProvider.setApprovedPlaceIds(
-                            [...memberPlaceIds, place.id],
-                          );
+                          authProvider.setApprovedPlaceIds([
+                            ...memberPlaceIds,
+                            place.id,
+                          ]);
                         }
 
                         // ✅ 플레이스 전환과 동일한 플로우:
@@ -657,16 +689,29 @@ class _AdminGreetingSettingScreenState
                 borderRadius: BorderRadius.circular(16),
               ),
             ),
-            child: Text(
-              '시작하기',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                color: _isFormValid() && !_isSubmitting
-                    ? Colors.white
-                    : AppColors.textSecondary,
-              ),
-            ),
+            child:
+                _isSubmitting
+                    ? const SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          AppColors.primaryGreen,
+                        ),
+                      ),
+                    )
+                    : Text(
+                      '시작하기',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color:
+                            _isFormValid() && !_isSubmitting
+                                ? Colors.white
+                                : AppColors.textSecondary,
+                      ),
+                    ),
           ),
         ),
       ],

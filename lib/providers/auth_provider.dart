@@ -67,6 +67,7 @@ class AuthProvider with ChangeNotifier {
       _linkedAdmin != null
           ? _adminManagedPlaceIdsOverride
           : managedPlaceIdsFromMemberships;
+
   /// 멤버(일반) 접근 플레이스 ID
   /// - PlaceWaitingScreen에서는 pending 포함 목록을 setApprovedPlaceIds로 주입할 수 있음
   /// - 그 외 화면에서는 placeMemberships 기반 값이 항상 정답이므로, 둘을 union해서 누락을 방지한다.
@@ -86,8 +87,10 @@ class AuthProvider with ChangeNotifier {
     ];
   }
 
-  bool hasMemberAccessToPlace(String placeId) => approvedPlaceIds.contains(placeId);
-  bool hasAdminAccessToPlace(String placeId) => adminManagedPlaceIds.contains(placeId);
+  bool hasMemberAccessToPlace(String placeId) =>
+      approvedPlaceIds.contains(placeId);
+  bool hasAdminAccessToPlace(String placeId) =>
+      adminManagedPlaceIds.contains(placeId);
   User? get linkedAdmin => _linkedAdmin;
   bool get isLoading => _isLoading;
   String? get error => _error;
@@ -234,7 +237,10 @@ class AuthProvider with ChangeNotifier {
     if (placeId.isEmpty) return;
     if (_linkedAdmin != null) {
       if (!_adminManagedPlaceIdsOverride.contains(placeId)) {
-        _adminManagedPlaceIdsOverride = [..._adminManagedPlaceIdsOverride, placeId];
+        _adminManagedPlaceIdsOverride = [
+          ..._adminManagedPlaceIdsOverride,
+          placeId,
+        ];
         notifyListeners();
       }
     } else {
@@ -259,7 +265,9 @@ class AuthProvider with ChangeNotifier {
       notifyListeners();
       final demoted = await _maybeDemoteSubManagersWithNoCourses();
       if (demoted) {
-        _placeMemberships = await _memberService.getPlaceMembershipsForUser(uid);
+        _placeMemberships = await _memberService.getPlaceMembershipsForUser(
+          uid,
+        );
         _approvedPlaceIds = placeIdsFromPlaceMemberships;
         notifyListeners();
       }
@@ -278,7 +286,9 @@ class AuthProvider with ChangeNotifier {
       if (m.placeId == null) continue;
       if (!m.isSubManager) continue;
       if (m.manageableCourseIds.isNotEmpty) continue;
-      final ok = await _memberService.demoteSubManagerToMemberIfNoCourses(m.placeId!);
+      final ok = await _memberService.demoteSubManagerToMemberIfNoCourses(
+        m.placeId!,
+      );
       if (ok) any = true;
     }
     return any;

@@ -21,6 +21,7 @@ import '../../../providers/member_provider.dart';
 import '../../../services/user_service.dart';
 import '../../../utils/format_utils.dart';
 import '../../../utils/firestore_utils.dart';
+import '../../../utils/cloud_functions_util.dart';
 import '../../../utils/navigator_key.dart';
 import '../../../widgets/common_dialog.dart';
 import 'place_delete_confirm_screen.dart';
@@ -1143,12 +1144,12 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
                 'phoneNumber': currentAdmin.phoneNumber,
               });
 
-          final data = result.data as Map<String, dynamic>?;
+          final data = ensureCallableResultMap(result.data);
           if (data == null || data['success'] != true) {
             throw Exception('플레이스 생성에 실패했습니다.');
           }
 
-          final placeMap = data['place'] as Map<String, dynamic>?;
+          final placeMap = ensureCallableResultMap(data['place']);
           if (placeMap == null) throw Exception('응답에 place가 없습니다.');
 
           newPlace = Place.fromJson(placeMap);
