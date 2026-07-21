@@ -48,6 +48,10 @@ class EnrollmentTimelineDisplay {
         action.reservationPerformedDateTimeLine,
         action.reservationCancelContentLine,
       ],
+      EnrollmentActionType.reservationMove => [
+        action.reservationPerformedDateTimeLine,
+        action.reservationMoveContentLine,
+      ],
       _ => [
         action.performedDateTimeLine,
         if (action.detailsDisplayLine.isNotEmpty) action.detailsDisplayLine,

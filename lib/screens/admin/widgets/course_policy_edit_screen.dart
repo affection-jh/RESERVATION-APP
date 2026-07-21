@@ -764,7 +764,13 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
     required bool selected,
     required VoidCallback onTap,
     Color accentColor = AppColors.primaryGreen,
+    String? widthReserveLabel,
   }) {
+    final textStyle = TextStyle(
+      fontSize: 15,
+      fontWeight: FontWeight.w700,
+      color: selected ? accentColor : AppColors.textPrimary,
+    );
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -780,14 +786,19 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                     : AppColors.backgroundLight,
             borderRadius: BorderRadius.circular(10),
           ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w700,
-              color: selected ? accentColor : AppColors.textPrimary,
-            ),
-          ),
+          child:
+              widthReserveLabel != null
+                  ? Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Opacity(
+                        opacity: 0,
+                        child: Text(widthReserveLabel, style: textStyle),
+                      ),
+                      Text(label, style: textStyle),
+                    ],
+                  )
+                  : Text(label, style: textStyle),
         ),
       ),
     );
@@ -975,7 +986,7 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
     final minutes = _clampMinutesPart(totalMinutes);
 
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
           title,
@@ -987,12 +998,13 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
         ),
         const SizedBox(height: 10),
         Container(
+          width: double.infinity,
           decoration: BoxDecoration(
             color: AppColors.backgroundWhite,
             borderRadius: BorderRadius.circular(16),
           ),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
@@ -1007,12 +1019,14 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                       selected: isExpanded,
                       onTap: () => _toggleCloseBeforePicker(kind),
                       accentColor: accentColor,
+                      widthReserveLabel: '${_maxCloseBeforeHours}시간',
                     ),
                     _valueChip(
                       label: '$minutes분',
                       selected: isExpanded,
                       onTap: () => _toggleCloseBeforePicker(kind),
                       accentColor: accentColor,
+                      widthReserveLabel: '59분',
                     ),
                     _sentenceLabel(valueLabel),
                   ],

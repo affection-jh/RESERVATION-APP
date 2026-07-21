@@ -136,10 +136,10 @@ class FcmService {
         listen: false,
       );
       final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
-      final currentAdmin = authProvider.currentAdmin;
       final currentUser = authProvider.currentUser;
-      final isAdmin = currentAdmin != null;
-      final userId = currentAdmin?.userId ?? currentUser?.userId;
+      // 배지·목록과 동일 컨텍스트 (멤버 홈에서 관리자 알림으로 배지 오탐 방지)
+      final isAdmin = notificationProvider.isAdminNotificationContext;
+      final userId = currentUser?.userId;
       if (userId == null) return;
 
       final placeId = placeProvider.currentPlace?.id;

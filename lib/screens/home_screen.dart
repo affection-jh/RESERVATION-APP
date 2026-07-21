@@ -170,7 +170,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
-
+ 
   Widget _buildPlacesSection(BuildContext context) {
     return Consumer2<PlaceProvider, AuthProvider>(
       builder: (context, placeProvider, authProvider, _) {

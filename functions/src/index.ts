@@ -3689,6 +3689,8 @@ export const batchMoveReservations = functions.https.onCall(async (data, context
     const results: Array<{ reservationId: string; success: boolean; error?: string }> = [];
     const userIds = new Set<string>();
     let reservationsByCourse: Map<string, Array<{ doc: FirebaseFirestore.DocumentSnapshot; ref: FirebaseFirestore.DocumentReference }>> = new Map();
+    type MoveOp = { ref: FirebaseFirestore.DocumentReference; reservation: any; courseId: string };
+    let moves: MoveOp[] = [];
 
     return await db.runTransaction(async (tx) => {
         // 1) 모든 예약 조회 (선행 read, 글로벌 reservations)
@@ -3737,8 +3739,7 @@ export const batchMoveReservations = functions.https.onCall(async (data, context
         }
 
         // 3) 선행 읽기: 중복 검사 + 이동 대상별 reservationSummary 문서 (쓰기 후 읽기 금지 준수)
-        type MoveOp = { ref: FirebaseFirestore.DocumentReference; reservation: any; courseId: string };
-        const moves: MoveOp[] = [];
+        moves = [];
         const oldSummaryKeys = new Set<string>();
         for (const [courseId, reservations] of reservationsByCourse.entries()) {
             for (const { doc, ref } of reservations) {
@@ -3829,9 +3830,68 @@ export const batchMoveReservations = functions.https.onCall(async (data, context
         logFunctionSuccess(functionName, { reservationIds: reservationIds.length, moved: movedCount });
         return { success: true, results, movedCount, movedUserIds };
     }).then(async (result) => {
-        // 실제로 이동된 건이 있을 때만, 이동된 사용자에게만 알림 전송
         const movedCount = (result?.movedCount ?? 0) as number;
         const movedUserIds = (result?.movedUserIds ?? []) as string[];
+        const successIds = new Set(
+            (result?.results ?? [])
+                .filter((r) => r.success)
+                .map((r) => r.reservationId),
+        );
+
+        // 이동된 예약 → actionHistory에 reservationMove 기록
+        if (result?.success && moves.length > 0) {
+            const historyTasks: Promise<void>[] = [];
+            for (const { ref, reservation, courseId } of moves) {
+                if (!successIds.has(ref.id)) continue;
+                const enrollmentId = String(reservation?.enrollmentId ?? '').trim();
+                if (!enrollmentId || enrollmentId.startsWith('pending_')) continue;
+
+                const oldDayOfWeek = Number(reservation?.dayOfWeek ?? 0);
+                const oldStartTime = String(reservation?.startTime ?? '');
+                const oldReservedDateString = String(
+                    reservation?.oldReservedDateString ?? reservation?.reservedDateString ?? '',
+                );
+                const oldWhen = formatDateTimeKr(oldReservedDateString, oldStartTime);
+                const newWhen = formatDateTimeKr(newReservedDateString, newStartTime);
+                const details =
+                    oldWhen && newWhen
+                        ? `${oldWhen} → ${newWhen}`
+                        : newWhen
+                            ? `${newWhen}로 이동`
+                            : '예약 이동';
+
+                historyTasks.push(
+                    appendEnrollmentActionHistory(db, {
+                        enrollmentId,
+                        actionType: 'reservationMove',
+                        performedBy: callerId,
+                        docId: `resMove_${ref.id}_${oldReservedDateString}_${oldDayOfWeek}_${oldStartTime}__${newReservedDateString}_${newDayOfWeek}_${newStartTime}`,
+                        details,
+                        oldValue: buildReservationSessionValue({
+                            reservationId: ref.id,
+                            courseId,
+                            placeId,
+                            dayOfWeek: oldDayOfWeek,
+                            startTime: oldStartTime,
+                            sessionDate: oldReservedDateString,
+                        }),
+                        newValue: buildReservationSessionValue({
+                            reservationId: ref.id,
+                            courseId,
+                            placeId,
+                            dayOfWeek: newDayOfWeek,
+                            startTime: newStartTime,
+                            sessionDate: newReservedDateString,
+                        }),
+                    }),
+                );
+            }
+            if (historyTasks.length > 0) {
+                await Promise.allSettled(historyTasks);
+            }
+        }
+
+        // 실제로 이동된 건이 있을 때만, 이동된 사용자에게만 알림 전송
         if (result?.success && movedCount > 0 && movedUserIds.length > 0) {
             try {
                 const firstCourseId = Array.from(reservationsByCourse.keys())[0];

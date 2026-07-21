@@ -213,14 +213,14 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
         ),
         Expanded(
           child:
-              showCourseTab && memberProvider.selectedCourseIds.isNotEmpty
-                  ? _buildCourseMemberList(memberProvider, coursesForTab)
-                  : memberProvider.isLoading
+              memberProvider.isLoading
                   ? const Center(
                     child: CircularProgressIndicator(
                       color: AppColors.primaryGreen,
                     ),
                   )
+                  : showCourseTab && memberProvider.selectedCourseIds.isNotEmpty
+                  ? _buildCourseMemberList(memberProvider, coursesForTab)
                   : _buildMemberList(memberProvider),
         ),
       ],
@@ -246,11 +246,21 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
                   vertical: 14,
                 ),
               ).copyWith(
-                suffixIcon: Icon(
-                  Icons.search,
-                  color: AppColors.primaryGreen,
-                  size: 24,
-                ),
+                suffixIcon:
+                    mp.isSearchLoading
+                        ? const Padding(
+                          padding: EdgeInsets.all(12),
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                        : Icon(
+                          Icons.search,
+                          color: AppColors.primaryGreen,
+                          size: 24,
+                        ),
                 hintStyle: TextStyle(
                   fontSize: 16,
                   color: AppColors.textSecondary.withOpacity(0.8),
@@ -551,6 +561,9 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
     } else {
       final list = memberProvider.listForCourseTab;
       if (list.isEmpty) {
+        if (memberProvider.isSearchLoading) {
+          return const Center(child: CircularProgressIndicator());
+        }
         return Center(
           child: _buildEmptyMemberState(
             context,
@@ -611,6 +624,9 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
   Widget _buildMemberList(MemberProvider memberProvider) {
     final list = memberProvider.listForAllTab;
     if (list.isEmpty) {
+      if (memberProvider.isSearchLoading) {
+        return const Center(child: CircularProgressIndicator());
+      }
       return Center(
         child: _buildEmptyMemberState(
           context,

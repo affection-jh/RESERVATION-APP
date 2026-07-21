@@ -142,7 +142,10 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
       if (userResult != null) {
         debugPrint('[AppStartup._checkAutoLogin] 자동 로그인 성공');
         final authProvider = Provider.of<AuthProvider>(context, listen: false);
-        final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
+        final placeProvider = Provider.of<PlaceProvider>(
+          context,
+          listen: false,
+        );
         authProvider.setCurrentUser(userResult.user);
         await authProvider.loadPlaceMembershipsForCurrentUser();
         authProvider.startWatchingPlaceMemberships();
@@ -163,10 +166,11 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
         authProvider.setApprovedPlaceIds(approvedIds);
 
         // 접근 가능한 모든 플레이스를 PlaceProvider에 미리 로드 (PlaceSwitch 캐시 기반 동작용)
-        final allPlaceIds = [
-          ...approvedIds,
-          ...authProvider.managedPlaceIdsFromMemberships,
-        ].toSet().toList();
+        final allPlaceIds =
+            [
+              ...approvedIds,
+              ...authProvider.managedPlaceIdsFromMemberships,
+            ].toSet().toList();
         if (allPlaceIds.isNotEmpty) {
           await placeProvider.loadPlaces(allPlaceIds);
         }
@@ -196,7 +200,10 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
           await _ensureMinLoadingTime();
         }
         if (!mounted) return;
-        await _prepareUserScreen(resultForUser, fromPlaceSwitch: fromPlaceSwitch);
+        await _prepareUserScreen(
+          resultForUser,
+          fromPlaceSwitch: fromPlaceSwitch,
+        );
         return;
       }
 
@@ -257,7 +264,10 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
 
   /// 사용자 화면 준비
   /// [fromPlaceSwitch] true면 PlaceSwitch에서 일반 모드로 온 경우 — 스플래시 최소화로 바로 전환
-  Future<void> _prepareUserScreen(AuthResult result, {bool fromPlaceSwitch = false}) async {
+  Future<void> _prepareUserScreen(
+    AuthResult result, {
+    bool fromPlaceSwitch = false,
+  }) async {
     debugPrint(
       '[AppStartup] _prepareUserScreen: hasApprovedPlaces=${result.hasApprovedPlaces}, lastAccessedPlaceId=${result.lastAccessedPlaceId}',
     );
@@ -466,21 +476,21 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
       context,
       listen: false,
     );
-    notificationProvider
-        .refreshUnreadBadge(user.userId, isAdmin: true)
-        .catchError((e) {
-      debugPrint('[AppStartup] 관리자 알림 배지 갱신 실패: $e');
-        });
 
     try {
       // 캐시 우선 (앱 시작 시 이미 loadPlaces로 로드됨)
       Place? place = placeProvider.getPlace(targetPlaceId);
-      if (place == null) {
-        place = await FirestoreService().getPlace(targetPlaceId);
-      }
+      place ??= await FirestoreService().getPlace(targetPlaceId);
       if (place != null && mounted) {
         placeProvider.setCurrentPlace(place);
         await AuthService().updateLastAccessedPlace(place.id);
+
+        // 플레이스 확정 후 배지 조회 (시작 시엔 점 없음 → 완료 후만 표시)
+        notificationProvider
+            .refreshUnreadBadge(user.userId, isAdmin: true, placeId: place.id)
+            .catchError((e) {
+              debugPrint('[AppStartup] 관리자 알림 배지 갱신 실패: $e');
+            });
 
         // 스플래시 동안 현재 지정 코스의 summary 선로딩 → 진입 시 N/M 이미 채워진 상태
         await _preloadReservationSummaryForAdmin(place.id);
@@ -507,10 +517,14 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
   Future<void> _preloadReservationSummaryForAdmin(String placeId) async {
     if (!mounted) return;
     try {
-      final courseProvider =
-          Provider.of<CourseProvider>(context, listen: false);
-      final summaryProvider =
-          Provider.of<ReservationSummaryProvider>(context, listen: false);
+      final courseProvider = Provider.of<CourseProvider>(
+        context,
+        listen: false,
+      );
+      final summaryProvider = Provider.of<ReservationSummaryProvider>(
+        context,
+        listen: false,
+      );
 
       await courseProvider.loadCourses(placeId);
       final courses = courseProvider.courses;
@@ -550,20 +564,29 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
         weekStartDate: firstWeekStartStr,
       );
 
-      final weekStartDates = offsets
-          .map((o) => CalendarUtils.formatDateYMD(CalendarUtils.weekStartFrom(now, o)))
-          .toList();
+      final weekStartDates =
+          offsets
+              .map(
+                (o) => CalendarUtils.formatDateYMD(
+                  CalendarUtils.weekStartFrom(now, o),
+                ),
+              )
+              .toList();
       courseProvider.subscribeToOverrides(placeId, weekStartDates);
 
       for (var i = 0; i < offsets.length; i++) {
         final ws = CalendarUtils.weekStartFrom(now, offsets[i]);
         final weekStartDate = weekStartDates[i];
         final startDateWs = DateTime(ws.year, ws.month, ws.day);
-        final overridesForCourse = courseProvider
-            .getOverridesForWeek(weekStartDate)
-            .where((o) => o.courseId == course.id)
-            .toList();
-        summaryProvider.updateOverridesForWeek(weekStartDate, overridesForCourse);
+        final overridesForCourse =
+            courseProvider
+                .getOverridesForWeek(weekStartDate)
+                .where((o) => o.courseId == course.id)
+                .toList();
+        summaryProvider.updateOverridesForWeek(
+          weekStartDate,
+          overridesForCourse,
+        );
         final byDate = <String, List<CourseOverride>>{};
         for (final o in overridesForCourse) {
           byDate.putIfAbsent(o.date, () => <CourseOverride>[]).add(o);

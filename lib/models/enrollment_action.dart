@@ -167,6 +167,42 @@ class EnrollmentAction {
     final actor = isReservationCancelledByAdmin ? '관리자 취소' : '본인 취소';
     return '내용: $reservationSessionInfoLabel · $actor';
   }
+
+  String _sessionInfoLabelFrom(Map<String, dynamic>? fields) {
+    if (fields == null) return '';
+    final sessionDate = fields['sessionDate'] as String?;
+    final startTime = fields['startTime'] as String?;
+    final rawDow = fields['dayOfWeek'];
+    final dow =
+        rawDow is int
+            ? rawDow
+            : rawDow is num
+            ? rawDow.toInt()
+            : null;
+    final weekday =
+        (dow != null && dow >= 1 && dow <= 7) ? _dayNames[dow] : null;
+    if (sessionDate != null && sessionDate.isNotEmpty) {
+      final dateLabel = TimezoneUtils.formatDateStringDisplay(sessionDate);
+      final weekdayPart = weekday != null ? ' ($weekday)' : '';
+      final timePart =
+          startTime != null && startTime.isNotEmpty ? ' $startTime' : '';
+      return '$dateLabel$weekdayPart$timePart 세션';
+    }
+    return '';
+  }
+
+  /// UI 「내용」 — 이전 세션 → 새 세션
+  String get reservationMoveContentLine {
+    final from = _sessionInfoLabelFrom(oldValue);
+    final to = _sessionInfoLabelFrom(newValue);
+    if (from.isNotEmpty && to.isNotEmpty) {
+      return '내용: $from → $to';
+    }
+    if (to.isNotEmpty) return '내용: $to로 이동';
+    final text = TimezoneUtils.formatDetailsDisplay(details);
+    if (text.isNotEmpty) return '내용: $text';
+    return '내용: 예약 이동';
+  }
 }
 
 enum EnrollmentActionType {

@@ -1,4 +1,3 @@
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
@@ -30,7 +29,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
     super.initState();
     _scrollController.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _refreshNotifications();
+      _loadNotifications();
     });
   }
 
@@ -44,7 +43,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
     }
   }
 
-  Future<void> _refreshNotifications({bool clearExisting = true}) async {
+  Future<void> _loadNotifications() async {
     if (!mounted) return;
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
@@ -53,19 +52,17 @@ class _NotificationScreenState extends State<NotificationScreen> {
       listen: false,
     );
     final user = authProvider.currentUser;
-    final admin = authProvider.currentManagerUser;
     final currentPlace = placeProvider.currentPlace;
 
-    if (user != null || admin != null) {
-      final isAdmin = admin != null;
-      final userId = isAdmin ? admin.userId : user!.userId;
+    if (user != null) {
+      // 배지와 동일: 앱 진입(멤버/관리자) 시 저장된 컨텍스트
+      final isAdmin = notificationProvider.isAdminNotificationContext;
       final placeId = currentPlace?.id;
       await notificationProvider.loadNotifications(
-        userId,
+        user.userId,
         isAdmin: isAdmin,
         placeId: placeId,
         forceRefresh: true,
-        clearExisting: clearExisting,
       );
     }
   }
@@ -308,7 +305,8 @@ class _NotificationScreenState extends State<NotificationScreen> {
                     color: AppColors.textPrimary,
                   ),
                 ),
-                if (unreadCount > 0 && authProvider.currentUser != null) ...[
+                if (notificationProvider.showUnreadBadge &&
+                    authProvider.currentUser != null) ...[
                   const SizedBox(width: 8),
                   Container(
                     margin: const EdgeInsets.only(top: 2),
@@ -397,17 +395,11 @@ class _NotificationScreenState extends State<NotificationScreen> {
 
     return CustomScrollView(
       controller: _scrollController,
-      physics: const AlwaysScrollableScrollPhysics(
-        parent: BouncingScrollPhysics(),
-      ),
       slivers: [
-        CupertinoSliverRefreshControl(
-          onRefresh: () => _refreshNotifications(clearExisting: false),
-        ),
         if (showInitialLoading)
           const SliverFillRemaining(
             hasScrollBody: false,
-            child: Center(child: CupertinoActivityIndicator(radius: 14)),
+            child: Center(child: CircularProgressIndicator()),
           )
         else if (notifications.isEmpty || !hasUser)
           SliverFillRemaining(
@@ -487,9 +479,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
         const SliverToBoxAdapter(
           child: Padding(
             padding: EdgeInsets.symmetric(vertical: 16),
-            child: Center(
-              child: CupertinoActivityIndicator(radius: 12),
-            ),
+            child: Center(child: CircularProgressIndicator()),
           ),
         ),
       );

@@ -91,23 +91,21 @@ class _AppLifecycleNotifierState extends State<_AppLifecycleNotifier>
       );
       final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
       final placeId = placeProvider.currentPlace?.id;
-      final admin = authProvider.currentAdmin;
       final user = authProvider.currentUser;
+      if (user == null) return;
+
+      // currentAdmin == currentUser 이므로 진입 시 저장된 알림 컨텍스트 사용
+      // (매니저라도 멤버 홈이면 isAdmin=false)
+      final isAdmin = notificationProvider.isAdminNotificationContext;
 
       // 유저 정보 기준으로 FCM 토큰 없으면 재발급 후 저장
       authProvider.ensureFcmTokenSaved().catchError(
         (e) => debugPrint('[AppLifecycle] FCM 토큰 저장 실패: $e'),
       );
 
-      if (admin != null) {
-        notificationProvider
-            .refreshUnreadBadge(admin.userId, isAdmin: true, placeId: placeId)
-            .catchError((e) => debugPrint('[AppLifecycle] 관리자 알림 배지 갱신 실패: $e'));
-      } else if (user != null) {
-        notificationProvider
-            .refreshUnreadBadge(user.userId, isAdmin: false, placeId: placeId)
-            .catchError((e) => debugPrint('[AppLifecycle] 사용자 알림 배지 갱신 실패: $e'));
-      }
+      notificationProvider
+          .refreshUnreadBadge(user.userId, isAdmin: isAdmin, placeId: placeId)
+          .catchError((e) => debugPrint('[AppLifecycle] 알림 배지 갱신 실패: $e'));
     } catch (e) {
       debugPrint('[AppLifecycle] 알림 재로드 오류: $e');
     }

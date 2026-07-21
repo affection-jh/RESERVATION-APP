@@ -369,15 +369,17 @@ class FirestoreService {
 
   // ==================== Notifications ====================
 
-  Future<({List<AppNotification> items, Object? nextPageCursor})>
+  Future<({List<AppNotification> items, Object? nextPageCursor, int fetchedCount})>
   getUserNotificationsPage(
     String userId, {
     bool isAdmin = false,
+    String? placeId,
     int limit = NotificationFirestoreService.defaultPageSize,
     Object? startAfterCursor,
   }) => _notificationService.getUserNotificationsPage(
     userId,
     isAdmin: isAdmin,
+    placeId: placeId,
     limit: limit,
     startAfterCursor: startAfterCursor,
   );

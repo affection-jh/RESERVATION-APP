@@ -15,7 +15,8 @@ class NotificationIconWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<NotificationProvider>(
       builder: (context, notificationProvider, _) {
-        final unreadCount = notificationProvider.unreadCount;
+        final showBadge =
+            notificationProvider.showUnreadBadge;
         return GestureDetector(
           onTap: () {
             Navigator.of(context).pushNamed('/notifications');
@@ -35,8 +36,8 @@ class NotificationIconWidget extends StatelessWidget {
                     BlendMode.srcIn,
                   ),
                 ),
-                // 알림이 있을 때 빨간 핀
-                if (unreadCount > 0)
+                // Firestore 조회 후 미읽음이 있을 때만 빨간 점
+                if (showBadge)
                   Positioned(
                     right: -2,
                     top: -2,

@@ -27,9 +27,14 @@ class NotificationProvider with ChangeNotifier {
   bool get hasMoreNotifications => _hasMoreFromServer;
   String? get error => _error;
 
-  /// 빨간 점 — Firestore count 기준 (목록 페이지와 독립)
+  /// 빨간 점 — Firestore 조회 완료 후에만 true로 표시
   int get unreadCount => _unreadCount;
   bool get unreadCountLoaded => _unreadCountLoaded;
+  bool get showUnreadBadge => _unreadCountLoaded && _unreadCount > 0;
+
+  /// 현재 세션이 관리자/멤버 중 어느 알림을 보는지 (배지·목록·FCM 공통)
+  /// null이면 아직 한 번도 로드하지 않음 → 멤버(false)로 취급
+  bool get isAdminNotificationContext => _lastLoadIsAdmin ?? false;
 
   void _setContext({
     required String userId,
@@ -48,6 +53,7 @@ class NotificationProvider with ChangeNotifier {
       _hasLoadedOnce = false;
       _nextPageCursor = null;
       _hasMoreFromServer = false;
+      _unreadCount = 0;
       _unreadCountLoaded = false;
     }
   }
@@ -69,6 +75,18 @@ class NotificationProvider with ChangeNotifier {
     String? placeId,
   }) async {
     _setContext(userId: userId, isAdmin: isAdmin, placeId: placeId);
+    // 조회 완료 전엔 절대 배지 표시하지 않음
+    _unreadCount = 0;
+    _unreadCountLoaded = false;
+    notifyListeners();
+
+    // 플레이스 미확정이면 배지 숨김 (전역 count로 오탐 방지)
+    if (placeId == null || placeId.isEmpty) {
+      _unreadCountLoaded = true;
+      notifyListeners();
+      return;
+    }
+
     try {
       _unreadCount = await _firestore.getUnreadNotificationCount(
         userId,
@@ -77,7 +95,14 @@ class NotificationProvider with ChangeNotifier {
       );
       _unreadCountLoaded = true;
       _error = null;
+      if (kDebugMode) {
+        debugPrint(
+          '[NotificationProvider] badge isAdmin=$isAdmin placeId=$placeId unread=$_unreadCount',
+        );
+      }
     } catch (e) {
+      _unreadCount = 0;
+      _unreadCountLoaded = false;
       if (kDebugMode) {
         debugPrint('[NotificationProvider] refreshUnreadBadge: $e');
       }
@@ -107,24 +132,35 @@ class NotificationProvider with ChangeNotifier {
 
     _isLoading = true;
     _error = null;
+    _unreadCount = 0;
+    _unreadCountLoaded = false;
     notifyListeners();
 
     try {
       final page = await _firestore.getUserNotificationsPage(
         userId,
         isAdmin: isAdmin,
+        placeId: placeId,
       );
       _notifications = _filterByPlace(page.items);
       _nextPageCursor = page.nextPageCursor;
       _hasMoreFromServer =
-          page.items.length >= NotificationFirestoreService.defaultPageSize &&
+          page.fetchedCount >= NotificationFirestoreService.defaultPageSize &&
           page.nextPageCursor != null;
 
-      _unreadCount = await _firestore.getUnreadNotificationCount(
-        userId,
-        isAdmin: isAdmin,
-        placeId: placeId,
-      );
+      if (placeId == null || placeId.isEmpty) {
+        _unreadCount = 0;
+      } else {
+        _unreadCount = await _firestore.getUnreadNotificationCount(
+          userId,
+          isAdmin: isAdmin,
+          placeId: placeId,
+        );
+        // 목록이 비면 배지도 끔 (count/목록 isAdmin·place 불일치 방지)
+        if (_notifications.isEmpty && !_hasMoreFromServer) {
+          _unreadCount = 0;
+        }
+      }
       _unreadCountLoaded = true;
     } catch (e) {
       if (kDebugMode) {
@@ -151,6 +187,7 @@ class NotificationProvider with ChangeNotifier {
       final page = await _firestore.getUserNotificationsPage(
         userId,
         isAdmin: _lastLoadIsAdmin ?? false,
+        placeId: _currentPlaceId,
         startAfterCursor: _nextPageCursor,
       );
       final existingIds = _notifications.map((n) => n.id).toSet();
@@ -161,7 +198,7 @@ class NotificationProvider with ChangeNotifier {
       _notifications = merged;
       _nextPageCursor = page.nextPageCursor;
       _hasMoreFromServer =
-          page.items.length >= NotificationFirestoreService.defaultPageSize &&
+          page.fetchedCount >= NotificationFirestoreService.defaultPageSize &&
           page.nextPageCursor != null;
     } catch (e) {
       if (kDebugMode) {
@@ -287,17 +324,20 @@ class NotificationProvider with ChangeNotifier {
         return;
       }
 
-      if (!notification.isRead) {
-        _unreadCount += 1;
-        _unreadCountLoaded = true;
-      }
-
       if (_hasLoadedOnce) {
         _notifications = [notification, ..._notifications]
           ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+        notifyListeners();
       }
 
-      notifyListeners();
+      if (!notification.isRead) {
+        // 로컬 가산 대신 서버 count로 재동기화 (오탐 배지 방지)
+        await refreshUnreadBadge(
+          currentUserId,
+          isAdmin: isAdmin,
+          placeId: placeId,
+        );
+      }
     } catch (e) {
       if (kDebugMode) {
         debugPrint('[NotificationProvider] addNotificationFromId: $e');

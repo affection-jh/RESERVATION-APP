@@ -47,6 +47,9 @@ class MemberProvider with ChangeNotifier {
 
   // 멤버관리 화면 UI 상태 (Provider 일괄 관리)
   String _searchQuery = '';
+  Timer? _searchLoadTimer;
+  int _searchLoadGeneration = 0;
+  bool _isSearchLoading = false;
   int _selectedTab = 0; // 0: 전체, 1: 코스별
   int _sortBy = 0; // 전체: 0=기본, 1=남은기간순, 2=남은횟수순
   int _courseSortBy = 0; // 코스별: 0=횟수순, 1=기간순
@@ -58,6 +61,7 @@ class MemberProvider with ChangeNotifier {
   String? get placeId => _placeId;
   bool get isLoading => _isLoading;
   bool get isLoadingMore => _isLoadingMore;
+  bool get isSearchLoading => _isSearchLoading;
   bool get hasMoreMembers => _hasMoreMembers;
 
   String? get error => _error;
@@ -248,19 +252,39 @@ class MemberProvider with ChangeNotifier {
     final placeId = _placeId;
     if (placeId == null || placeId.isEmpty) return;
 
+    _searchLoadTimer?.cancel();
+    _searchLoadGeneration++;
+    _isSearchLoading = false;
+
     _placeMembers.clear();
     _enrollments.clear();
     _lastMemberPageDoc = null;
     _lastEnrollmentPageDoc = null;
     _hasMoreMembers = true;
-
-    if (_isCourseTabLoad) {
-      await _loadCourseTabPage();
-    } else {
-      await _loadAllTabPage();
-    }
-    _isLoading = false;
+    _isLoading = true;
+    _error = null;
     notifyListeners();
+
+    try {
+      if (_isCourseTabLoad) {
+        await _loadCourseTabPage();
+      } else {
+        await _loadAllTabPage();
+      }
+    } catch (e) {
+      _error = e.toString();
+      debugPrint('[MemberProvider] _loadFirstPage error: $e');
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+      // 탭/코스 전환 후에도 검색어가 남아 있으면 나머지 페이지 로드
+      if (_searchQuery.trim().isNotEmpty && _hasMoreMembers) {
+        _searchLoadTimer?.cancel();
+        _searchLoadTimer = Timer(Duration.zero, () {
+          unawaited(_loadRemainingPagesForSearch());
+        });
+      }
+    }
   }
 
   Future<void> _loadAllTabPage() async {
@@ -790,15 +814,72 @@ class MemberProvider with ChangeNotifier {
   void setSearchQuery(String value) {
     if (_searchQuery == value) return;
     _searchQuery = value;
+    _searchLoadTimer?.cancel();
+
+    final q = value.trim();
+    if (q.isEmpty) {
+      _searchLoadGeneration++;
+      if (_isSearchLoading) {
+        _isSearchLoading = false;
+      }
+      notifyListeners();
+      return;
+    }
+
     notifyListeners();
+
+    // 이미 전부 로드됐으면 클라이언트 필터만으로 충분
+    if (!_hasMoreMembers) return;
+
+    // 디바운스 후 남은 페이지를 이어서 로드 → 페이지 밖 멤버도 검색
+    _searchLoadTimer = Timer(const Duration(milliseconds: 350), () {
+      unawaited(_loadRemainingPagesForSearch());
+    });
+  }
+
+  /// 검색어가 있을 때 아직 안 받은 멤버 페이지를 끝까지 로드
+  Future<void> _loadRemainingPagesForSearch() async {
+    final gen = ++_searchLoadGeneration;
+    final queryAtStart = _searchQuery.trim();
+    if (queryAtStart.isEmpty) return;
+
+    _isSearchLoading = true;
+    notifyListeners();
+
+    try {
+      // 첫 페이지 로딩 중이면 끝날 때까지 대기
+      while (_isLoading &&
+          gen == _searchLoadGeneration &&
+          _searchQuery.trim() == queryAtStart) {
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+      }
+
+      while (_hasMoreMembers &&
+          gen == _searchLoadGeneration &&
+          _searchQuery.trim() == queryAtStart) {
+        if (_isLoadingMore) {
+          await Future<void>.delayed(const Duration(milliseconds: 40));
+          continue;
+        }
+        await loadMoreMembers();
+      }
+    } finally {
+      if (gen == _searchLoadGeneration) {
+        _isSearchLoading = false;
+        notifyListeners();
+      }
+    }
   }
 
   void setSelectedTab(int index) {
     if (_selectedTab == index) return;
     _selectedTab = index;
-    notifyListeners();
     if (_placeId != null && _placeId!.isNotEmpty) {
+      _isLoading = true;
+      notifyListeners();
       unawaited(_loadFirstPage());
+    } else {
+      notifyListeners();
     }
   }
 
@@ -837,11 +918,14 @@ class MemberProvider with ChangeNotifier {
     }
     _selectedCourseIds.clear();
     _selectedCourseIds.add(courseId);
-    notifyListeners();
     if (_placeId != null &&
         _placeId!.isNotEmpty &&
         (_selectedTab == 1 || _isSubManagerForPlace)) {
+      _isLoading = true;
+      notifyListeners();
       unawaited(_loadFirstPage());
+    } else {
+      notifyListeners();
     }
     if (save && _placeId != null && _placeId!.isNotEmpty) {
       StorageService()
@@ -1047,6 +1131,8 @@ class MemberProvider with ChangeNotifier {
       }
     } catch (e) {
       debugPrint('[MemberProvider] loadMoreMembers error: $e');
+      // 검색 보충 로드가 같은 오류로 무한 재시도하지 않도록
+      _hasMoreMembers = false;
     } finally {
       _isLoadingMore = false;
       notifyListeners();
@@ -1054,6 +1140,9 @@ class MemberProvider with ChangeNotifier {
   }
 
   void clear() {
+    _searchLoadTimer?.cancel();
+    _searchLoadGeneration++;
+    _isSearchLoading = false;
     _placeId = null;
     _isSubManagerForPlace = false;
     _placeMembers.clear();

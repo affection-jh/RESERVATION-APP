@@ -12,6 +12,7 @@ import '../providers/auth_provider.dart';
 import '../providers/course_provider.dart';
 import '../providers/enrollment_provider.dart';
 import '../providers/member_provider.dart';
+import '../providers/notification_provider.dart';
 import '../providers/place_provider.dart';
 import '../providers/reservation_provider.dart';
 import '../providers/reservation_summary_provider.dart';
@@ -1793,6 +1794,19 @@ class _PlaceWaitingScreenState extends State<PlaceWaitingScreen> {
             placeProvider.setCurrentPlace(place);
             await _authService.updateLastAccessedPlace(place.id);
             memberProvider.setPlaceId(place.id);
+            final notificationProvider = Provider.of<NotificationProvider>(
+              context,
+              listen: false,
+            );
+            notificationProvider
+                .refreshUnreadBadge(
+                  admin.userId,
+                  isAdmin: true,
+                  placeId: place.id,
+                )
+                .catchError((e) {
+                  debugPrint('[PlaceWaitingScreen] 알림 배지 갱신 실패: $e');
+                });
             await Future.wait([
               courseProvider.loadCourses(place.id),
               storyProvider.loadStories(place.id),

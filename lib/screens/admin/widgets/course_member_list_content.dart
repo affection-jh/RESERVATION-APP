@@ -179,6 +179,9 @@ class CourseMemberListContent extends StatelessWidget {
         }
 
         if (filtered.isEmpty) {
+          if (memberProvider.isSearchLoading) {
+            return const Center(child: CircularProgressIndicator());
+          }
           final emptyContent = Padding(
             padding: listPadding ?? const EdgeInsets.symmetric(horizontal: 24),
             child: Column(

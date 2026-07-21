@@ -165,7 +165,8 @@ class _UserReservationManageBottomSheetState
     final enrollment =
         enrollmentProvider.enrollmentsByCourseId[widget.course.id];
     final remainingReservations = enrollment?.remainingReservations ?? 0;
-    final totalReservations = enrollment?.totalReservations ?? remainingReservations;
+    final totalReservations =
+        enrollment?.totalReservations ?? remainingReservations;
 
     // 취소 가능 여부 체크
     final canCancel =
@@ -316,7 +317,9 @@ class _UserReservationManageBottomSheetState
                                     style: TextStyle(
                                       fontSize: 24,
                                       fontWeight: FontWeight.bold,
-                                      color: AppColors.textLight.withOpacity(0.8),
+                                      color: AppColors.textLight.withOpacity(
+                                        0.8,
+                                      ),
                                     ),
                                   ),
                                 ],
@@ -372,7 +375,7 @@ class _UserReservationManageBottomSheetState
                               child: Text(
                                 _getCancellationErrorMessage(),
                                 style: TextStyle(
-                                  fontSize: 13,
+                                  fontSize: 14,
                                   color: AppColors.textSecondary,
                                   fontWeight: FontWeight.w500,
                                 ),
