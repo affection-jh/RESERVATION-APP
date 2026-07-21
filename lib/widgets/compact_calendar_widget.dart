@@ -3834,7 +3834,9 @@ class _CompactCalendarWidgetState extends State<CompactCalendarWidget>
         widget.adminSelectionMode
             ? true
             : (widget.enrollmentsByCourseId != null
-                ? (widget.enrollmentsByCourseId![courseId]?.canReserve ?? false)
+                ? (widget.enrollmentsByCourseId![courseId]
+                        ?.canReserveForSessionDate(date) ??
+                    false)
                 : true);
 
     final eligibility = ReservationPolicyEngine.evaluateReservation(

@@ -340,9 +340,9 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
         // 알림은 비동기로 로드 (블로킹하지 않음)
         final userId = result.user.userId;
         notificationProvider
-            .loadNotifications(userId, isAdmin: false)
+            .refreshUnreadBadge(userId, isAdmin: false, placeId: place.id)
             .catchError((e) {
-              debugPrint('[AppStartup] 알림 로드 실패: $e');
+              debugPrint('[AppStartup] 알림 배지 갱신 실패: $e');
             });
 
         try {
@@ -467,9 +467,9 @@ class _AppStartupScreenState extends State<AppStartupScreen> {
       listen: false,
     );
     notificationProvider
-        .loadNotifications(user.userId, isAdmin: true)
+        .refreshUnreadBadge(user.userId, isAdmin: true)
         .catchError((e) {
-      debugPrint('[AppStartup] 관리자 알림 로드 실패: $e');
+      debugPrint('[AppStartup] 관리자 알림 배지 갱신 실패: $e');
         });
 
     try {

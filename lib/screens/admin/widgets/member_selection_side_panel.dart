@@ -255,7 +255,27 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
         return aEnrolled ? -1 : 1;
       });
     }
-    return list;
+    return _uniqueByUserId(list);
+  }
+
+  List<MemberView> _uniqueByUserId(List<MemberView> members) {
+    final seen = <String>{};
+    final out = <MemberView>[];
+    for (final m in members) {
+      if (m.userId.isEmpty || seen.contains(m.userId)) continue;
+      seen.add(m.userId);
+      out.add(m);
+    }
+    return out;
+  }
+
+  List<MemberView> _selectedMembersFrom(
+    List<MemberView> displayList,
+    Set<String> selectedUserIds,
+  ) {
+    return _uniqueByUserId(
+      displayList.where((v) => selectedUserIds.contains(v.userId)).toList(),
+    );
   }
 
   List<MemberView> _filterBySearch(List<MemberView> members, String query) {
@@ -581,10 +601,10 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
                   if (hasSelection) {
                     buttonText = '추가 (${_selectedUserIds.length}명)';
                     onPressed = () {
-                      final selected =
-                          displayList
-                              .where((v) => _selectedUserIds.contains(v.userId))
-                              .toList();
+                      final selected = _selectedMembersFrom(
+                        displayList,
+                        _selectedUserIds,
+                      );
                       if (context.mounted) Navigator.of(context).pop();
                       widget.onMembersSelected(selected);
                     };
@@ -596,10 +616,10 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
                   if (hasSelection) {
                     buttonText = '코스매니저로 추가';
                     onPressed = () {
-                      final selected =
-                          displayList
-                              .where((v) => _selectedUserIds.contains(v.userId))
-                              .toList();
+                      final selected = _selectedMembersFrom(
+                        displayList,
+                        _selectedUserIds,
+                      );
                       if (context.mounted) Navigator.of(context).pop();
                       widget.onMembersSelected(selected);
                     };
@@ -612,13 +632,10 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
                   onPressed =
                       hasSelection
                           ? () {
-                            final selected =
-                                displayList
-                                    .where(
-                                      (v) =>
-                                          _selectedUserIds.contains(v.userId),
-                                    )
-                                    .toList();
+                            final selected = _selectedMembersFrom(
+                              displayList,
+                              _selectedUserIds,
+                            );
                             if (context.mounted) Navigator.of(context).pop();
                             widget.onMembersSelected(selected);
                           }

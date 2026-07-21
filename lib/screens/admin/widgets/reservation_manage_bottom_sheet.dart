@@ -423,7 +423,7 @@ class SessionReservationManageBottomSheet extends StatelessWidget {
       if (reservation.id.isEmpty) {
         throw Exception('예약 ID가 없습니다.');
       }
-      await rp.cancelReservation(reservation);
+      await rp.cancelReservation(reservation, asAdminAction: true);
     } catch (e) {
       final errorCtx = navigatorKey.currentContext;
       if (errorCtx != null && errorCtx.mounted) {

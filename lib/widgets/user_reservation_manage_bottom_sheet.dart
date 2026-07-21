@@ -119,7 +119,7 @@ class _UserReservationManageBottomSheetState
 
     // 정책 가져오기 (없으면 기본값 60분 사용)
     final policy = courseProvider.getCoursePolicy(widget.course.id);
-    final closeBeforeMinutes = policy?.closeBeforeMinutes ?? 60;
+    final cancelCloseBeforeMinutes = policy?.cancelCloseBeforeMinutes ?? 60;
 
     // 세션 시작 시간 계산
     final now = TimezoneUtils.getSeoulDateTime();
@@ -130,7 +130,7 @@ class _UserReservationManageBottomSheetState
 
     // 세션 시작 N분 전까지 취소 가능
     final closeAt = sessionStartTime.subtract(
-      Duration(minutes: closeBeforeMinutes),
+      Duration(minutes: cancelCloseBeforeMinutes),
     );
 
     // 현재 시간이 마감 시간 이후면 취소 불가
@@ -141,11 +141,11 @@ class _UserReservationManageBottomSheetState
   String _getCancellationErrorMessage() {
     final courseProvider = Provider.of<CourseProvider>(context, listen: false);
     final policy = courseProvider.getCoursePolicy(widget.course.id);
-    final closeBeforeMinutes = policy?.closeBeforeMinutes ?? 60;
+    final cancelCloseBeforeMinutes = policy?.cancelCloseBeforeMinutes ?? 60;
 
     // 시간 단위 계산
-    final hours = closeBeforeMinutes ~/ 60;
-    final minutes = closeBeforeMinutes % 60;
+    final hours = cancelCloseBeforeMinutes ~/ 60;
+    final minutes = cancelCloseBeforeMinutes % 60;
 
     String timeText;
     if (hours > 0 && minutes > 0) {

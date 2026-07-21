@@ -16,7 +16,6 @@ import '../../../utils/timezone_utils.dart';
 import '../../../widgets/common_dialog.dart';
 import 'drag_calendar_editor.dart';
 import 'session_edit_bottom_sheet.dart';
-import 'course_policy_edit_screen.dart';
 
 /// 코스 일정 편집 화면
 ///
@@ -229,45 +228,6 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
             },
           ),
           actions: [
-            // 예약 정책 변경 버튼 (OutlinedButton) - 저장 중일 때 숨김
-            if (!_isSaving)
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: OutlinedButton(
-                  onPressed: () async {
-                    await Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder:
-                            (_) => CoursePolicyEditScreen(
-                              courseId: widget.course.id,
-                              requireSave: false,
-                            ),
-                      ),
-                    );
-                  },
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 8,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    side: BorderSide(
-                      color: AppColors.textPrimary.withOpacity(0.2),
-                      width: 1,
-                    ),
-                  ),
-                  child: Text(
-                    '예약 정책',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                ),
-              ),
             // 요일 편집 버튼 (OutlinedButton) - 저장 중일 때 숨김
             if (!_isSaving)
               Padding(
@@ -957,6 +917,7 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
       final result = await _firestoreService.batchCancelReservations(
         reservationIds: allReservations.map((r) => r.id).toList(),
         placeId: placeId,
+        asAdminAction: true,
       );
 
       final cancelledCount = result['cancelledCount'] as int? ?? 0;

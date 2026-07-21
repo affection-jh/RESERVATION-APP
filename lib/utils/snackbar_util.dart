@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:cloud_functions/cloud_functions.dart';
@@ -8,21 +9,40 @@ import 'error_message_util.dart';
 import 'navigator_key.dart';
 
 class SnackbarUtil {
-  /// 로딩 스낵바( persistent: true )를 닫을 때 사용. showSuccess/showInfo 전에 호출.
-  static AnimationController? _loadingController;
+  static const _reverseDuration = Duration(milliseconds: 250);
 
-  static void _dismissLoadingIfAny() {
-    final c = _loadingController;
-    _loadingController = null;
-    if (c == null) return;
+  /// 로딩 스낵바( persistent: true )
+  static AnimationController? _loadingController;
+  /// 일반 메시지 스낵바
+  static AnimationController? _messageController;
+
+  static Future<void> _reverseController(AnimationController? controller) async {
+    if (controller == null) return;
     try {
-      c.reverse();
+      if (controller.status != AnimationStatus.dismissed &&
+          controller.status != AnimationStatus.reverse) {
+        await controller.reverse();
+      }
     } catch (_) {}
   }
 
-  /// 로딩 스낵바를 강제로 닫을 때 사용. (나가기 후 완료 시 showSuccess가 호출되지 않는 경로에서 finally 등에서 호출)
+  /// 기존 스낵바를 닫고 애니메이션이 끝날 때까지 대기 (겹침 방지).
+  static Future<void> _dismissCurrent() async {
+    final message = _messageController;
+    final loading = _loadingController;
+    _messageController = null;
+    _loadingController = null;
+    await Future.wait([
+      _reverseController(message),
+      _reverseController(loading),
+    ]);
+  }
+
+  /// 로딩 스낵바를 강제로 닫을 때 사용.
   static void dismissLoading() {
-    _dismissLoadingIfAny();
+    final loading = _loadingController;
+    _loadingController = null;
+    unawaited(_reverseController(loading));
   }
 
   static OverlayState? _resolveOverlay(BuildContext? context, {bool preferRoot = false}) {
@@ -115,81 +135,95 @@ class SnackbarUtil {
     } catch (_) {}
   }
 
+  static void _showTopMessage({
+    required BuildContext context,
+    required Widget child,
+    required void Function(AnimationController) onControllerInit,
+  }) {
+    final overlay =
+        _resolveOverlay(context, preferRoot: true) ?? _resolveOverlay(context);
+    if (overlay == null) {
+      final message = child is _SimpleSnackBar ? child.message : '';
+      if (message.isNotEmpty) {
+        _fallbackSnackBar(context, message, isError: false);
+      }
+      return;
+    }
+    showTopSnackBar(
+      overlay,
+      child,
+      animationDuration: const Duration(milliseconds: 300),
+      reverseAnimationDuration: _reverseDuration,
+      curve: Curves.easeOut,
+      onAnimationControllerInit: onControllerInit,
+    );
+  }
+
   /// 상단에 성공 스낵바 표시
-  /// [imageUrl]이 제공되면 코스 이미지를 표시합니다.
-  /// 로딩 스낵바가 떠 있으면 먼저 닫고 표시 (저장 중 나가기 후 완료 시 정합성).
   static void showSuccess(
     BuildContext context,
     String message, {
     String? imageUrl,
   }) {
-    _dismissLoadingIfAny();
-    final overlay = _resolveOverlay(context, preferRoot: true) ?? _resolveOverlay(context);
-    if (overlay == null) {
-      _fallbackSnackBar(context, message, isError: false);
-      return;
-    }
-    showTopSnackBar(
-      overlay,
-      _SimpleSnackBar(message: message, isError: false, imageUrl: imageUrl),
-      animationDuration: const Duration(milliseconds: 300),
-      reverseAnimationDuration: const Duration(milliseconds: 250),
-      curve: Curves.easeOut,
-    );
+    unawaited(() async {
+      await _dismissCurrent();
+      _showTopMessage(
+        context: context,
+        child: _SimpleSnackBar(message: message, isError: false, imageUrl: imageUrl),
+        onControllerInit: (c) => _messageController = c,
+      );
+    }());
   }
 
-  /// 상단에 성공 스낵바 + 액션 버튼 표시 (디자인은 _SimpleSnackBar와 동일)
+  /// 상단에 성공 스낵바 + 액션 버튼 표시
   static void showSuccessWithAction(
     BuildContext context,
     String message, {
     required String actionLabel,
     required VoidCallback onActionPressed,
   }) {
-    final overlay = _resolveOverlay(context);
-    if (overlay == null) {
-      _fallbackSnackBar(
-        context,
-        message,
-        isError: false,
-        actionLabel: actionLabel,
-        onActionPressed: onActionPressed,
+    unawaited(() async {
+      await _dismissCurrent();
+      final overlay = _resolveOverlay(context);
+      if (overlay == null) {
+        _fallbackSnackBar(
+          context,
+          message,
+          isError: false,
+          actionLabel: actionLabel,
+          onActionPressed: onActionPressed,
+        );
+        return;
+      }
+      showTopSnackBar(
+        overlay,
+        _SimpleSnackBarWithAction(
+          message: message,
+          actionLabel: actionLabel,
+          onActionPressed: onActionPressed,
+        ),
+        animationDuration: const Duration(milliseconds: 300),
+        reverseAnimationDuration: _reverseDuration,
+        curve: Curves.easeOut,
+        onAnimationControllerInit: (c) => _messageController = c,
       );
-      return;
-    }
-    showTopSnackBar(
-      overlay,
-      _SimpleSnackBarWithAction(
-        message: message,
-        actionLabel: actionLabel,
-        onActionPressed: onActionPressed,
-      ),
-      animationDuration: const Duration(milliseconds: 300),
-      reverseAnimationDuration: const Duration(milliseconds: 250),
-      curve: Curves.easeOut,
-    );
+    }());
   }
 
   /// 상단에 정보 스낵바 표시
-  /// [imageUrl]이 제공되면 코스 이미지를 표시합니다.
-  /// 로딩 스낵바가 떠 있으면 먼저 닫고 표시.
   static void showInfo(
     BuildContext context,
     String message, {
     String? imageUrl,
   }) {
-    _dismissLoadingIfAny();
-    final overlay = _resolveOverlay(context, preferRoot: true) ?? _resolveOverlay(context);
-    if (overlay == null) {
-      _fallbackSnackBar(context, message, isError: false);
-      return;
-    }
-    showTopSnackBar(
-      overlay,
-      _SimpleSnackBar(message: message, isError: false, imageUrl: imageUrl),
-      animationDuration: const Duration(milliseconds: 300),
-      reverseAnimationDuration: const Duration(milliseconds: 250),
-      curve: Curves.easeOut,
-    );
+    unawaited(() async {
+      await _dismissCurrent();
+      _showTopMessage(
+        context: context,
+        child: _SimpleSnackBar(message: message, isError: false, imageUrl: imageUrl),
+        onControllerInit: (c) => _messageController = c,
+      );
+    }());
   }
 
   /// 서버/네트워크 에러를 한국어로 변환해 정보 스낵바 표시
@@ -216,25 +250,27 @@ class SnackbarUtil {
   }
 
   /// 상단에 로딩 스낵바 표시 (스피너 + 메시지). 작업이 끝날 때까지 유지됨.
-  /// 완료 후 showSuccess / showInfo 호출 시 _dismissLoadingIfAny()로 먼저 닫고 결과 스낵바 표시.
-  /// 루트 오버레이를 우선 사용해, 나가기 후 완료 시에도 success와 동일 레이어에서 표시되도록 함.
   static void showLoading(BuildContext context, String message) {
-    final overlay = _resolveOverlay(context, preferRoot: true) ?? _resolveOverlay(context);
-    if (overlay == null) {
-      _fallbackSnackBar(context, message, isError: false);
-      return;
-    }
-    showTopSnackBar(
-      overlay,
-      _LoadingSnackBar(message: message),
-      animationDuration: const Duration(milliseconds: 300),
-      reverseAnimationDuration: const Duration(milliseconds: 250),
-      curve: Curves.easeOut,
-      persistent: true,
-      onAnimationControllerInit: (c) {
-        _loadingController = c;
-      },
-    );
+    unawaited(() async {
+      await _dismissCurrent();
+      final overlay =
+          _resolveOverlay(context, preferRoot: true) ?? _resolveOverlay(context);
+      if (overlay == null) {
+        _fallbackSnackBar(context, message, isError: false);
+        return;
+      }
+      showTopSnackBar(
+        overlay,
+        _LoadingSnackBar(message: message),
+        animationDuration: const Duration(milliseconds: 300),
+        reverseAnimationDuration: _reverseDuration,
+        curve: Curves.easeOut,
+        persistent: true,
+        onAnimationControllerInit: (c) {
+          _loadingController = c;
+        },
+      );
+    }());
   }
 }
 

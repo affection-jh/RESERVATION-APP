@@ -238,7 +238,9 @@ class EnrollmentService {
               courseEnrollmentData['validUntil'] as String,
             );
             validUntil = TimezoneUtils.getSeoulEndOfDay(validUntil);
-            debugPrint('📅 [EnrollmentService] validUntil 설정값 사용 (validFrom=등록 시점)');
+            debugPrint(
+              '📅 [EnrollmentService] validUntil 설정값 사용 (validFrom=등록 시점)',
+            );
           } else {
             validUntil = TimezoneUtils.getSeoulEndOfDay(
               now.add(const Duration(days: 365)),
@@ -353,7 +355,9 @@ class EnrollmentService {
 
   /// 리버트 시 Firestore 로컬 캐시·펜딩 큐를 원래 enrollment로 덮어씁니다.
   /// (큐에서 실패한 쓰기를 "제거"하는 API는 없으므로, 같은 문서에 이전 값으로 다시 씀)
-  Future<void> overwriteEnrollmentForRevert(CourseEnrollment oldEnrollment) async {
+  Future<void> overwriteEnrollmentForRevert(
+    CourseEnrollment oldEnrollment,
+  ) async {
     final docRef = _firestore.collection('enrollments').doc(oldEnrollment.id);
     final validUntil = TimezoneUtils.getSeoulEndOfDay(oldEnrollment.validUntil);
     final json = Map<String, dynamic>.from(oldEnrollment.toJson());
@@ -416,8 +420,22 @@ class EnrollmentService {
     return {'success': true};
   }
 
-  /// 사용자별 등록 정보 조회
-  /// [placeId]가 제공되면 해당 플레이스의 enrollments만 필터링 (서버 사이드 필터링)
+  /// 사용자별 등록 정보 일회 조회
+  Future<List<CourseEnrollment>> getUserEnrollments(
+    String userId, {
+    String? placeId,
+  }) async {
+    var query = _firestore
+        .collection('enrollments')
+        .where('userId', isEqualTo: userId);
+    if (placeId != null) {
+      query = query.where('placeId', isEqualTo: placeId);
+    }
+    final snapshot = await query.get();
+    return snapshot.docs.map(_courseEnrollmentFromDoc).toList();
+  }
+
+  /// 사용자별 등록 정보 실시간 구독 (EnrollmentProvider 등)
   Stream<List<CourseEnrollment>> watchUserEnrollments(
     String userId, {
     String? placeId,
@@ -436,77 +454,95 @@ class EnrollmentService {
     });
   }
 
-  /// 특정 userId 목록의 enrollments만 구독. 최대 30명(whereIn 한도).
-  Stream<List<CourseEnrollment>> watchEnrollmentsForUserIds(
+  /// 특정 userId 목록의 enrollments 일회 조회 (세션 예약자 등 on-demand)
+  Future<List<CourseEnrollment>> getEnrollmentsForUserIds(
     String placeId,
     List<String> userIds,
-  ) {
-    if (placeId.isEmpty || userIds.isEmpty) return Stream.value([]);
-    final ids = userIds.toSet().where((s) => s.isNotEmpty).take(30).toList();
-    if (ids.isEmpty) return Stream.value([]);
-
-    return _firestore
-        .collection('enrollments')
-        .where('placeId', isEqualTo: placeId)
-        .where('userId', whereIn: ids)
-        .snapshots()
-        .map(
-          (s) => s.docs.map(_courseEnrollmentFromDoc).toList(),
-        );
+  ) async {
+    if (placeId.isEmpty || userIds.isEmpty) return [];
+    final distinct = userIds.toSet().where((s) => s.isNotEmpty).toList();
+    final list = <CourseEnrollment>[];
+    const chunkSize = 30;
+    for (var i = 0; i < distinct.length; i += chunkSize) {
+      final chunk = distinct.skip(i).take(chunkSize).toList();
+      final snapshot =
+          await _firestore
+              .collection('enrollments')
+              .where('placeId', isEqualTo: placeId)
+              .where('userId', whereIn: chunk)
+              .get();
+      for (final doc in snapshot.docs) {
+        list.add(_courseEnrollmentFromDoc(doc));
+      }
+    }
+    return list;
   }
 
-  /// 플레이스별 전체 enrollments 구독 (멤버관리 통합 뷰용) — 비용 높음, watchEnrollmentsForUserIds 권장
-  Stream<List<CourseEnrollment>> watchEnrollmentsByPlace(String placeId) {
-    if (placeId.isEmpty) return Stream.value([]);
-    return _firestore
+  static const int defaultPageSize = 100;
+
+  /// enrollments 페이지 조회 (100개 단위). [courseId] 있으면 해당 코스만.
+  Future<(List<CourseEnrollment>, DocumentSnapshot?)> getEnrollmentsPage(
+    String placeId, {
+    String? courseId,
+    DocumentSnapshot? startAfter,
+    int limit = defaultPageSize,
+  }) async {
+    if (placeId.isEmpty) return (<CourseEnrollment>[], null);
+    Query<Map<String, dynamic>> query = _firestore
         .collection('enrollments')
-        .where('placeId', isEqualTo: placeId)
-        .snapshots()
-        .map(
-          (snapshot) => snapshot.docs.map(_courseEnrollmentFromDoc).toList(),
-        );
+        .where('placeId', isEqualTo: placeId);
+    if (courseId != null && courseId.isNotEmpty) {
+      query = query.where('courseId', isEqualTo: courseId);
+    }
+    query = query.orderBy(FieldPath.documentId).limit(limit);
+    if (startAfter != null) {
+      query = query.startAfterDocument(startAfter);
+    }
+    final snapshot = await query.get();
+    final list = snapshot.docs.map(_courseEnrollmentFromDoc).toList();
+    final lastDoc = snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
+    return (list, lastDoc);
   }
 
-  /// 플레이스별 멤버 userId 목록 (enrollment 단일 소스 — placeMemberships 미사용)
-  Stream<List<String>> watchPlaceMemberUserIds(String placeId) {
-    return _firestore
-        .collection('enrollments')
-        .where('placeId', isEqualTo: placeId)
-        .snapshots()
-        .map((snapshot) {
-          final userIds = <String>{};
-          for (final doc in snapshot.docs) {
-            final uid = doc.data()['userId'] as String?;
-            if (uid != null && uid.isNotEmpty) userIds.add(uid);
-          }
-          return userIds.toList();
-        });
-  }
-
-  /// 플레이스별 관리자 표시 이름 맵 (enrollment.adminDisplayName)
-  Stream<Map<String, String>> watchEnrollmentAdminDisplayNamesByPlace(
+  /// 플레이스 전체 enrollments 일회 로드 (부매니저 모드용)
+  Future<List<CourseEnrollment>> getAllEnrollmentsForPlace(
     String placeId,
-  ) {
-    return _firestore
-        .collection('enrollments')
-        .where('placeId', isEqualTo: placeId)
-        .snapshots()
-        .map((snapshot) {
-          final map = <String, String>{};
-          for (final doc in snapshot.docs) {
-            final data = doc.data();
-            final userId = data['userId'] as String?;
-            final name =
-                data['adminDisplayName'] as String? ??
-                data['displayName'] as String?;
-            if (userId == null || userId.isEmpty) continue;
-            final trimmed = (name ?? '').trim();
-            if (trimmed.isNotEmpty && !map.containsKey(userId)) {
-              map[userId] = trimmed;
-            }
-          }
-          return map;
-        });
+  ) async {
+    if (placeId.isEmpty) return [];
+    final all = <CourseEnrollment>[];
+    DocumentSnapshot? cursor;
+    do {
+      final (page, lastDoc) = await getEnrollmentsPage(
+        placeId,
+        startAfter: cursor,
+      );
+      all.addAll(page);
+      cursor = lastDoc;
+      if (page.length < defaultPageSize) break;
+    } while (cursor != null);
+    return all;
+  }
+
+  /// enrollment 문서 ID로 단건 조회
+  Future<CourseEnrollment?> getEnrollmentById(String enrollmentId) async {
+    if (enrollmentId.isEmpty) return null;
+    try {
+      final doc =
+          await _firestore.collection('enrollments').doc(enrollmentId).get();
+      if (!doc.exists || doc.data() == null) return null;
+      final data = Map<String, dynamic>.from(doc.data()!);
+      data['id'] ??= doc.id;
+      data['enrolledAt'] =
+          _timestampToDateTime(data['enrolledAt']).toIso8601String();
+      data['validFrom'] =
+          _timestampToDateTime(data['validFrom']).toIso8601String();
+      data['validUntil'] =
+          _timestampToDateTime(data['validUntil']).toIso8601String();
+      return CourseEnrollment.fromJson(data);
+    } catch (e) {
+      debugPrint('[EnrollmentService] getEnrollmentById failed: $e');
+      return null;
+    }
   }
 
   /// (userId, placeId)의 모든 enrollment에 adminDisplayName 일괄 업데이트
@@ -529,16 +565,6 @@ class EnrollmentService {
       await batch.commit();
     }
   }
-
-  /// 연장 요청 기능 제거됨. 호환용 빈 스트림.
-  Stream<List<CourseEnrollment>> watchExtensionRequests(String placeId) =>
-      Stream.value(const <CourseEnrollment>[]);
-
-  /// 연장 요청 기능 제거됨. 호환용 빈 스트림.
-  Stream<List<CourseEnrollment>> watchExtensionRequestsByCourseIds({
-    required List<String> courseIds,
-    String? placeId,
-  }) => Stream.value(const <CourseEnrollment>[]);
 
   /// enrollment 문서 삭제 전에 actionHistory 서브컬렉션 삭제 (고아 문서 방지)
   Future<void> _deleteActionHistoryForEnrollment(
@@ -686,66 +712,6 @@ class EnrollmentService {
     debugPrint(
       '✅ [EnrollmentService] 멤버 enrollments 삭제 완료: 총 $totalDeleted개 (userId: $userId, placeId: $placeId)',
     );
-  }
-
-  /// 코스별 등록 조회 (enrollments 단일 소스)
-  Stream<List<CourseEnrollment>> watchCourseMembers({
-    required String courseId,
-    String? placeId,
-    bool? isActive,
-  }) {
-    final normalizedCourseId = courseId.trim();
-    if (normalizedCourseId.isEmpty) {
-      return Stream.value(const <CourseEnrollment>[]);
-    }
-
-    var query = _firestore
-        .collection('enrollments')
-        .where('courseId', isEqualTo: normalizedCourseId);
-
-    if (placeId != null && placeId.trim().isNotEmpty) {
-      query = query.where('placeId', isEqualTo: placeId.trim());
-    }
-
-    return query.snapshots().map((snapshot) {
-      if (kDebugMode) {
-        debugPrint(
-          '[EnrollmentService] watchCourseMembers courseId=$normalizedCourseId '
-          'placeId=$placeId docs=${snapshot.docs.length}',
-        );
-      }
-      final list = snapshot.docs.map(_courseEnrollmentFromDoc).toList();
-      if (isActive == null) return list;
-      final now = TimezoneUtils.getSeoulDateTime();
-      return list.where((e) {
-        final active =
-            e.validFrom.isBefore(now) &&
-            e.validUntil.isAfter(now) &&
-            e.remainingReservations > 0;
-        return active == isActive;
-      }).toList();
-    });
-  }
-
-  /// 플레이스별 등록 조회 (enrollments 단일 소스)
-  Stream<List<CourseEnrollment>> watchPlaceCourseMembers({
-    required String placeId,
-    String? courseId,
-    bool? isActive,
-  }) {
-    var query = _firestore
-        .collection('enrollments')
-        .where('placeId', isEqualTo: placeId);
-
-    if (courseId != null && courseId.trim().isNotEmpty) {
-      query = query.where('courseId', isEqualTo: courseId.trim());
-    }
-
-    return query.snapshots().map((snapshot) {
-      final list = snapshot.docs.map(_courseEnrollmentFromDoc).toList();
-      if (isActive == null) return list;
-      return list.where((e) => e.canReserve == isActive).toList();
-    });
   }
 
   // ==================== 액션 히스토리 (actionHistory만 사용) ====================

@@ -7,54 +7,43 @@ import '../models/course_enrollment.dart';
 import '../models/pending_member.dart';
 import '../models/place_member.dart';
 import '../services/member_service.dart';
+import '../utils/format_utils.dart';
 import '../utils/local_storage_util.dart';
 
 /// 멤버 상태 Provider (UI용 MemberView 기준, 단일 소스)
 ///
-/// - 슬라이딩 윈도우: 화면에 보이는 구간 30명 단위만 실시간 구독 (500ms 디바운스)
-/// - 스크롤 시 구독 구간 이동, 핸드쉐이크 최소화
+/// - 구독 없음: 100명 페이지네이션 + on-demand 로드
 class MemberProvider with ChangeNotifier {
   final MemberService _service = MemberService();
 
-  static const int _segmentSize = MemberService.segmentSize;
-  static const int _debounceMs = 500;
+  static final int _pageSize = MemberService.pageSize;
 
   String? _placeId;
-  List<PlaceMember> _streamedPlaceMembers = [];
-  DocumentSnapshot? _streamedSegmentLastDoc;
-  List<PlaceMember> _cachedPlaceMembersBefore = [];
-  List<PlaceMember> _loadedPlaceMembersAfter = [];
-  DocumentSnapshot? _lastLoadedAfterDoc;
+  bool _isSubManagerForPlace = false;
+
+  final List<PlaceMember> _placeMembers = [];
+  DocumentSnapshot? _lastMemberPageDoc;
+  DocumentSnapshot? _lastEnrollmentPageDoc;
+  List<CourseEnrollment> _allPlaceEnrollments = [];
+
   List<PendingMember> _pendingMembers = [];
-  final Map<int, DocumentSnapshot> _segmentBoundaryDocs = {};
-  int _currentSegmentIndex = 0;
-  Timer? _visibleRangeDebounce;
+  final List<CourseEnrollment> _enrollments = [];
+
+  final List<PlaceMember> _onDemandPlaceMembers = [];
+  final List<CourseEnrollment> _onDemandEnrollments = [];
+  final Set<String> _onDemandUserIdsInFlight = {};
+
   bool _hasMoreMembers = true;
   bool _isLoadingMore = false;
-  List<CourseEnrollment> _enrollments = [];
-  String? _selectedCourseId;
-  bool _showPending = true;
   bool _isLoading = true;
   String? _error;
+  String? _selectedCourseId;
+  bool _showPending = true;
   final Set<String> _deletingMemberIds = {};
   final Set<String> _processingMemberIds = {};
+
   /// 코스별 "부매니저 추가 중" userId 목록 (로컬에서 카드 먼저 보여주고 로딩)
   final Map<String, Set<String>> _pendingSubManagerAdds = {};
-
-  StreamSubscription<(List<PlaceMember>, DocumentSnapshot?)>?
-  _placeMembersSegmentSub;
-  StreamSubscription<List<PendingMember>>? _pendingSub;
-  StreamSubscription<List<CourseEnrollment>>? _enrollmentsSub;
-  Set<String> _lastEnrollmentUserIds = {};
-
-  /// 부매니저 모드: 전체 멤버 스트림 미구독, 코스별 30명 롤링 윈도우
-  bool _isSubManagerForPlace = false;
-  List<String> _courseOnlyUserIds = [];
-  int _courseOnlySegmentIndex = 0;
-  List<PlaceMember> _courseOnlyCachedBefore = [];
-  List<PlaceMember> _courseOnlyStreamed = [];
-  List<PlaceMember> _courseOnlyLoadedAfter = [];
-  StreamSubscription<List<PlaceMember>>? _courseOnlyMembersSub;
 
   // 멤버관리 화면 UI 상태 (Provider 일괄 관리)
   String _searchQuery = '';
@@ -69,16 +58,8 @@ class MemberProvider with ChangeNotifier {
   String? get placeId => _placeId;
   bool get isLoading => _isLoading;
   bool get isLoadingMore => _isLoadingMore;
-  bool get hasMoreMembers {
-    if (_isSubManagerForPlace) {
-      final total =
-          _courseOnlyCachedBefore.length +
-          _courseOnlyStreamed.length +
-          _courseOnlyLoadedAfter.length;
-      return total < _courseOnlyUserIds.length;
-    }
-    return _hasMoreMembers;
-  }
+  bool get hasMoreMembers => _hasMoreMembers;
+
   String? get error => _error;
   String? get selectedCourseId => _selectedCourseId;
   bool get showPending => _showPending;
@@ -98,7 +79,12 @@ class MemberProvider with ChangeNotifier {
     Map<String, List<String>> byUser,
   ) {
     return members
-        .map((m) => MemberView.fromPlaceMember(m, enrolledCourseIds: byUser[m.userId] ?? const []))
+        .map(
+          (m) => MemberView.fromPlaceMember(
+            m,
+            enrolledCourseIds: byUser[m.userId] ?? const [],
+          ),
+        )
         .toList();
   }
 
@@ -109,51 +95,370 @@ class MemberProvider with ChangeNotifier {
 
   bool get isSubManagerForPlace => _isSubManagerForPlace;
 
-  /// 전체 멤버: 캐시(이전 세그먼트) + 스트림(현재 세그먼트) + 로드(이후) + pending.
-  /// 부매니저 모드: 코스별 30명 롤링 윈도우(cached+streamed+loaded) + 해당 코스 pending.
-  List<MemberView> get allMembers {
-    if (_isSubManagerForPlace) {
-      final byUser = <String, List<String>>{};
-      for (final e in _enrollments) {
-        byUser.putIfAbsent(e.userId, () => []).add(e.courseId);
-      }
-      final placeViews = _placeMembersToViews(
-        [
-          ..._courseOnlyCachedBefore,
-          ..._courseOnlyStreamed,
-          ..._courseOnlyLoadedAfter,
-        ],
-        byUser,
-      );
-      final courseIds = _selectedCourseIds.toList();
-      final pendingForCourse = _pendingToViews().where(
-        (v) => courseIds.isEmpty ||
-            v.relatedCourseIds.any((id) => courseIds.contains(id)),
-      ).toList();
-      final combined = [...placeViews, ...pendingForCourse];
-      return combined
-          .map((v) => v.copyWith(
-                enrolledCourseIds:
-                    v.isPending ? v.enrolledCourseIds : (byUser[v.userId] ?? []),
-              ))
-          .toList();
-    }
-    final byUser = <String, List<String>>{};
+  List<CourseEnrollment> get _mergedEnrollments {
+    final byId = <String, CourseEnrollment>{};
     for (final e in _enrollments) {
+      byId[e.id] = e;
+    }
+    for (final e in _onDemandEnrollments) {
+      byId[e.id] = e;
+    }
+    return _dedupeEnrollmentsByUserCourseList(byId.values);
+  }
+
+  List<CourseEnrollment> _dedupeEnrollmentsByUserCourseList(
+    Iterable<CourseEnrollment> source,
+  ) {
+    final placeId = _placeId;
+    final list = source.toList();
+    if (placeId == null || placeId.isEmpty || list.isEmpty) return list;
+
+    final best = <String, CourseEnrollment>{};
+    for (final e in list) {
+      final key = '${e.userId}|${e.courseId}';
+      final canonicalId = '${e.userId}_${placeId}_${e.courseId}';
+      final prev = best[key];
+      if (prev == null) {
+        best[key] = e;
+        continue;
+      }
+      if (e.id == canonicalId) {
+        best[key] = e;
+      } else if (prev.id != canonicalId) {
+        best[key] = e;
+      }
+    }
+    return best.values.toList();
+  }
+
+  CourseEnrollment? getEnrollmentById(String enrollmentId) {
+    if (enrollmentId.isEmpty) return null;
+    for (final e in _mergedEnrollments) {
+      if (e.id == enrollmentId) return e;
+    }
+    return null;
+  }
+
+  CourseEnrollment? getEnrollmentForUserAndCourse(
+    String userId,
+    String courseId,
+  ) {
+    final placeId = _placeId;
+    final canonicalId =
+        placeId != null && placeId.isNotEmpty
+            ? '${userId}_${placeId}_$courseId'
+            : null;
+    CourseEnrollment? fallback;
+    for (final e in _mergedEnrollments) {
+      if (e.userId != userId || e.courseId != courseId) continue;
+      if (canonicalId != null && e.id == canonicalId) return e;
+      fallback ??= e;
+    }
+    return fallback;
+  }
+
+  bool isMemberLoadInFlight(String userId) =>
+      _onDemandUserIdsInFlight.contains(userId);
+
+  bool _isMemberLoaded(String userId) {
+    for (final m in [..._placeMembers, ..._onDemandPlaceMembers]) {
+      if (m.userId == userId) return true;
+    }
+    return false;
+  }
+
+  void _appendPlaceMembers(List<PlaceMember> members) {
+    final existing = _placeMembers.map((m) => m.userId).toSet();
+    for (final m in members) {
+      if (m.userId.isEmpty || existing.contains(m.userId)) continue;
+      _placeMembers.add(m);
+      existing.add(m.userId);
+    }
+  }
+
+  void _mergeEnrollments(List<CourseEnrollment> list) {
+    final existingIds = {
+      ..._enrollments.map((e) => e.id),
+      ..._onDemandEnrollments.map((e) => e.id),
+    };
+    for (final e in list) {
+      if (existingIds.contains(e.id)) continue;
+      _enrollments.add(e);
+      existingIds.add(e.id);
+    }
+    _dedupeEnrollmentsByUserCourse(_enrollments);
+  }
+
+  /// legacy enrollment id가 공존할 때 canonical id(`${userId}_${placeId}_${courseId}`) 우선
+  void _dedupeEnrollmentsByUserCourse(List<CourseEnrollment> target) {
+    final deduped = _dedupeEnrollmentsByUserCourseList(target);
+    target
+      ..clear()
+      ..addAll(deduped);
+  }
+
+  List<PlaceMember> get _allLoadedPlaceMembers => [
+    ..._placeMembers,
+    ..._onDemandPlaceMembers,
+  ];
+
+  List<PlaceMember> get _uniqueLoadedPlaceMembers {
+    final seen = <String>{};
+    final out = <PlaceMember>[];
+    for (final m in _allLoadedPlaceMembers) {
+      if (m.userId.isEmpty || seen.contains(m.userId)) continue;
+      seen.add(m.userId);
+      out.add(m);
+    }
+    return out;
+  }
+
+  List<MemberView> _uniqueMemberViewsByUserId(List<MemberView> views) {
+    final seen = <String>{};
+    final out = <MemberView>[];
+    for (final v in views) {
+      if (v.userId.isEmpty || seen.contains(v.userId)) continue;
+      seen.add(v.userId);
+      out.add(v);
+    }
+    return out;
+  }
+
+  List<MemberView> _pendingViewsExcludingRegisteredPhones(
+    List<MemberView> placeViews,
+  ) {
+    if (!_showPending) return const [];
+    final registeredPhones =
+        placeViews
+            .map((v) => FormatUtils.normalizePhoneForCompare(v.phoneNumber))
+            .where((p) => p.isNotEmpty)
+            .toSet();
+    return _pendingToViews().where((p) {
+      final phone = FormatUtils.normalizePhoneForCompare(p.phoneNumber);
+      if (phone.isEmpty) return true;
+      return !registeredPhones.contains(phone);
+    }).toList();
+  }
+
+  bool get _isCourseTabLoad =>
+      _isSubManagerForPlace ||
+      (_selectedTab == 1 && _selectedCourseIds.isNotEmpty);
+
+  Future<void> _loadFirstPage() async {
+    final placeId = _placeId;
+    if (placeId == null || placeId.isEmpty) return;
+
+    _placeMembers.clear();
+    _enrollments.clear();
+    _lastMemberPageDoc = null;
+    _lastEnrollmentPageDoc = null;
+    _hasMoreMembers = true;
+
+    if (_isCourseTabLoad) {
+      await _loadCourseTabPage();
+    } else {
+      await _loadAllTabPage();
+    }
+    _isLoading = false;
+    notifyListeners();
+  }
+
+  Future<void> _loadAllTabPage() async {
+    final placeId = _placeId!;
+    final (members, lastDoc) = await _service.getPlaceMembersPage(
+      placeId,
+      startAfter: _lastMemberPageDoc,
+    );
+    _appendPlaceMembers(members);
+    _lastMemberPageDoc = lastDoc;
+    _hasMoreMembers = members.length >= _pageSize;
+    if (members.isEmpty) _hasMoreMembers = false;
+
+    final userIds = members.map((m) => m.userId).where((id) => id.isNotEmpty);
+    final ens = await _service.getEnrollmentsForUserIds(
+      placeId,
+      userIds.toList(),
+    );
+    _mergeEnrollments(ens);
+  }
+
+  Future<void> _loadCourseTabPage() async {
+    final placeId = _placeId!;
+    final courseIds = _selectedCourseIds.toList();
+    if (courseIds.isEmpty) {
+      _hasMoreMembers = false;
+      return;
+    }
+
+    if (_isSubManagerForPlace) {
+      final userIds =
+          _allPlaceEnrollments
+              .where((e) => courseIds.contains(e.courseId))
+              .map((e) => e.userId)
+              .toSet()
+              .toList()
+            ..sort();
+      final start = _placeMembers.length;
+      final chunk = userIds.skip(start).take(_pageSize).toList();
+      if (chunk.isEmpty) {
+        _hasMoreMembers = false;
+        return;
+      }
+      final members = await _service.getPlaceMembersByUserIds(placeId, chunk);
+      _appendPlaceMembers(members);
+      _mergeEnrollments(
+        _allPlaceEnrollments
+            .where(
+              (e) => chunk.contains(e.userId) && courseIds.contains(e.courseId),
+            )
+            .toList(),
+      );
+      _hasMoreMembers = start + chunk.length < userIds.length;
+      return;
+    }
+
+    if (courseIds.length == 1) {
+      final courseId = courseIds.first;
+      final (ens, lastDoc) = await _service.getEnrollmentsPage(
+        placeId,
+        courseId: courseId,
+        startAfter: _lastEnrollmentPageDoc,
+      );
+      _lastEnrollmentPageDoc = lastDoc;
+      _hasMoreMembers = ens.length >= _pageSize;
+      if (ens.isEmpty) _hasMoreMembers = false;
+      _mergeEnrollments(ens);
+      final userIds = ens.map((e) => e.userId).toList();
+      if (userIds.isNotEmpty) {
+        final members = await _service.getPlaceMembersByUserIds(
+          placeId,
+          userIds,
+        );
+        _appendPlaceMembers(members);
+      }
+      return;
+    }
+
+    final (ens, lastDoc) = await _service.getEnrollmentsPage(
+      placeId,
+      startAfter: _lastEnrollmentPageDoc,
+    );
+    _lastEnrollmentPageDoc = lastDoc;
+    _hasMoreMembers = ens.length >= _pageSize;
+    if (ens.isEmpty) _hasMoreMembers = false;
+    final filtered =
+        ens.where((e) => courseIds.contains(e.courseId)).toList();
+    _mergeEnrollments(filtered);
+    final userIds = filtered.map((e) => e.userId).toList();
+    if (userIds.isNotEmpty) {
+      final members = await _service.getPlaceMembersByUserIds(
+        placeId,
+        userIds,
+      );
+      _appendPlaceMembers(members);
+    }
+  }
+
+  void _mergeOnDemandEnrollments(List<CourseEnrollment> list) {
+    final existingIds = _onDemandEnrollments.map((e) => e.id).toSet()
+      ..addAll(_enrollments.map((e) => e.id));
+    for (final e in list) {
+      if (existingIds.contains(e.id)) continue;
+      _onDemandEnrollments.add(e);
+      existingIds.add(e.id);
+    }
+    _dedupeEnrollmentsByUserCourse(_onDemandEnrollments);
+  }
+
+  /// 페이지에 없는 userId 멤버·enrollment on-demand 로드 (세션 예약자 등)
+  Future<void> ensureMembersForUserIds(List<String> userIds) async {
+    final placeId = _placeId;
+    if (placeId == null || placeId.isEmpty) return;
+
+    final distinct = userIds.where((id) => id.isNotEmpty).toSet().toList();
+    if (distinct.isEmpty) return;
+
+    final membersToFetch =
+        distinct
+            .where(
+              (id) =>
+                  !_isMemberLoaded(id) &&
+                  !_onDemandUserIdsInFlight.contains(id),
+            )
+            .toList();
+
+    if (membersToFetch.isNotEmpty) {
+      _onDemandUserIdsInFlight.addAll(membersToFetch);
+      notifyListeners();
+      try {
+        final members = await _service.getPlaceMembersByUserIds(
+          placeId,
+          membersToFetch,
+        );
+        final existingMemberIds = _allLoadedPlaceMembers.map((m) => m.userId).toSet();
+        for (final m in members) {
+          if (!existingMemberIds.contains(m.userId)) {
+            _onDemandPlaceMembers.add(m);
+            existingMemberIds.add(m.userId);
+          }
+        }
+      } catch (e) {
+        debugPrint('[MemberProvider] ensureMembersForUserIds members error: $e');
+      } finally {
+        _onDemandUserIdsInFlight.removeAll(membersToFetch);
+        notifyListeners();
+      }
+    }
+
+    try {
+      final enrollments = await _service.getEnrollmentsForUserIds(
+        placeId,
+        distinct,
+      );
+      _mergeOnDemandEnrollments(enrollments);
+      notifyListeners();
+    } catch (e) {
+      debugPrint('[MemberProvider] ensureMembersForUserIds enrollments error: $e');
+    }
+  }
+
+  /// enrollmentId 단건 on-demand (예약 문서 enrollmentId 기준)
+  Future<CourseEnrollment?> ensureEnrollmentById(String enrollmentId) async {
+    if (enrollmentId.isEmpty) return null;
+    final cached = getEnrollmentById(enrollmentId);
+    if (cached != null) return cached;
+    try {
+      final fetched = await _service.getEnrollmentById(enrollmentId);
+      if (fetched != null) {
+        _mergeOnDemandEnrollments([fetched]);
+        notifyListeners();
+      }
+      return fetched;
+    } catch (e) {
+      debugPrint('[MemberProvider] ensureEnrollmentById error: $e');
+      return null;
+    }
+  }
+
+  /// 전체 멤버: loadMore 페이지(100명) + on-demand + pending (userId·전화번호 중복 없음)
+  List<MemberView> get allMembers {
+    final byUser = <String, List<String>>{};
+    for (final e in _mergedEnrollments) {
       byUser.putIfAbsent(e.userId, () => []).add(e.courseId);
     }
-    final placeViews = _placeMembersToViews([
-      ..._cachedPlaceMembersBefore,
-      ..._streamedPlaceMembers,
-      ..._loadedPlaceMembersAfter,
-    ], byUser);
-    final pendingViews = _pendingToViews();
-    final combined = [...placeViews, ...pendingViews];
+    final placeViews = _placeMembersToViews(_uniqueLoadedPlaceMembers, byUser);
+    final pendingViews = _pendingViewsExcludingRegisteredPhones(placeViews);
+    final combined = _uniqueMemberViewsByUserId([
+      ...placeViews,
+      ...pendingViews,
+    ]);
     return combined
-        .map((v) => v.copyWith(
-              enrolledCourseIds:
-                  v.isPending ? v.enrolledCourseIds : (byUser[v.userId] ?? []),
-            ))
+        .map(
+          (v) => v.copyWith(
+            enrolledCourseIds:
+                v.isPending ? v.enrolledCourseIds : (byUser[v.userId] ?? []),
+          ),
+        )
         .toList();
   }
 
@@ -166,7 +471,7 @@ class MemberProvider with ChangeNotifier {
     if (_selectedCourseId != null && _selectedCourseId!.trim().isNotEmpty) {
       final courseId = _selectedCourseId!.trim();
       final byUser = <String, CourseEnrollment>{};
-      for (final e in _enrollments) {
+      for (final e in _mergedEnrollments) {
         if (e.courseId == courseId) byUser[e.userId] = e;
       }
       final list = <MemberView>[];
@@ -195,7 +500,7 @@ class MemberProvider with ChangeNotifier {
   /// 특정 코스에 등록된 멤버만 (enrollment 첨부). pending 제외.
   List<MemberView> getMembersForCourse(String courseId) {
     final byUser = <String, CourseEnrollment>{};
-    for (final e in _enrollments) {
+    for (final e in _mergedEnrollments) {
       if (e.courseId == courseId) byUser[e.userId] = e;
     }
     final list = <MemberView>[];
@@ -215,8 +520,7 @@ class MemberProvider with ChangeNotifier {
     return list;
   }
 
-  /// 코스별 탭용: 선택된 코스들의 멤버 (검색·정렬 적용).
-  /// 부매니저 모드: 30명 롤링 윈도우로 로드한 allMembers 기준.
+  /// 코스별 탭용: 선택된 코스들의 멤버 (검색·정렬 적용)
   List<MemberView> get listForCourseTab {
     if (_selectedCourseIds.isEmpty) return [];
     if (_isSubManagerForPlace) {
@@ -224,10 +528,11 @@ class MemberProvider with ChangeNotifier {
       if (_selectedCourseIds.length == 1) {
         final courseId = _selectedCourseIds.first;
         final byUser = <String, CourseEnrollment>{};
-        for (final e in _enrollments) {
+        for (final e in _mergedEnrollments) {
           if (e.courseId == courseId) byUser[e.userId] = e;
         }
-        list = list.map((v) => v.copyWith(enrollment: byUser[v.userId])).toList();
+        list =
+            list.map((v) => v.copyWith(enrollment: byUser[v.userId])).toList();
       }
       list = _filteredBySearch(list);
       list = _sortCourseMembers(list);
@@ -375,7 +680,13 @@ class MemberProvider with ChangeNotifier {
         final kCount =
             _selectedTab == 1 &&
             _matchRemainingCount(kw, v.userId, _selectedCourseIds);
-        return kn || kp || kPending || kManager || kSubManager || kCourse || kCount;
+        return kn ||
+            kp ||
+            kPending ||
+            kManager ||
+            kSubManager ||
+            kCourse ||
+            kCount;
       });
       return matchFull || matchKeywords;
     }).toList();
@@ -391,7 +702,7 @@ class MemberProvider with ChangeNotifier {
     final count = int.tryParse(keyword.replaceAll(RegExp(r'[^\d]'), ''));
     if (count == null || count < 0) return false;
     var memberEnrollments =
-        _enrollments.where((e) => e.userId == userId).toList();
+        _mergedEnrollments.where((e) => e.userId == userId).toList();
     if (selectedCourseIds.isNotEmpty) {
       memberEnrollments =
           memberEnrollments
@@ -412,7 +723,7 @@ class MemberProvider with ChangeNotifier {
   List<MemberView> _sortAllMembers(List<MemberView> list) {
     list = List.from(list);
     final byUser = <String, List<CourseEnrollment>>{};
-    for (final e in _enrollments) {
+    for (final e in _mergedEnrollments) {
       byUser.putIfAbsent(e.userId, () => []).add(e);
     }
     list.sort((a, b) {
@@ -486,6 +797,9 @@ class MemberProvider with ChangeNotifier {
     if (_selectedTab == index) return;
     _selectedTab = index;
     notifyListeners();
+    if (_placeId != null && _placeId!.isNotEmpty) {
+      unawaited(_loadFirstPage());
+    }
   }
 
   void setSortBy(int value) {
@@ -523,8 +837,12 @@ class MemberProvider with ChangeNotifier {
     }
     _selectedCourseIds.clear();
     _selectedCourseIds.add(courseId);
-    if (_isSubManagerForPlace) _updateCourseOnlyMembers();
     notifyListeners();
+    if (_placeId != null &&
+        _placeId!.isNotEmpty &&
+        (_selectedTab == 1 || _isSubManagerForPlace)) {
+      unawaited(_loadFirstPage());
+    }
     if (save && _placeId != null && _placeId!.isNotEmpty) {
       StorageService()
           .saveLastSelectedCourseId(
@@ -554,6 +872,9 @@ class MemberProvider with ChangeNotifier {
     _selectedCourseIds.clear();
     _selectedCourseIds.add(idToSelect);
     notifyListeners();
+    if (_placeId != null && (_selectedTab == 1 || _isSubManagerForPlace)) {
+      unawaited(_loadFirstPage());
+    }
   }
 
   void setCourseSelectorExpanded(bool value) {
@@ -562,248 +883,7 @@ class MemberProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  /// 부매니저 모드: 선택 코스(들)의 userId 목록 갱신 후 0번 세그먼트 구독 (30명 롤링 윈도우)
-  void _updateCourseOnlyMembers() {
-    final placeId = _placeId;
-    if (placeId == null ||
-        placeId.isEmpty ||
-        _selectedCourseIds.isEmpty ||
-        !_isSubManagerForPlace) {
-      _courseOnlyUserIds = [];
-      _courseOnlySegmentIndex = 0;
-      _courseOnlyCachedBefore = [];
-      _courseOnlyStreamed = [];
-      _courseOnlyLoadedAfter = [];
-      _courseOnlyMembersSub?.cancel();
-      _courseOnlyMembersSub = null;
-      notifyListeners();
-      return;
-    }
-    final courseIds = _selectedCourseIds.toList();
-    final userIds = <String>{};
-    for (final e in _enrollments) {
-      if (courseIds.contains(e.courseId)) userIds.add(e.userId);
-    }
-    _courseOnlyUserIds = userIds.toList()..sort();
-    _courseOnlySegmentIndex = 0;
-    _courseOnlyCachedBefore = [];
-    _courseOnlyStreamed = [];
-    _courseOnlyLoadedAfter = [];
-    _courseOnlyMembersSub?.cancel();
-    _courseOnlyMembersSub = null;
-    _subscribeCourseOnlySegment();
-    notifyListeners();
-  }
-
-  /// 부매니저: 현재 세그먼트(30명) 구독
-  void _subscribeCourseOnlySegment() {
-    final placeId = _placeId;
-    if (placeId == null ||
-        placeId.isEmpty ||
-        _courseOnlyUserIds.isEmpty ||
-        !_isSubManagerForPlace) return;
-    final start = _courseOnlySegmentIndex * _segmentSize;
-    if (start >= _courseOnlyUserIds.length) return;
-    final segmentUserIds =
-        _courseOnlyUserIds.skip(start).take(_segmentSize).toList();
-    _courseOnlyMembersSub = _service
-        .watchPlaceMembersByUserIds(placeId, segmentUserIds)
-        .listen(
-          (list) {
-            _courseOnlyStreamed = list;
-            notifyListeners();
-          },
-          onError: (e) {
-            debugPrint('[MemberProvider] courseOnly stream error: $e');
-          },
-        );
-  }
-
-  /// 부매니저: 스크롤에 따라 현재 세그먼트 전환 (30명 롤링 윈도우)
-  void _switchCourseOnlySegmentTo(int newSegmentIndex) {
-    final placeId = _placeId;
-    if (placeId == null || placeId.isEmpty || !_isSubManagerForPlace) return;
-    if (newSegmentIndex < 0 ||
-        newSegmentIndex * _segmentSize >= _courseOnlyUserIds.length) return;
-    if (newSegmentIndex == _courseOnlySegmentIndex) return;
-
-    _courseOnlyMembersSub?.cancel();
-    _courseOnlyMembersSub = null;
-
-    if (newSegmentIndex > _courseOnlySegmentIndex) {
-      _courseOnlyCachedBefore = [
-        ..._courseOnlyCachedBefore,
-        ..._courseOnlyStreamed,
-      ];
-      _courseOnlyStreamed = [];
-    } else {
-      final dropCount = (_courseOnlySegmentIndex - newSegmentIndex) * _segmentSize;
-      if (_courseOnlyCachedBefore.length >= dropCount) {
-        _courseOnlyCachedBefore = _courseOnlyCachedBefore.sublist(
-          0,
-          _courseOnlyCachedBefore.length - dropCount,
-        );
-      } else {
-        _courseOnlyCachedBefore = [];
-      }
-      _courseOnlyStreamed = [];
-    }
-
-    _courseOnlySegmentIndex = newSegmentIndex;
-    _subscribeCourseOnlySegment();
-    notifyListeners();
-  }
-
-  /// 현재 로드된 멤버 기준 enrollments 구독. streamed(현재 화면) 우선, 최대 30명.
-  void _refreshEnrollmentsSubscription() {
-    final placeId = _placeId;
-    if (placeId == null || placeId.isEmpty) return;
-
-    if (_isSubManagerForPlace) return;
-
-    // 현재 세그먼트(streamed) 우선 → 상단 30명에 반드시 enrollment 포함
-    final userIds = <String>[];
-    for (final m in _streamedPlaceMembers) {
-      if (m.userId.isNotEmpty && !userIds.contains(m.userId)) {
-        userIds.add(m.userId);
-      }
-    }
-    for (final m in _cachedPlaceMembersBefore) {
-      if (userIds.length >= 30) break;
-      if (m.userId.isNotEmpty && !userIds.contains(m.userId)) {
-        userIds.add(m.userId);
-      }
-    }
-    for (final m in _loadedPlaceMembersAfter) {
-      if (userIds.length >= 30) break;
-      if (m.userId.isNotEmpty && !userIds.contains(m.userId)) {
-        userIds.add(m.userId);
-      }
-    }
-
-    final userIdSet = userIds.toSet();
-    if (setEquals(_lastEnrollmentUserIds, userIdSet)) return;
-    _lastEnrollmentUserIds = userIdSet;
-
-    _enrollmentsSub?.cancel();
-    _enrollmentsSub = null;
-
-    if (userIds.isEmpty) {
-      _enrollments = [];
-      notifyListeners();
-      return;
-    }
-
-    _enrollmentsSub = _service
-        .watchEnrollmentsForUserIds(placeId, userIds)
-        .listen(
-          (list) {
-            _enrollments = list;
-            notifyListeners();
-          },
-          onError: (e) {
-            debugPrint('[MemberProvider] enrollments error: $e');
-          },
-        );
-  }
-
-  /// 화면에 보이는 첫 인덱스 알림. 500ms 디바운스 후 세그먼트 구독 전환.
-  void setVisibleRange(int firstVisibleIndex) {
-    if (_placeId == null || _placeId!.isEmpty) return;
-
-    _visibleRangeDebounce?.cancel();
-    _visibleRangeDebounce = Timer(Duration(milliseconds: _debounceMs), () {
-      _visibleRangeDebounce = null;
-      if (_isSubManagerForPlace) {
-        final segmentIndex = (firstVisibleIndex / _segmentSize).floor();
-        if (segmentIndex != _courseOnlySegmentIndex &&
-            segmentIndex * _segmentSize < _courseOnlyUserIds.length) {
-          _switchCourseOnlySegmentTo(segmentIndex);
-        }
-        return;
-      }
-      final segmentIndex = (firstVisibleIndex / _segmentSize).floor();
-      if (segmentIndex != _currentSegmentIndex) {
-        _switchSegmentTo(segmentIndex);
-      }
-    });
-  }
-
-  void _switchSegmentTo(int newSegmentIndex) {
-    final placeId = _placeId;
-    if (placeId == null || placeId.isEmpty) return;
-
-    _placeMembersSegmentSub?.cancel();
-    _placeMembersSegmentSub = null;
-
-    if (newSegmentIndex < _currentSegmentIndex) {
-      final needLen = (newSegmentIndex + 1) * _segmentSize;
-      if (_cachedPlaceMembersBefore.length >= needLen) {
-        _streamedPlaceMembers = _cachedPlaceMembersBefore.sublist(
-          newSegmentIndex * _segmentSize,
-          needLen,
-        );
-        _cachedPlaceMembersBefore = _cachedPlaceMembersBefore.sublist(
-          0,
-          newSegmentIndex * _segmentSize,
-        );
-        _streamedSegmentLastDoc = _segmentBoundaryDocs[newSegmentIndex];
-      } else {
-        _streamedPlaceMembers = [];
-        _streamedSegmentLastDoc = null;
-      }
-    } else if (newSegmentIndex > _currentSegmentIndex) {
-      _cachedPlaceMembersBefore = [
-        ..._cachedPlaceMembersBefore,
-        ..._streamedPlaceMembers,
-      ];
-      if (_streamedSegmentLastDoc != null) {
-        _segmentBoundaryDocs[_currentSegmentIndex] = _streamedSegmentLastDoc!;
-      }
-      if (_loadedPlaceMembersAfter.length >= _segmentSize) {
-        _streamedPlaceMembers = _loadedPlaceMembersAfter.sublist(
-          0,
-          _segmentSize,
-        );
-        _loadedPlaceMembersAfter = _loadedPlaceMembersAfter.sublist(
-          _segmentSize,
-        );
-      } else {
-        _streamedPlaceMembers = [];
-      }
-      _streamedSegmentLastDoc = null;
-    }
-
-    _currentSegmentIndex = newSegmentIndex;
-    final startAfter =
-        newSegmentIndex > 0 ? _segmentBoundaryDocs[newSegmentIndex - 1] : null;
-
-    _placeMembersSegmentSub = _service
-        .watchPlaceMembersSegment(placeId, startAfter: startAfter)
-        .listen(
-          (pair) {
-            _streamedPlaceMembers = pair.$1;
-            _streamedSegmentLastDoc = pair.$2;
-            if (pair.$2 != null) {
-              _segmentBoundaryDocs[_currentSegmentIndex] = pair.$2!;
-            }
-            _isLoading = false;
-            _error = null;
-            _refreshEnrollmentsSubscription();
-            notifyListeners();
-          },
-          onError: (e) {
-            _error = e.toString();
-            _isLoading = false;
-            notifyListeners();
-          },
-        );
-    _refreshEnrollmentsSubscription();
-    notifyListeners();
-  }
-
-  /// placeId 설정 시 멤버/등록 구독 시작.
-  /// [isSubManagerForPlace] true면 전체 멤버 스트림 미구독, enrollments만 구독 후 코스별로만 로드.
+  /// placeId 설정 시 멤버 페이지네이션 로드 시작 (구독 없음)
   void setPlaceId(
     String? placeId, {
     bool isSubManagerForPlace = false,
@@ -816,31 +896,16 @@ class MemberProvider with ChangeNotifier {
     }
     _placeId = placeId;
     _isSubManagerForPlace = isSubManagerForPlace;
-    _placeMembersSegmentSub?.cancel();
-    _placeMembersSegmentSub = null;
-    _pendingSub?.cancel();
-    _pendingSub = null;
-    _enrollmentsSub?.cancel();
-    _visibleRangeDebounce?.cancel();
-    _visibleRangeDebounce = null;
-    _streamedPlaceMembers = [];
-    _streamedSegmentLastDoc = null;
-    _cachedPlaceMembersBefore = [];
-    _loadedPlaceMembersAfter = [];
-    _lastLoadedAfterDoc = null;
+    _placeMembers.clear();
+    _lastMemberPageDoc = null;
+    _lastEnrollmentPageDoc = null;
+    _allPlaceEnrollments = [];
     _pendingMembers = [];
-    _lastEnrollmentUserIds = {};
-    _segmentBoundaryDocs.clear();
-    _currentSegmentIndex = 0;
+    _enrollments.clear();
+    _onDemandPlaceMembers.clear();
+    _onDemandEnrollments.clear();
+    _onDemandUserIdsInFlight.clear();
     _hasMoreMembers = true;
-    _courseOnlyUserIds = [];
-    _courseOnlySegmentIndex = 0;
-    _courseOnlyCachedBefore = [];
-    _courseOnlyStreamed = [];
-    _courseOnlyLoadedAfter = [];
-    _courseOnlyMembersSub?.cancel();
-    _courseOnlyMembersSub = null;
-    _enrollments = [];
     _isLoading = true;
     _error = null;
     notifyListeners();
@@ -851,59 +916,28 @@ class MemberProvider with ChangeNotifier {
       return;
     }
 
-    _pendingSub = _service
-        .watchPendingMembersByPlace(placeId)
-        .listen(
-          (list) {
-            _pendingMembers = list;
-            notifyListeners();
-            if (_isSubManagerForPlace) _updateCourseOnlyMembers();
-          },
-          onError: (e) {
-            debugPrint('[MemberProvider] pending stream error: $e');
-          },
-        );
+    unawaited(_bootstrapPlace(placeId, isSubManagerForPlace));
+  }
 
-    if (isSubManagerForPlace) {
-      _enrollmentsSub = _service
-          .watchEnrollmentsByPlace(placeId)
-          .listen(
-            (list) {
-              _enrollments = list;
-              _isLoading = false;
-              _error = null;
-              _updateCourseOnlyMembers();
-              notifyListeners();
-            },
-            onError: (e) {
-              _error = e.toString();
-              _isLoading = false;
-              notifyListeners();
-            },
-          );
-      return;
+  Future<void> _bootstrapPlace(
+    String placeId,
+    bool isSubManagerForPlace,
+  ) async {
+    try {
+      _pendingMembers = await _service.getPendingMembersByPlace(placeId);
+      if (_isSubManagerForPlace) {
+        _allPlaceEnrollments = await _service.getAllEnrollmentsForPlace(
+          placeId,
+        );
+        _mergeEnrollments(_allPlaceEnrollments);
+      }
+      await _loadFirstPage();
+    } catch (e) {
+      _error = e.toString();
+      _isLoading = false;
+      debugPrint('[MemberProvider] bootstrap error: $e');
+      notifyListeners();
     }
-
-    _placeMembersSegmentSub = _service
-        .watchPlaceMembersSegment(placeId)
-        .listen(
-          (pair) {
-            _streamedPlaceMembers = pair.$1;
-            _streamedSegmentLastDoc = pair.$2;
-            if (pair.$2 != null) {
-              _segmentBoundaryDocs[0] = pair.$2!;
-            }
-            _isLoading = false;
-            _error = null;
-            _refreshEnrollmentsSubscription();
-            notifyListeners();
-          },
-          onError: (e) {
-            _error = e.toString();
-            _isLoading = false;
-            notifyListeners();
-          },
-        );
   }
 
   void setSelectedCourseId(String? courseId) {
@@ -993,32 +1027,10 @@ class MemberProvider with ChangeNotifier {
     }
   }
 
-  /// 무한 스크롤: 현재 구간 이후 멤버 추가 로드. 부매니저 모드: 다음 30명 세그먼트 로드.
+  /// 무한 스크롤: 다음 페이지 로드
   Future<void> loadMoreMembers() async {
-    final placeId = _placeId;
-    if (_isSubManagerForPlace) {
-      if (placeId == null || placeId.isEmpty || _courseOnlyUserIds.isEmpty) return;
-      final alreadyLoaded = _courseOnlyCachedBefore.length +
-          _courseOnlyStreamed.length +
-          _courseOnlyLoadedAfter.length;
-      if (alreadyLoaded >= _courseOnlyUserIds.length) return;
-      if (_isLoadingMore) return;
-      _isLoadingMore = true;
-      notifyListeners();
-      try {
-        final start = alreadyLoaded;
-        final segmentUserIds =
-            _courseOnlyUserIds.skip(start).take(_segmentSize).toList();
-        final list = await _service.getPlaceMembersByUserIds(placeId, segmentUserIds);
-        _courseOnlyLoadedAfter = [..._courseOnlyLoadedAfter, ...list];
-      } finally {
-        _isLoadingMore = false;
-        notifyListeners();
-      }
-      return;
-    }
-    if (placeId == null ||
-        placeId.isEmpty ||
+    if (_placeId == null ||
+        _placeId!.isEmpty ||
         _isLoadingMore ||
         !_hasMoreMembers) {
       return;
@@ -1028,20 +1040,11 @@ class MemberProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      final startAfter =
-          _loadedPlaceMembersAfter.isEmpty
-              ? _streamedSegmentLastDoc ??
-                  _segmentBoundaryDocs[_currentSegmentIndex]
-              : _lastLoadedAfterDoc;
-      final (list, lastDoc) = await _service.getPlaceMembersPage(
-        placeId,
-        startAfter: startAfter,
-      );
-      _loadedPlaceMembersAfter = [..._loadedPlaceMembersAfter, ...list];
-      _lastLoadedAfterDoc = lastDoc;
-      _hasMoreMembers = list.length >= MemberService.pageSize;
-      if (list.isEmpty) _hasMoreMembers = false;
-      _refreshEnrollmentsSubscription();
+      if (_isCourseTabLoad) {
+        await _loadCourseTabPage();
+      } else {
+        await _loadAllTabPage();
+      }
     } catch (e) {
       debugPrint('[MemberProvider] loadMoreMembers error: $e');
     } finally {
@@ -1051,29 +1054,18 @@ class MemberProvider with ChangeNotifier {
   }
 
   void clear() {
-    _placeMembersSegmentSub?.cancel();
-    _pendingSub?.cancel();
-    _enrollmentsSub?.cancel();
-    _courseOnlyMembersSub?.cancel();
-    _visibleRangeDebounce?.cancel();
     _placeId = null;
     _isSubManagerForPlace = false;
-    _courseOnlyUserIds = [];
-    _courseOnlySegmentIndex = 0;
-    _courseOnlyCachedBefore = [];
-    _courseOnlyStreamed = [];
-    _courseOnlyLoadedAfter = [];
-    _courseOnlyMembersSub = null;
-    _streamedPlaceMembers = [];
-    _streamedSegmentLastDoc = null;
-    _cachedPlaceMembersBefore = [];
-    _loadedPlaceMembersAfter = [];
-    _lastLoadedAfterDoc = null;
-    _currentSegmentIndex = 0;
-    _lastEnrollmentUserIds = {};
-    _segmentBoundaryDocs.clear();
+    _placeMembers.clear();
+    _lastMemberPageDoc = null;
+    _lastEnrollmentPageDoc = null;
+    _allPlaceEnrollments = [];
+    _onDemandPlaceMembers.clear();
+    _onDemandEnrollments.clear();
+    _onDemandUserIdsInFlight.clear();
+    _pendingMembers = [];
+    _enrollments.clear();
     _hasMoreMembers = true;
-    _enrollments = [];
     _isLoading = false;
     _error = null;
     _deletingMemberIds.clear();
@@ -1085,15 +1077,5 @@ class MemberProvider with ChangeNotifier {
     _selectedCourseIds.clear();
     _isCourseSelectorExpanded = true;
     notifyListeners();
-  }
-
-  @override
-  void dispose() {
-    _placeMembersSegmentSub?.cancel();
-    _pendingSub?.cancel();
-    _enrollmentsSub?.cancel();
-    _courseOnlyMembersSub?.cancel();
-    _visibleRangeDebounce?.cancel();
-    super.dispose();
   }
 }

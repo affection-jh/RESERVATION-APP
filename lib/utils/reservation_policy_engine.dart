@@ -64,7 +64,7 @@ class ReservationPolicyEngine {
     required String startTime, // "HH:mm"
     required int capacity,
     required int reservedCount,
-    required bool enrollmentCanReserve, // (유효기간 && 남은 횟수)
+    required bool enrollmentCanReserve, // 세션 날짜 기준 (유효기간 && 남은 횟수)
   }) {
     // 1) 과거 날짜 (가장 우선 체크)
     // ✅ 서울 시간대 기준으로 날짜 비교 (UTC 해석 방지)
@@ -92,7 +92,7 @@ class ReservationPolicyEngine {
       startTime,
     );
     final closeAt = sessionStart.subtract(
-      Duration(minutes: policy.closeBeforeMinutes),
+      Duration(minutes: policy.reserveCloseBeforeMinutes),
     );
     if (!now.isBefore(closeAt)) {
       return const ReservationEligibility(

@@ -26,19 +26,29 @@ export async function assertAdminUid(uid: string): Promise<void> {
     }
 }
 
-/** uid가 해당 placeId 플레이스의 매니저/부매니저인지 확인 */
+/** uid가 해당 placeId 플레이스의 매니저/부매니저 또는 places.adminIds 소유자인지 확인 */
 export async function isAdminForPlaceUid(
     uid: string,
     placeId: string,
 ): Promise<boolean> {
-    const doc = await admin
-        .firestore()
+    const db = admin.firestore();
+    const memberDoc = await db
         .collection('places')
         .doc(placeId)
         .collection('members')
         .doc(uid)
         .get();
-    return doc.exists && canManagePlace(doc.data());
+    if (memberDoc.exists && canManagePlace(memberDoc.data())) {
+        return true;
+    }
+
+    const placeDoc = await db.collection('places').doc(placeId).get();
+    const adminIds = placeDoc.data()?.adminIds;
+    if (Array.isArray(adminIds) && adminIds.some((id) => String(id) === uid)) {
+        return true;
+    }
+
+    return false;
 }
 
 export async function assertAdminForPlaceUid(

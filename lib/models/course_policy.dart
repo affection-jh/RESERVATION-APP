@@ -1,7 +1,7 @@
 // 코스별 예약/운영 정책 모델 (Course 문서에 embed)
 //
 // - 예약 오픈 정책(윈도우형/주간 오픈형)
-// - 마감 정책(시작 N분 전 마감)
+// - 마감 정책(예약/취소 각각 시작 N분 전 마감)
 // - 예약 존재 시 관리자 수정/삭제 제한 및 예외 옵션
 //
 // 정책 변경은 기존 예약 재검증하지 않음.
@@ -104,18 +104,25 @@ class BookingOpenStrategy {
 /// 코스 예약 정책
 /// (관리자 강제 이동은 항상 허용으로 간주, 별도 필드 없음)
 class CoursePolicy {
-  final int closeBeforeMinutes;
+  /// 세션 시작 N분 전까지만 예약 가능
+  final int reserveCloseBeforeMinutes;
+
+  /// 세션 시작 N분 전까지만 취소 가능
+  final int cancelCloseBeforeMinutes;
+
   final BookingOpenStrategy openStrategy;
   final DateTime updatedAt;
 
   const CoursePolicy({
-    required this.closeBeforeMinutes,
+    required this.reserveCloseBeforeMinutes,
+    required this.cancelCloseBeforeMinutes,
     required this.openStrategy,
     required this.updatedAt,
   });
 
   static CoursePolicy get defaultValue => CoursePolicy(
-    closeBeforeMinutes: 60,
+    reserveCloseBeforeMinutes: 60,
+    cancelCloseBeforeMinutes: 60,
     openStrategy: const BookingOpenStrategy.weeklyRelease(
       WeeklyReleaseOpenStrategy(
         releaseDayOfWeek: 1,
@@ -127,15 +134,29 @@ class CoursePolicy {
   );
 
   Map<String, dynamic> toJson() => {
-    'closeBeforeMinutes': closeBeforeMinutes,
+    'reserveCloseBeforeMinutes': reserveCloseBeforeMinutes,
+    'cancelCloseBeforeMinutes': cancelCloseBeforeMinutes,
+    // 구버전 호환
+    'closeBeforeMinutes': reserveCloseBeforeMinutes,
     'openStrategy': openStrategy.toJson(),
     'updatedAt': updatedAt.toUtc().toIso8601String(),
   };
 
+  static int _readMinutes(Map<String, dynamic> json, String key) {
+    final value = json[key];
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    final legacy = json['closeBeforeMinutes'];
+    if (legacy is int) return legacy;
+    if (legacy is num) return legacy.toInt();
+    return 60;
+  }
+
   factory CoursePolicy.fromJson(Map<String, dynamic>? json) {
     if (json == null || json.isEmpty) return defaultValue;
     return CoursePolicy(
-      closeBeforeMinutes: (json['closeBeforeMinutes'] as int?) ?? 60,
+      reserveCloseBeforeMinutes: _readMinutes(json, 'reserveCloseBeforeMinutes'),
+      cancelCloseBeforeMinutes: _readMinutes(json, 'cancelCloseBeforeMinutes'),
       openStrategy: BookingOpenStrategy.fromJson(
         (json['openStrategy'] as Map<String, dynamic>?) ?? const {},
       ),

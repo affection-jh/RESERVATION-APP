@@ -3,7 +3,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import '../models/course_enrollment.dart';
-import '../models/member_view.dart';
 import '../models/pending_member.dart';
 import '../models/place_member.dart';
 import '../models/user.dart';
@@ -87,54 +86,6 @@ class MemberService {
   static const int _defaultPageSize = 100;
   static int get pageSize => _defaultPageSize;
 
-  /// 세그먼트(구간) 단위 멤버 실시간 구독. 슬라이딩 윈도우용.
-  /// [startAfter] null이면 첫 세그먼트, 있으면 해당 doc 이후부터.
-  /// (members, lastDoc) — lastDoc은 다음 세그먼트 startAfter용.
-  /// 30으로 설정 시 whereIn(30) 한 번에 enrollment 구독 가능.
-  static const int segmentSize = 30;
-
-  Stream<(List<PlaceMember>, DocumentSnapshot?)> watchPlaceMembersSegment(
-    String placeId, {
-    DocumentSnapshot? startAfter,
-    int limit = segmentSize,
-  }) {
-    if (placeId.isEmpty) return Stream.value((<PlaceMember>[], null));
-    var query = _firestore
-        .collection('places')
-        .doc(placeId)
-        .collection('members')
-        .orderBy(FieldPath.documentId)
-        .limit(limit);
-    if (startAfter != null) {
-      query = query.startAfterDocument(startAfter);
-    }
-    return query.snapshots().map((snapshot) {
-      final list = <PlaceMember>[];
-      for (final doc in snapshot.docs) {
-        if (doc.data().isEmpty) continue;
-        final data = Map<String, dynamic>.from(doc.data());
-        data['userId'] = doc.id;
-        try {
-          list.add(PlaceMember.fromJson(data));
-        } catch (e) {
-          debugPrint(
-            '[MemberService] watchPlaceMembersSegment 파싱 실패 ${doc.id}: $e',
-          );
-        }
-      }
-      final lastDoc =
-          snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
-      return (list, lastDoc);
-    });
-  }
-
-  /// 특정 플레이스의 멤버 구독 (places/{placeId}/members) — 하위 호환
-  Stream<List<PlaceMember>> watchPlaceMembers(
-    String placeId, {
-    int limit = _defaultPageSize,
-  }) =>
-      watchPlaceMembersSegment(placeId, limit: limit).map((p) => p.$1);
-
   /// 멤버 추가 페이지 로드 (100개 단위). startAfter가 null이면 첫 페이지.
   /// Returns (members, lastDoc for next page). lastDoc is null if no more.
   Future<(List<PlaceMember>, DocumentSnapshot?)> getPlaceMembersPage(
@@ -164,45 +115,11 @@ class MemberService {
         debugPrint('[MemberService] getPlaceMembersPage 파싱 실패 ${doc.id}: $e');
       }
     }
-    final lastDoc =
-        snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
+    final lastDoc = snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
     return (list, lastDoc);
   }
 
-  /// 특정 userId 목록(최대 30개)에 해당하는 place 멤버 스트림. 부매니저 30명 롤링 윈도우용.
-  Stream<List<PlaceMember>> watchPlaceMembersByUserIds(
-    String placeId,
-    List<String> userIds,
-  ) {
-    if (placeId.isEmpty || userIds.isEmpty) {
-      return Stream.value([]);
-    }
-    final chunk = userIds.take(30).toList();
-    return _firestore
-        .collection('places')
-        .doc(placeId)
-        .collection('members')
-        .where(FieldPath.documentId, whereIn: chunk)
-        .snapshots()
-        .map((snapshot) {
-      final list = <PlaceMember>[];
-      for (final doc in snapshot.docs) {
-        if (doc.data().isEmpty) continue;
-        try {
-          final data = Map<String, dynamic>.from(doc.data());
-          data['userId'] = doc.id;
-          list.add(PlaceMember.fromJson(data));
-        } catch (e) {
-          debugPrint(
-            '[MemberService] watchPlaceMembersByUserIds 파싱 실패 ${doc.id}: $e',
-          );
-        }
-      }
-      return list;
-    });
-  }
-
-  /// 여러 userId에 해당하는 PlaceMember 목록 조회 (부매니저 코스별 로드용). Firestore 'in' 최대 30개씩 청크.
+  /// 여러 userId에 해당하는 PlaceMember 목록 조회. Firestore 'in' 최대 30개씩 청크.
   Future<List<PlaceMember>> getPlaceMembersByUserIds(
     String placeId,
     List<String> userIds,
@@ -213,12 +130,13 @@ class MemberService {
     const chunkSize = 30;
     for (var i = 0; i < distinct.length; i += chunkSize) {
       final chunk = distinct.skip(i).take(chunkSize).toList();
-      final snapshot = await _firestore
-          .collection('places')
-          .doc(placeId)
-          .collection('members')
-          .where(FieldPath.documentId, whereIn: chunk)
-          .get();
+      final snapshot =
+          await _firestore
+              .collection('places')
+              .doc(placeId)
+              .collection('members')
+              .where(FieldPath.documentId, whereIn: chunk)
+              .get();
       for (final doc in snapshot.docs) {
         if (doc.data().isEmpty) continue;
         try {
@@ -226,7 +144,9 @@ class MemberService {
           data['userId'] = doc.id;
           list.add(PlaceMember.fromJson(data));
         } catch (e) {
-          debugPrint('[MemberService] getPlaceMembersByUserIds 파싱 실패 ${doc.id}: $e');
+          debugPrint(
+            '[MemberService] getPlaceMembersByUserIds 파싱 실패 ${doc.id}: $e',
+          );
         }
       }
     }
@@ -292,64 +212,15 @@ class MemberService {
     return members.map((m) => m.placeId).whereType<String>().toList();
   }
 
-  // ==================== MemberView (members + pendingMembers) ====================
-
-  /// placeId 기준 members + pendingMembers를 합쳐 MemberView 스트림 (UI용)
-  Stream<List<MemberView>> watchMemberViews(String placeId, {int membersLimit = _defaultPageSize}) {
-    if (placeId.isEmpty) return Stream.value([]);
-    List<PlaceMember> lastMembers = [];
-    List<PendingMember> lastPending = [];
-    final controller = StreamController<List<MemberView>>.broadcast();
-
-    void emit() {
-      final views = <MemberView>[];
-      for (final m in lastMembers) {
-        views.add(MemberView.fromPlaceMember(m));
-      }
-      for (final p in lastPending) {
-        views.add(MemberView.fromPendingMember(p));
-      }
-      if (!controller.isClosed) controller.add(views);
-    }
-
-    final sub1 = watchPlaceMembers(placeId, limit: membersLimit).listen(
-      (list) {
-        lastMembers = list;
-        emit();
-      },
-      onError: (e) {
-        debugPrint('[MemberService] watchPlaceMembers error: $e');
-      },
-    );
-    final sub2 = watchPendingMembersByPlace(placeId, limit: membersLimit).listen(
-      (list) {
-        lastPending = list;
-        emit();
-      },
-      onError: (e) {
-        debugPrint('[MemberService] watchPendingMembers error: $e');
-      },
-    );
-
-    controller.onCancel = () {
-      sub1.cancel();
-      sub2.cancel();
-      if (!controller.isClosed) controller.close();
-    };
-    return controller.stream;
-  }
-
-  /// placeId 기준 enrollments 스트림
-  Stream<List<CourseEnrollment>> watchEnrollmentsByPlace(String placeId) {
-    return _enrollmentService.watchEnrollmentsByPlace(placeId);
-  }
-
-  /// 슬라이딩 윈도우: 현재 로드된 멤버 userId 목록에 한해 enrollments 구독
-  Stream<List<CourseEnrollment>> watchEnrollmentsForUserIds(
+  Future<List<CourseEnrollment>> getEnrollmentsForUserIds(
     String placeId,
     List<String> userIds,
   ) {
-    return _enrollmentService.watchEnrollmentsForUserIds(placeId, userIds);
+    return _enrollmentService.getEnrollmentsForUserIds(placeId, userIds);
+  }
+
+  Future<CourseEnrollment?> getEnrollmentById(String enrollmentId) {
+    return _enrollmentService.getEnrollmentById(enrollmentId);
   }
 
   /// 전화번호 정규화 (숫자만 추출, 82로 시작하면 0으로 변환)
@@ -400,7 +271,9 @@ class MemberService {
       final data = result.data as Map<String, dynamic>?;
       return data != null && data['demoted'] == true;
     } catch (e) {
-      debugPrint('❌ [MemberService] demoteSubManagerToMemberIfNoCourses 실패: $e');
+      debugPrint(
+        '❌ [MemberService] demoteSubManagerToMemberIfNoCourses 실패: $e',
+      );
       return false;
     }
   }
@@ -420,12 +293,12 @@ class MemberService {
     final result = await FirebaseFunctions.instance
         .httpsCallable('inviteSubManagerForCourse')
         .call({
-      'placeId': placeId,
-      'courseId': courseId,
-      'phoneNumber': normalized,
-      if (adminDisplayName != null && adminDisplayName.trim().isNotEmpty)
-        'adminDisplayName': adminDisplayName.trim(),
-    });
+          'placeId': placeId,
+          'courseId': courseId,
+          'phoneNumber': normalized,
+          if (adminDisplayName != null && adminDisplayName.trim().isNotEmpty)
+            'adminDisplayName': adminDisplayName.trim(),
+        });
     final data = result.data as Map<String, dynamic>?;
     return data != null && data['success'] == true;
   }
@@ -441,11 +314,11 @@ class MemberService {
     final result = await FirebaseFunctions.instance
         .httpsCallable('inviteFullManager')
         .call({
-      'placeId': placeId,
-      'phoneNumber': normalized,
-      if (adminDisplayName != null && adminDisplayName.trim().isNotEmpty)
-        'adminDisplayName': adminDisplayName.trim(),
-    });
+          'placeId': placeId,
+          'phoneNumber': normalized,
+          if (adminDisplayName != null && adminDisplayName.trim().isNotEmpty)
+            'adminDisplayName': adminDisplayName.trim(),
+        });
     final data = result.data as Map<String, dynamic>?;
     return data != null && data['success'] == true;
   }
@@ -461,10 +334,10 @@ class MemberService {
       final result = await FirebaseFunctions.instance
           .httpsCallable('removeSubManagerFromCourse')
           .call({
-        'placeId': placeId,
-        'courseId': courseId,
-        'targetUserId': targetUserId,
-      });
+            'placeId': placeId,
+            'courseId': courseId,
+            'targetUserId': targetUserId,
+          });
       final data = result.data as Map<String, dynamic>?;
       return data != null && data['success'] == true && data['removed'] == true;
     } catch (e) {
@@ -510,7 +383,8 @@ class MemberService {
       final rawList = courseEnrollments ?? <Map<String, dynamic>>[];
       final courseIds = <String>[
         for (final e in rawList)
-          if (e['courseId'] != null && (e['courseId'] as String).trim().isNotEmpty)
+          if (e['courseId'] != null &&
+              (e['courseId'] as String).trim().isNotEmpty)
             (e['courseId'] as String).trim(),
       ];
 
@@ -533,7 +407,9 @@ class MemberService {
       final courseEnrollmentMap = <String, Map<String, dynamic>>{};
       for (final enrollment in rawList) {
         final courseId = enrollment['courseId'];
-        if (courseId != null && courseId is String && courseId.trim().isNotEmpty) {
+        if (courseId != null &&
+            courseId is String &&
+            courseId.trim().isNotEmpty) {
           courseEnrollmentMap[courseId.trim()] = enrollment;
         }
       }
@@ -555,13 +431,19 @@ class MemberService {
       for (final courseId in courseIds) {
         final config = courseEnrollmentMap[courseId];
         final course = courseMap[courseId];
-        final defaultTotal = course != null
-            ? ((course as dynamic).defaultTotalReservations as int?) ?? 10
-            : 10;
+        final defaultTotal =
+            course != null
+                ? ((course as dynamic).defaultTotalReservations as int?) ?? 10
+                : 10;
         final total = config?['totalReservations'];
         enrollmentPayload.add({
           'courseId': courseId,
-          'totalReservations': (total is int) ? total : (total is num) ? total.toInt() : defaultTotal,
+          'totalReservations':
+              (total is int)
+                  ? total
+                  : (total is num)
+                  ? total.toInt()
+                  : defaultTotal,
           'validFrom': config?['validFrom']?.toString(),
           'validUntil': config?['validUntil']?.toString(),
         });
@@ -583,9 +465,7 @@ class MemberService {
       // sendInvitation Cloud Function은 미구현이므로 호출하지 않음 (기존 사용자는 로그인 시 자동 매칭)
       final existingUser = data['existingUser'] as bool? ?? false;
       if (existingUser) {
-        debugPrint(
-          'ℹ️ [MemberService] 기존 사용자 등록됨 (로그인 시 자동 매칭)',
-        );
+        debugPrint('ℹ️ [MemberService] 기존 사용자 등록됨 (로그인 시 자동 매칭)');
       }
 
       debugPrint('✅ [MemberService] 멤버 등록 완료');
@@ -787,10 +667,10 @@ class MemberService {
 
       // 코스 등록 업데이트
       final now = TimezoneUtils.getSeoulDateTime();
-      final currentEnrollments =
-          await _enrollmentService
-              .watchUserEnrollments(updatedUser.userId, placeId: placeId)
-              .first;
+      final currentEnrollments = await _enrollmentService.getUserEnrollments(
+        updatedUser.userId,
+        placeId: placeId,
+      );
       final currentEnrolledCourseIds =
           currentEnrollments
               .where((e) => e.isValid)
@@ -880,59 +760,60 @@ class MemberService {
 
   // ==================== PendingMembers ====================
 
-  /// 플레이스별 pendingMembers 조회 (places/{placeId}/pendingMembers)
-  Stream<List<PendingMember>> watchPendingMembersByPlace(
+  /// 플레이스별 pendingMembers 일회 조회
+  Future<List<PendingMember>> getPendingMembersByPlace(
     String placeId, {
     int limit = _defaultPageSize,
+  }) async {
+    if (placeId.isEmpty) return [];
+    final snapshot =
+        await _firestore
+            .collection('places')
+            .doc(placeId)
+            .collection('pendingMembers')
+            .orderBy(FieldPath.documentId)
+            .limit(limit)
+            .get();
+    return snapshot.docs
+        .map((doc) {
+          try {
+            final data = doc.data();
+            if (data['phoneNumber'] == null) return null;
+            return PendingMember.fromJson(
+              data,
+              docId: doc.id,
+              placeId: placeId,
+            );
+          } catch (e) {
+            debugPrint(
+              '[MemberService] getPendingMembersByPlace 파싱 에러 ${doc.id}: $e',
+            );
+            return null;
+          }
+        })
+        .whereType<PendingMember>()
+        .toList();
+  }
+
+  Future<(List<CourseEnrollment>, DocumentSnapshot?)> getEnrollmentsPage(
+    String placeId, {
+    String? courseId,
+    DocumentSnapshot? startAfter,
+    int limit = _defaultPageSize,
   }) {
-    return _firestore
-        .collection('places')
-        .doc(placeId)
-        .collection('pendingMembers')
-        .orderBy(FieldPath.documentId)
-        .limit(limit)
-        .snapshots()
-        .map((snapshot) {
-          return snapshot.docs
-              .map((doc) {
-                try {
-                  final data = doc.data();
-                  if (data['phoneNumber'] == null) {
-                    debugPrint(
-                      '[MemberService] watchPendingMembersByPlace: phoneNumber 누락 - docId: ${doc.id}',
-                    );
-                    return null;
-                  }
-                  return PendingMember.fromJson(
-                    data,
-                    docId: doc.id,
-                    placeId: placeId,
-                  );
-                } catch (e) {
-                  debugPrint(
-                    '[MemberService] watchPendingMembersByPlace: 파싱 에러 - docId: ${doc.id}, error: $e',
-                  );
-                  return null;
-                }
-              })
-              .whereType<PendingMember>()
-              .toList();
-        });
+    return _enrollmentService.getEnrollmentsPage(
+      placeId,
+      courseId: courseId,
+      startAfter: startAfter,
+      limit: limit,
+    );
   }
 
-  /// 플레이스별 멤버 userId 목록 (enrollment 단일 소스)
-  Stream<List<String>> watchPlaceMemberUserIds(String placeId) {
-    return _enrollmentService.watchPlaceMemberUserIds(placeId);
+  Future<List<CourseEnrollment>> getAllEnrollmentsForPlace(String placeId) {
+    return _enrollmentService.getAllEnrollmentsForPlace(placeId);
   }
 
-  /// 플레이스별 관리자 표시 이름(adminDisplayName) 맵
-  Stream<Map<String, String>> watchPlaceMembershipDisplayNamesByPlace(
-    String placeId,
-  ) {
-    return _enrollmentService.watchEnrollmentAdminDisplayNamesByPlace(placeId);
-  }
-
-  /// pendingMembers의 courseEnrollments에서 해당 코스의 totalReservations, remainingReservations, validFrom, validUntil 업데이트
+  // ==================== PendingMembers ====================
   Future<bool> updatePendingCourseEnrollmentConfig({
     required String placeId,
     required String phoneNumber,
@@ -947,7 +828,9 @@ class MemberService {
       final pendingRef = _pendingRef(placeId, normalizedPhone);
       final snap = await pendingRef.get();
       if (!snap.exists) {
-        debugPrint('❌ [MemberService] updatePendingCourseEnrollmentConfig: pending 문서 없음');
+        debugPrint(
+          '❌ [MemberService] updatePendingCourseEnrollmentConfig: pending 문서 없음',
+        );
         return false;
       }
       final data = snap.data() as Map<String, dynamic>?;
@@ -955,7 +838,9 @@ class MemberService {
 
       final raw = data['courseEnrollments'];
       if (raw is! List || raw.isEmpty) {
-        debugPrint('❌ [MemberService] updatePendingCourseEnrollmentConfig: courseEnrollments 없음');
+        debugPrint(
+          '❌ [MemberService] updatePendingCourseEnrollmentConfig: courseEnrollments 없음',
+        );
         return false;
       }
 
@@ -970,12 +855,15 @@ class MemberService {
         }
       }
       if (foundIndex < 0) {
-        debugPrint('❌ [MemberService] updatePendingCourseEnrollmentConfig: 해당 코스 없음');
+        debugPrint(
+          '❌ [MemberService] updatePendingCourseEnrollmentConfig: 해당 코스 없음',
+        );
         return false;
       }
 
       final item = courseEnrollments[foundIndex];
-      final newTotal = totalReservations ?? (item['totalReservations'] as int? ?? 0);
+      final newTotal =
+          totalReservations ?? (item['totalReservations'] as int? ?? 0);
       final newRemaining = remainingReservations ?? newTotal;
       final now = Timestamp.now();
 
@@ -989,10 +877,14 @@ class MemberService {
       };
 
       await pendingRef.update({'courseEnrollments': courseEnrollments});
-      debugPrint('✅ [MemberService] updatePendingCourseEnrollmentConfig 완료: total=$newTotal, remaining=$newRemaining');
+      debugPrint(
+        '✅ [MemberService] updatePendingCourseEnrollmentConfig 완료: total=$newTotal, remaining=$newRemaining',
+      );
       return true;
     } catch (e) {
-      debugPrint('❌ [MemberService] updatePendingCourseEnrollmentConfig 실패: $e');
+      debugPrint(
+        '❌ [MemberService] updatePendingCourseEnrollmentConfig 실패: $e',
+      );
       return false;
     }
   }
@@ -1016,7 +908,9 @@ class MemberService {
         final data = doc.data();
         final rawManaged = data['managedCourseIds'];
         final managedList =
-            rawManaged is List ? rawManaged.map((e) => e.toString()).toList() : <String>[];
+            rawManaged is List
+                ? rawManaged.map((e) => e.toString()).toList()
+                : <String>[];
         final hasInManaged = managedList.contains(courseId);
         final nextManaged = managedList.where((e) => e != courseId).toList();
 
@@ -1029,14 +923,19 @@ class MemberService {
         final rawEnrollments = data['courseEnrollments'];
         List<dynamic> nextEnrollments;
         if (rawEnrollments is List) {
-          nextEnrollments = rawEnrollments
-              .where((e) =>
-                  (e is Map ? e['courseId']?.toString() : null) != courseId)
-              .toList();
+          nextEnrollments =
+              rawEnrollments
+                  .where(
+                    (e) =>
+                        (e is Map ? e['courseId']?.toString() : null) !=
+                        courseId,
+                  )
+                  .toList();
         } else {
           nextEnrollments = [];
         }
-        final hasInEnrollments = rawEnrollments is List &&
+        final hasInEnrollments =
+            rawEnrollments is List &&
             rawEnrollments.length != nextEnrollments.length;
 
         if (!hasInManaged && !hasInAllowed && !hasInEnrollments) continue;
@@ -1045,9 +944,10 @@ class MemberService {
         if (hasInManaged) updates['managedCourseIds'] = nextManaged;
         if (hasInAllowed) updates['allowedCourseIds'] = nextAllowed;
         if (hasInEnrollments) {
-          updates['courseEnrollments'] = nextEnrollments
-              .map((e) => e is Map ? Map<String, dynamic>.from(e) : e)
-              .toList();
+          updates['courseEnrollments'] =
+              nextEnrollments
+                  .map((e) => e is Map ? Map<String, dynamic>.from(e) : e)
+                  .toList();
         }
         batch.update(doc.reference, updates);
         updatedCount++;
@@ -1078,7 +978,9 @@ class MemberService {
 
       final rawManaged = data['managedCourseIds'];
       final managedList =
-          rawManaged is List ? rawManaged.map((e) => e.toString()).toList() : <String>[];
+          rawManaged is List
+              ? rawManaged.map((e) => e.toString()).toList()
+              : <String>[];
       final hasInManaged = managedList.contains(courseId);
       final nextManaged = managedList.where((e) => e != courseId).toList();
 
@@ -1094,10 +996,13 @@ class MemberService {
       if (rawEnrollments is List) {
         final list = rawEnrollments;
         originalCount = list.length;
-        nextEnrollments = list
-            .where((e) =>
-                (e is Map ? e['courseId']?.toString() : null) != courseId)
-            .toList();
+        nextEnrollments =
+            list
+                .where(
+                  (e) =>
+                      (e is Map ? e['courseId']?.toString() : null) != courseId,
+                )
+                .toList();
       } else {
         nextEnrollments = [];
       }
@@ -1110,7 +1015,9 @@ class MemberService {
       if (hasInAllowed) updates['allowedCourseIds'] = nextAllowed;
       if (hasInEnrollments) {
         updates['courseEnrollments'] =
-            nextEnrollments.map((e) => e is Map ? Map<String, dynamic>.from(e) : e).toList();
+            nextEnrollments
+                .map((e) => e is Map ? Map<String, dynamic>.from(e) : e)
+                .toList();
       }
       await pendingRef.update(updates);
       return true;
@@ -1165,8 +1072,16 @@ class MemberService {
             existingRaw is List
                 ? existingRaw
                     .whereType<dynamic>()
-                    .map((e) => e is Map ? Map<String, dynamic>.from(e) : <String, dynamic>{})
-                    .where((m) => (m['courseId'] as String?)?.trim().isNotEmpty == true)
+                    .map(
+                      (e) =>
+                          e is Map
+                              ? Map<String, dynamic>.from(e)
+                              : <String, dynamic>{},
+                    )
+                    .where(
+                      (m) =>
+                          (m['courseId'] as String?)?.trim().isNotEmpty == true,
+                    )
                     .toList()
                 : <Map<String, dynamic>>[];
 
@@ -1186,7 +1101,9 @@ class MemberService {
         return true;
       } else {
         // 일반 멤버: Cloud Function으로 enrollment 생성 (클라이언트 permission-denied 회피)
-        debugPrint('📝 [MemberService] 일반 멤버 코스 등록: addEnrollmentForExistingMember 호출');
+        debugPrint(
+          '📝 [MemberService] 일반 멤버 코스 등록: addEnrollmentForExistingMember 호출',
+        );
         final payload = <Map<String, dynamic>>[];
         for (final ce in courseEnrollments) {
           final courseId = ce['courseId'] as String?;
@@ -1200,7 +1117,8 @@ class MemberService {
           } catch (_) {
             course = null;
           }
-          final defaultTotal = (course as dynamic)?.defaultTotalReservations ?? 10;
+          final defaultTotal =
+              (course as dynamic)?.defaultTotalReservations ?? 10;
           payload.add({
             'courseId': courseId,
             'totalReservations': ce['totalReservations'] ?? defaultTotal,
@@ -1215,15 +1133,17 @@ class MemberService {
         final result = await FirebaseFunctions.instance
             .httpsCallable('addEnrollmentForExistingMember')
             .call({
-          'placeId': placeId,
-          'userId': userId,
-          'courseEnrollments': payload,
-          'adminDisplayName': (adminDisplayName ?? '').trim(),
-        });
+              'placeId': placeId,
+              'userId': userId,
+              'courseEnrollments': payload,
+              'adminDisplayName': (adminDisplayName ?? '').trim(),
+            });
         final data = result.data as Map<String, dynamic>?;
         final success = data != null && data['success'] == true;
         if (success) {
-          debugPrint('✅ [MemberService] addEnrollmentForExistingMember 성공: ${data['added']}개');
+          debugPrint(
+            '✅ [MemberService] addEnrollmentForExistingMember 성공: ${data['added']}개',
+          );
         }
         return success;
       }

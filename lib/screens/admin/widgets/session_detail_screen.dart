@@ -4,9 +4,11 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:provider/provider.dart';
 import '../../../models/course.dart';
 import '../../../models/member_view.dart';
+import '../../../models/place_member.dart';
 import '../../../models/session_reservation.dart';
 import '../../../models/session_reservation_summary.dart';
 import '../../../models/course_override.dart';
+import '../../../models/course_enrollment.dart';
 import '../../../theme/app_colors.dart';
 import '../../../services/firestore_service.dart';
 import '../../../widgets/common_dialog.dart';
@@ -131,6 +133,14 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
           setState(() {
             _dateReservations = sorted;
           });
+          final userIds =
+              sorted.map((r) => r.userId).where((id) => id.isNotEmpty).toList();
+          if (userIds.isNotEmpty) {
+            Provider.of<MemberProvider>(
+              context,
+              listen: false,
+            ).ensureMembersForUserIds(userIds);
+          }
         });
   }
 
@@ -426,6 +436,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
       final result = await _firestoreService.batchCancelReservations(
         reservationIds: ids,
         placeId: widget.placeId,
+        asAdminAction: true,
       );
       ReservationService.throwIfBatchCancelFailed(result);
       if (mounted) {
@@ -721,11 +732,27 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
   }) {
     final memberProvider = Provider.of<MemberProvider>(context, listen: false);
     final memberView = memberProvider.getMemberView(reservation.userId);
+    final enrollment =
+        (reservation.enrollmentId.isNotEmpty
+            ? memberProvider.getEnrollmentById(reservation.enrollmentId)
+            : null) ??
+        memberProvider.getEnrollmentForUserAndCourse(
+          reservation.userId,
+          widget.course.id,
+        );
+    final isMemberLoading =
+        memberView == null &&
+        memberProvider.isMemberLoadInFlight(reservation.userId);
     final userName =
         (memberView != null && memberView.adminDisplayName.trim().isNotEmpty)
             ? memberView.adminDisplayName.trim()
+            : (enrollment != null &&
+                enrollment.adminDisplayName.trim().isNotEmpty)
+            ? enrollment.adminDisplayName.trim()
+            : isMemberLoading
+            ? '불러오는 중...'
             : '예약자 $index';
-    final phoneNumber = memberView?.phoneNumber ?? '010-0000-0000';
+    final phoneNumber = memberView?.phoneNumber.trim() ?? '';
     final isLoading = _loadingUserIds.contains(reservation.userId);
     final isMoving = _movingReservationIds.contains(reservation.id);
 
@@ -761,7 +788,10 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                             fontSize: 18,
                             fontWeight: FontWeight.w600,
                             color:
-                                (isLoading || isMoving || isCancelling)
+                                (isLoading ||
+                                        isMoving ||
+                                        isCancelling ||
+                                        isMemberLoading)
                                     ? AppColors.textSecondary
                                     : AppColors.textPrimary,
                           ),
@@ -770,48 +800,51 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                     ],
                   ),
 
-                  Row(
-                    children: [
-                      Text(
-                        FormatUtils.formatPhoneNumber(phoneNumber),
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      if (!isLoading && !isCancelling)
-                        GestureDetector(
-                          onTap: () {
-                            // 클립보드에 복사
-                            Clipboard.setData(ClipboardData(text: phoneNumber));
-                            setState(() {
-                              _copiedPhones[reservation.id] = true;
-                            });
-                            // 스낵바 표시
-                            SnackbarUtil.showSuccess(context, '클립보드에 복사되었습니다');
-                            // 2초 후 다시 복사 아이콘으로 변경
-                            Future.delayed(const Duration(seconds: 2), () {
-                              if (mounted) {
-                                setState(() {
-                                  _copiedPhones[reservation.id] = false;
-                                });
-                              }
-                            });
-                          },
-                          child: Icon(
-                            _copiedPhones[reservation.id] == true
-                                ? Icons.check
-                                : Icons.copy_all,
-                            size: 18,
-                            color:
-                                _copiedPhones[reservation.id] == true
-                                    ? AppColors.primaryGreen
-                                    : AppColors.textSecondary,
+                  if (phoneNumber.isNotEmpty)
+                    Row(
+                      children: [
+                        Text(
+                          FormatUtils.formatPhoneNumber(phoneNumber),
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: AppColors.textSecondary,
                           ),
                         ),
-                    ],
-                  ),
+                        const SizedBox(width: 8),
+                        if (!isLoading && !isCancelling)
+                          GestureDetector(
+                            onTap: () {
+                              Clipboard.setData(
+                                ClipboardData(text: phoneNumber),
+                              );
+                              setState(() {
+                                _copiedPhones[reservation.id] = true;
+                              });
+                              SnackbarUtil.showSuccess(
+                                context,
+                                '클립보드에 복사되었습니다',
+                              );
+                              Future.delayed(const Duration(seconds: 2), () {
+                                if (mounted) {
+                                  setState(() {
+                                    _copiedPhones[reservation.id] = false;
+                                  });
+                                }
+                              });
+                            },
+                            child: Icon(
+                              _copiedPhones[reservation.id] == true
+                                  ? Icons.check
+                                  : Icons.copy_all,
+                              size: 18,
+                              color:
+                                  _copiedPhones[reservation.id] == true
+                                      ? AppColors.primaryGreen
+                                      : AppColors.textSecondary,
+                            ),
+                          ),
+                      ],
+                    ),
                 ],
               ),
             ),
@@ -876,28 +909,45 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
   }
 
   /// 멤버 카드 탭 시 해당 멤버의 이 코스 등록(enrollment) 상세 화면으로 이동
-  void _openEnrollmentDetailFor(SessionReservation reservation) {
+  Future<void> _openEnrollmentDetailFor(SessionReservation reservation) async {
     final memberProvider = Provider.of<MemberProvider>(context, listen: false);
-    final membersWithEnrollment = memberProvider.getMembersForCourse(
+    await memberProvider.ensureMembersForUserIds([reservation.userId]);
+    if (!mounted) return;
+
+    CourseEnrollment? enrollment;
+    if (reservation.enrollmentId.isNotEmpty) {
+      enrollment = await memberProvider.ensureEnrollmentById(
+        reservation.enrollmentId,
+      );
+    }
+    enrollment ??= memberProvider.getEnrollmentForUserAndCourse(
+      reservation.userId,
       widget.course.id,
     );
-    MemberView? targetMember;
-    for (final m in membersWithEnrollment) {
-      if (m.userId == reservation.userId && m.enrollment != null) {
-        targetMember = m;
-        break;
-      }
-    }
-    if (targetMember == null || targetMember.enrollment == null) {
+    if (enrollment == null) {
       SnackbarUtil.showInfo(context, '이 코스에 등록되지 않은 멤버입니다.');
       return;
     }
+
+    final memberView = memberProvider.getMemberView(reservation.userId);
+    final targetMember = (memberView ??
+            MemberView(
+              userId: reservation.userId,
+              adminDisplayName:
+                  enrollment.adminDisplayName.trim().isNotEmpty
+                      ? enrollment.adminDisplayName.trim()
+                      : '이름 없음',
+              phoneNumber: '',
+              role: PlaceMemberRole.member,
+            ))
+        .copyWith(enrollment: enrollment);
+
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder:
             (context) => EnrollmentDetailScreen(
-              member: targetMember!,
-              enrollment: targetMember.enrollment!,
+              member: targetMember,
+              enrollment: enrollment!,
               course: widget.course,
             ),
       ),
@@ -926,13 +976,27 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     _refreshReservations();
   }
 
+  List<MemberView> _uniqueMembersByUserId(List<MemberView> members) {
+    final seen = <String>{};
+    final out = <MemberView>[];
+    for (final m in members) {
+      if (m.userId.isEmpty || seen.contains(m.userId)) continue;
+      seen.add(m.userId);
+      out.add(m);
+    }
+    return out;
+  }
+
   Future<void> _addReservationsForUsers(List<MemberView> members) async {
     if (members.isEmpty) return;
 
+    final uniqueMembers = _uniqueMembersByUserId(members);
     final existingUserIds = _dateReservations.map((r) => r.userId).toSet();
     final toAdd =
-        members.where((m) => !existingUserIds.contains(m.userId)).toList();
-    final skipped = members.length - toAdd.length;
+        uniqueMembers
+            .where((m) => !existingUserIds.contains(m.userId))
+            .toList();
+    final skipped = uniqueMembers.length - toAdd.length;
     if (skipped > 0 && mounted) {
       SnackbarUtil.showInfo(context, '이미 이 세션에 예약된 멤버 $skipped명은 제외했습니다.');
     }

@@ -14,7 +14,8 @@ List<MemberView> _filterBySearch(List<MemberView> list, String searchQuery) {
   if (q.isEmpty) return list;
   final lower = q.toLowerCase();
   final digitsOnly = q.replaceAll(RegExp(r'[^\d]'), '');
-  final keywords = lower.split(RegExp(r'\s+')).where((s) => s.isNotEmpty).toList();
+  final keywords =
+      lower.split(RegExp(r'\s+')).where((s) => s.isNotEmpty).toList();
   return list.where((v) {
     final name = v.adminDisplayName.trim().toLowerCase();
     final phone = v.phoneNumber.replaceAll(RegExp(r'[^\d]'), '');
@@ -24,7 +25,8 @@ List<MemberView> _filterBySearch(List<MemberView> list, String searchQuery) {
     if (keywords.isEmpty) return matchFull;
     final matchKeywords = keywords.every((kw) {
       final kwDigits = kw.replaceAll(RegExp(r'[^\d]'), '');
-      return name.contains(kw) || (kwDigits.isNotEmpty && phone.contains(kwDigits));
+      return name.contains(kw) ||
+          (kwDigits.isNotEmpty && phone.contains(kwDigits));
     });
     return matchFull || matchKeywords;
   }).toList();
@@ -113,6 +115,12 @@ class CourseMemberListContent extends StatelessWidget {
   /// 스크롤 하단 근처에서 호출 (무한 스크롤용)
   final VoidCallback? onLoadMore;
 
+  /// 멤버 리스트 스크롤 알림 (코스별 탭 헤더 접기 등)
+  final bool Function(ScrollNotification notification)? onListScroll;
+
+  /// true면 첫 멤버카드 상단 라운드 제거 (코스 선택 패널과 이어질 때)
+  final bool flattenFirstCardTop;
+
   const CourseMemberListContent({
     super.key,
     this.logLabel = 'CourseMemberListContent',
@@ -136,6 +144,8 @@ class CourseMemberListContent extends StatelessWidget {
     this.courseForDirectDetail,
     this.sortFilterInParent = false,
     this.onLoadMore,
+    this.onListScroll,
+    this.flattenFirstCardTop = false,
   });
 
   @override
@@ -143,7 +153,8 @@ class CourseMemberListContent extends StatelessWidget {
     return Consumer2<MemberProvider, PlaceProvider>(
       builder: (context, memberProvider, placeProvider, child) {
         // 단일 코스 선택 시 MemberProvider의 전체 검색(횟수, 대기중, 과목 등) 적용
-        final useProviderFilter = memberProvider.selectedTab == 1 &&
+        final useProviderFilter =
+            memberProvider.selectedTab == 1 &&
             memberProvider.selectedCourseIds.length == 1 &&
             memberProvider.selectedCourseIds.first == courseId;
 
@@ -157,8 +168,7 @@ class CourseMemberListContent extends StatelessWidget {
           final pendingForCourse =
               memberProvider.allMembers
                   .where(
-                    (v) =>
-                        v.isPending && v.relatedCourseIds.contains(courseId),
+                    (v) => v.isPending && v.relatedCourseIds.contains(courseId),
                   )
                   .toList();
           var all = <MemberView>[...enrolled, ...pendingForCourse];
@@ -226,17 +236,16 @@ class CourseMemberListContent extends StatelessWidget {
                 : null;
 
         const loadMoreThreshold = 200.0;
-        const double estimatedItemHeight = 64;
 
         final listView = NotificationListener<ScrollNotification>(
           onNotification: (notification) {
+            onListScroll?.call(notification);
             if (!shrinkWrap && notification is ScrollUpdateNotification) {
               final m = notification.metrics;
-              final firstVisible =
-                  (m.pixels / estimatedItemHeight).floor().clamp(0, 99999);
-              memberProvider.setVisibleRange(firstVisible);
               if (onLoadMore != null &&
-                  m.pixels >= m.maxScrollExtent - loadMoreThreshold) {
+                  m.pixels >= m.maxScrollExtent - loadMoreThreshold &&
+                  memberProvider.hasMoreMembers &&
+                  !memberProvider.isLoadingMore) {
                 onLoadMore!();
               }
             }
@@ -248,36 +257,37 @@ class CourseMemberListContent extends StatelessWidget {
                 const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             shrinkWrap: shrinkWrap,
             physics: shrinkWrap ? const NeverScrollableScrollPhysics() : null,
-            itemCount: filtered.length +
+            itemCount:
+                filtered.length +
                 (memberProvider.isLoadingMore && onLoadMore != null ? 1 : 0),
             itemBuilder: (context, index) {
-            if (index >= filtered.length) {
-              return const Padding(
-                padding: EdgeInsets.all(16),
-                child: Center(
-                  child: SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: AppColors.primaryGreen,
+              if (index >= filtered.length) {
+                return const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Center(
+                    child: SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: AppColors.primaryGreen,
+                      ),
                     ),
                   ),
+                );
+              }
+              final v = filtered[index];
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: MemberCard(
+                  backgroundColor: cardBackgroundColor,
+                  member: v,
+                  onMemberTapped: onMemberTapped ?? () {},
+                  showCourseEnrollmentDetail: showCourseEnrollmentDetail,
+                  courseForDirectDetail: courseForDirectDetail,
                 ),
               );
-            }
-            final v = filtered[index];
-            return Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: MemberCard(
-                backgroundColor: cardBackgroundColor,
-                member: v,
-                onMemberTapped: onMemberTapped ?? () {},
-                showCourseEnrollmentDetail: showCourseEnrollmentDetail,
-                courseForDirectDetail: courseForDirectDetail,
-              ),
-            );
-          },
+            },
           ),
         );
 
@@ -329,13 +339,14 @@ class CourseMemberListContent extends StatelessWidget {
         onSortChanged(value.$1);
         onSortOrderChanged(value.$2);
       },
-      itemBuilder: (context) => [
-        _filterItem((0, false), '남은 횟수 많은 순', sortBy, sortAscending),
-        _filterItem((0, true), '남은 횟수 적은 순', sortBy, sortAscending),
-        _filterItem((1, true), '유효기한 짧은 순', sortBy, sortAscending),
-        _filterItem((1, false), '유효기한 긴 순', sortBy, sortAscending),
-        _filterItem((3, false), '최신 등록순', sortBy, sortAscending),
-      ],
+      itemBuilder:
+          (context) => [
+            _filterItem((0, false), '남은 횟수 많은 순', sortBy, sortAscending),
+            _filterItem((0, true), '남은 횟수 적은 순', sortBy, sortAscending),
+            _filterItem((1, true), '유효기한 짧은 순', sortBy, sortAscending),
+            _filterItem((1, false), '유효기한 긴 순', sortBy, sortAscending),
+            _filterItem((3, false), '최신 등록순', sortBy, sortAscending),
+          ],
     );
   }
 
@@ -345,7 +356,8 @@ class CourseMemberListContent extends StatelessWidget {
     int sortBy,
     bool sortAscending,
   ) {
-    final selected = sortBy == value.$1 &&
+    final selected =
+        sortBy == value.$1 &&
         (value.$1 <= 1 ? sortAscending == value.$2 : true);
     return PopupMenuItem<(int, bool)>(
       value: value,

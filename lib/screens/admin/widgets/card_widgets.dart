@@ -191,6 +191,8 @@ class MemberCard extends StatefulWidget {
   /// false면 탭 시 MemberDetailBottomSheet를 열지 않고 onMemberTapped만 실행 (코스 편집 부매니저 카드 등)
   final bool openDetailSheetOnTap;
 
+  final BorderRadius? borderRadius;
+
   const MemberCard({
     super.key,
     required this.member,
@@ -201,6 +203,7 @@ class MemberCard extends StatefulWidget {
     this.courseForDirectDetail,
     this.roleChipLabel,
     this.openDetailSheetOnTap = true,
+    this.borderRadius,
   });
 
   @override
@@ -304,7 +307,8 @@ class _MemberCardState extends State<MemberCard> {
               ),
               decoration: BoxDecoration(
                 color: widget.backgroundColor ?? AppColors.backgroundWhite,
-                borderRadius: BorderRadius.circular(16),
+                borderRadius:
+                    widget.borderRadius ?? BorderRadius.circular(16),
               ),
               child: Row(
                 children: [

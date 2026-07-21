@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../models/notification.dart';
 import '../utils/firestore_utils.dart';
 
-/// 알림 Firestore (users/{userId}/notifications)
+/// 알림 Firestore (users/{userId}/notifications) — 온디멘드·페이지네이션만
 class NotificationFirestoreService {
   static final NotificationFirestoreService _instance =
       NotificationFirestoreService._internal();
@@ -11,6 +11,9 @@ class NotificationFirestoreService {
   NotificationFirestoreService._internal();
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
+  static const int defaultPageSize = 30;
+  static const int _unreadScanLimit = 200;
 
   CollectionReference<Map<String, dynamic>> _col(String userId) =>
       _firestore.collection('users').doc(userId).collection('notifications');
@@ -31,32 +34,57 @@ class NotificationFirestoreService {
     }).toList();
   }
 
-  static const int _defaultLimit = 100;
-
-  Future<List<AppNotification>> getUserNotifications(
-    String userId, {
-    bool isAdmin = false,
-    int limit = _defaultLimit,
-  }) async {
-    final snapshot = await _col(userId)
-        .where('isAdminNotification', isEqualTo: isAdmin)
-        .orderBy('createdAt', descending: true)
-        .limit(limit)
-        .get();
-    return _docsToList(snapshot.docs, userId);
+  static bool matchesPlace(AppNotification n, String? placeId) {
+    if (placeId == null) return true;
+    return n.placeId == null || n.placeId == placeId;
   }
 
-  Stream<List<AppNotification>> watchUserNotifications(
+  Future<({List<AppNotification> items, Object? nextPageCursor})>
+  getUserNotificationsPage(
     String userId, {
     bool isAdmin = false,
-    int limit = _defaultLimit,
-  }) {
-    return _col(userId)
+    int limit = defaultPageSize,
+    Object? startAfterCursor,
+  }) async {
+    Query<Map<String, dynamic>> query = _col(userId)
         .where('isAdminNotification', isEqualTo: isAdmin)
         .orderBy('createdAt', descending: true)
-        .limit(limit)
-        .snapshots()
-        .map((snapshot) => _docsToList(snapshot.docs, userId));
+        .limit(limit);
+    if (startAfterCursor is DocumentSnapshot<Map<String, dynamic>>) {
+      query = query.startAfterDocument(startAfterCursor);
+    }
+
+    final snapshot = await query.get();
+    final items = _docsToList(snapshot.docs, userId);
+    final nextPageCursor =
+        snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
+    return (items: items, nextPageCursor: nextPageCursor);
+  }
+
+  /// 미읽음 개수 (현재 플레이스 필터 적용). 배지용 — 목록 페이지와 분리.
+  Future<int> getUnreadNotificationCount(
+    String userId, {
+    bool isAdmin = false,
+    String? placeId,
+  }) async {
+    if (placeId == null) {
+      final snapshot = await _col(userId)
+          .where('isAdminNotification', isEqualTo: isAdmin)
+          .where('isRead', isEqualTo: false)
+          .count()
+          .get();
+      return snapshot.count ?? 0;
+    }
+
+    final snapshot = await _col(userId)
+        .where('isAdminNotification', isEqualTo: isAdmin)
+        .where('isRead', isEqualTo: false)
+        .orderBy('createdAt', descending: true)
+        .limit(_unreadScanLimit)
+        .get();
+    return _docsToList(snapshot.docs, userId)
+        .where((n) => matchesPlace(n, placeId))
+        .length;
   }
 
   Future<AppNotification?> getNotificationById(

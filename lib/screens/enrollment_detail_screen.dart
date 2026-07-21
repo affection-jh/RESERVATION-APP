@@ -4,11 +4,10 @@ import '../models/course.dart';
 import '../models/course_enrollment.dart';
 import '../models/enrollment_action.dart';
 import '../models/enrollment_timeline_item.dart';
-import '../models/session_reservation.dart';
 import '../providers/enrollment_provider.dart';
 import '../providers/enrollment_timeline_provider.dart';
+import '../utils/enrollment_timeline_display.dart';
 import '../theme/app_colors.dart';
-import '../utils/timezone_utils.dart';
 import '../widgets/cached_image_widget.dart';
 
 /// 등록 상세 정보 화면 (일반 유저용)
@@ -169,25 +168,6 @@ class _EnrollmentDetailContentState extends State<_EnrollmentDetailContent> {
         );
       },
     );
-  }
-
-  String _getActionTypeLabel(EnrollmentActionType type) {
-    switch (type) {
-      case EnrollmentActionType.adjustCount:
-        return '횟수 조정';
-      case EnrollmentActionType.periodAdjust:
-        return '유효기간 조정';
-      case EnrollmentActionType.reenroll:
-        return '재등록';
-      case EnrollmentActionType.cancel:
-        return '수강 취소';
-      case EnrollmentActionType.reservationMove:
-        return '예약 이동';
-      case EnrollmentActionType.reservationCancel:
-        return '예약 취소';
-      case EnrollmentActionType.other:
-        return '기타';
-    }
   }
 
   Widget _buildTimelineSection(BuildContext context) {
@@ -360,19 +340,8 @@ class _EnrollmentDetailContentState extends State<_EnrollmentDetailContent> {
     );
   }
 
-  /// 일반 유저: 예약만 (actionHistory 미구독)
   String _getTimelineFilterCategory(EnrollmentTimelineItem item) {
-    return switch (item) {
-      ReservationTimelineItem() => '예약',
-      ActionTimelineItem(:final action) => switch (action.actionType) {
-        EnrollmentActionType.adjustCount => '횟수조정',
-        EnrollmentActionType.periodAdjust => '기간조정',
-        EnrollmentActionType.reenroll => '재등록',
-        EnrollmentActionType.reservationMove ||
-        EnrollmentActionType.reservationCancel => '예약',
-        EnrollmentActionType.cancel || EnrollmentActionType.other => '기타',
-      },
-    };
+    return EnrollmentTimelineDisplay.filterCategory(item);
   }
 
   /// 펼치기/접기 전용 칩 (필터 칩과 약간 다른 스타일)
@@ -461,16 +430,11 @@ class _EnrollmentDetailContentState extends State<_EnrollmentDetailContent> {
   }
 
   Widget _buildTimelineItem(EnrollmentTimelineItem item, bool isLast) {
-    final Widget content = switch (item) {
-      ReservationTimelineItem(:final reservation) =>
-        _buildReservationTimelineItem(reservation),
-      ActionTimelineItem(:final action) => _buildActionTimelineItem(action),
-    };
     final color = switch (item) {
-      ReservationTimelineItem() => AppColors.primaryGreen,
       ActionTimelineItem(:final action) => _getTimelineItemColor(
         action.actionType,
       ),
+      _ => AppColors.textSecondary,
     };
 
     return Stack(
@@ -478,7 +442,7 @@ class _EnrollmentDetailContentState extends State<_EnrollmentDetailContent> {
       children: [
         Padding(
           padding: EdgeInsets.only(bottom: isLast ? 0 : 12),
-          child: content,
+          child: EnrollmentTimelineDisplay.buildTimelineEntry(item: item),
         ),
         Positioned(
           left: -18,
@@ -498,35 +462,6 @@ class _EnrollmentDetailContentState extends State<_EnrollmentDetailContent> {
     );
   }
 
-  Widget _buildReservationTimelineItem(SessionReservation r) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.backgroundWhite,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            '예약',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '일시: ${TimezoneUtils.formatDateToSeoul(r.reservedDate)} ${r.startTime}',
-            style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
-          ),
-        ],
-      ),
-    );
-  }
-
   Color _getTimelineItemColor(EnrollmentActionType type) {
     switch (type) {
       case EnrollmentActionType.cancel:
@@ -534,48 +469,13 @@ class _EnrollmentDetailContentState extends State<_EnrollmentDetailContent> {
       case EnrollmentActionType.adjustCount:
       case EnrollmentActionType.periodAdjust:
       case EnrollmentActionType.reenroll:
+      case EnrollmentActionType.reservationCreate:
       case EnrollmentActionType.reservationMove:
       case EnrollmentActionType.reservationCancel:
         return const Color.fromARGB(255, 59, 59, 59);
       default:
         return AppColors.textSecondary;
     }
-  }
-
-  Widget _buildActionTimelineItem(EnrollmentAction action) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.backgroundWhite,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            _getActionTypeLabel(action.actionType),
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '일시: ${TimezoneUtils.formatDateToSeoul(action.performedAt)}',
-            style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
-          ),
-          if (action.details != null && action.details!.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(
-              '내용: ${action.details}',
-              style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
-            ),
-          ],
-        ],
-      ),
-    );
   }
 
   Widget _buildInfoChip(String label, String value) {

@@ -34,8 +34,11 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
   /// 무한 스크롤: 하단 이 거리(px) 내 접근 시 추가 로드
   static const double _loadMoreThreshold = 200;
 
-  /// 슬라이딩 윈도우: 첫 번째 보이는 인덱스 추정용 아이템 높이(px)
-  static const double _estimatedItemHeight = 64;
+  /// 코스별 탭: 위로 스크롤 시 코스 칩 영역 접기
+  static const double _courseSelectorScrollThreshold = 12;
+
+  bool _courseSelectorCompactByScroll = false;
+  double _lastCourseListScrollOffset = 0;
 
   /// 코스별 탭 진입 시 복원 한 번만 수행 (플레이스별)
   String? _courseTabRestoredForPlaceId;
@@ -82,10 +85,60 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
     }
   }
 
+  void _resetCourseSelectorScrollState() {
+    _courseSelectorCompactByScroll = false;
+    _lastCourseListScrollOffset = 0;
+  }
+
+  void _expandCourseSelectorPanel() {
+    final memberProvider = Provider.of<MemberProvider>(context, listen: false);
+    if (!_courseSelectorCompactByScroll &&
+        memberProvider.isCourseSelectorExpanded) {
+      return;
+    }
+    setState(_resetCourseSelectorScrollState);
+    memberProvider.setCourseSelectorExpanded(true);
+  }
+
+  bool _onCourseMemberListScroll(ScrollNotification notification) {
+    final isScrollUpdate = notification is ScrollUpdateNotification;
+    final isScrollEnd = notification is ScrollEndNotification;
+    if (!isScrollUpdate && !isScrollEnd) return false;
+
+    final metrics = notification.metrics;
+    if (!metrics.hasPixels) return false;
+
+    final current = metrics.pixels;
+
+    if (current <= 0) {
+      _expandCourseSelectorPanel();
+      _lastCourseListScrollOffset = current;
+      return false;
+    }
+
+    if (!isScrollUpdate) {
+      _lastCourseListScrollOffset = current;
+      return false;
+    }
+
+    final delta = current - _lastCourseListScrollOffset;
+
+    if (delta > _courseSelectorScrollThreshold) {
+      if (!_courseSelectorCompactByScroll) {
+        setState(() => _courseSelectorCompactByScroll = true);
+      }
+    } else if (delta < -_courseSelectorScrollThreshold) {
+      _expandCourseSelectorPanel();
+    }
+
+    _lastCourseListScrollOffset = current;
+    return false;
+  }
+
   @override
   void dispose() {
     _searchController.dispose();
-    // 스트림은 자동으로 취소되므로 명시적 취소 불필요
+    // 스트림 없음 — Provider.clear()만 필요
     super.dispose();
   }
 
@@ -151,7 +204,11 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
           curve: Curves.easeInOut,
           child:
               showCourseTab
-                  ? _buildCourseSelector(memberProvider, coursesForTab)
+                  ? _buildCourseSelector(
+                    memberProvider,
+                    coursesForTab,
+                    compactByScroll: _courseSelectorCompactByScroll,
+                  )
                   : const SizedBox.shrink(),
         ),
         Expanded(
@@ -257,15 +314,36 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
     final isSubManager =
         placeId != null && authProvider.isSubManagerForPlace(placeId);
 
+    final onCourseTab = memberProvider.selectedTab == 1 || isSubManager;
+    final hasCourseSelection = memberProvider.selectedCourseIds.isNotEmpty;
+
+    String allTabLabel() {
+      if (onCourseTab) return '전체';
+      return '전체(${memberProvider.listForAllTab.length})';
+    }
+
+    String courseTabLabel() {
+      if (!hasCourseSelection) return '코스별';
+      // 전체 탭에서는 비활성 코스별 탭에 숫자 미표시
+      if (!onCourseTab) return '코스별';
+      return '코스별(${memberProvider.listForCourseTab.length})';
+    }
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
       child: DefaultTapbar(
-        labels: isSubManager ? ['코스별'] : ['전체', '코스별'],
+        labels:
+            isSubManager
+                ? [courseTabLabel()]
+                : [allTabLabel(), courseTabLabel()],
         selectedIndex: isSubManager ? 0 : memberProvider.selectedTab,
         onTabChanged:
             isSubManager
                 ? (_) {}
                 : (index) {
+                  if (index == 0) {
+                    setState(_resetCourseSelectorScrollState);
+                  }
                   memberProvider.setSelectedTab(index);
                 },
         showIndicator: false,
@@ -280,8 +358,9 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
   // 코스 선택기 (카테고리 섹션)
   Widget _buildCourseSelector(
     MemberProvider memberProvider,
-    List<Course> courses,
-  ) {
+    List<Course> courses, {
+    bool compactByScroll = false,
+  }) {
     final selectedCourses =
         courses
             .where((c) => memberProvider.selectedCourseIds.contains(c.id))
@@ -290,24 +369,26 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
         selectedCourses.isNotEmpty ? selectedCourses.first : null;
     final remainingCount =
         selectedCourses.length > 1 ? selectedCourses.length - 1 : 0;
+    final showCourseChips =
+        !compactByScroll && memberProvider.isCourseSelectorExpanded;
+    final isSimpleHeader = !showCourseChips;
+    final headerCourseLabel =
+        firstSelectedCourse == null
+            ? '코스별'
+            : remainingCount > 0
+            ? '${firstSelectedCourse.name} 외 $remainingCount'
+            : firstSelectedCourse.name;
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       decoration: BoxDecoration(
         color: AppColors.backgroundWhite,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 카테고리 헤더 (코스별 + 선택 코스명 + 필터 아이콘)
+          // 헤더: 펼침 = 코스별+▼ / 간단 = 과목명+▼+필터
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             child: Row(
@@ -315,27 +396,32 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
                 Expanded(
                   child: GestureDetector(
                     onTap: () {
-                      memberProvider.setCourseSelectorExpanded(
-                        !memberProvider.isCourseSelectorExpanded,
-                      );
+                      if (isSimpleHeader) {
+                        if (compactByScroll) {
+                          setState(_resetCourseSelectorScrollState);
+                        }
+                        memberProvider.setCourseSelectorExpanded(true);
+                        return;
+                      }
+                      memberProvider.setCourseSelectorExpanded(false);
                     },
                     behavior: HitTestBehavior.opaque,
                     child: Row(
                       children: [
-                        Text(
-                          '코스별',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500,
-                            color: AppColors.primaryGreen,
+                        Expanded(
+                          child: Text(
+                            isSimpleHeader ? headerCourseLabel : '코스별',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                              color: AppColors.primaryGreen,
+                            ),
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                         const SizedBox(width: 8),
                         AnimatedRotation(
-                          turns:
-                              memberProvider.isCourseSelectorExpanded
-                                  ? 0.0
-                                  : 0.5,
+                          turns: showCourseChips ? 0.0 : 0.5,
                           duration: const Duration(milliseconds: 200),
                           child: Icon(
                             Icons.keyboard_arrow_down,
@@ -343,23 +429,6 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
                             size: 22,
                           ),
                         ),
-                        if (!memberProvider.isCourseSelectorExpanded &&
-                            firstSelectedCourse != null)
-                          Expanded(
-                            child: Padding(
-                              padding: const EdgeInsets.only(left: 12),
-                              child: Text(
-                                remainingCount > 0
-                                    ? '${firstSelectedCourse.name} 외 $remainingCount'
-                                    : firstSelectedCourse.name,
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  color: AppColors.textSecondary,
-                                ),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ),
                       ],
                     ),
                   ),
@@ -380,7 +449,7 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
             duration: const Duration(milliseconds: 300),
             curve: Curves.easeInOut,
             child:
-                memberProvider.isCourseSelectorExpanded
+                showCourseChips
                     ? Container(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                       child: Wrap(
@@ -477,6 +546,7 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
         onSortOrderChanged: (v) => memberProvider.setCourseSortAscending(v),
         courseForDirectDetail: course,
         sortFilterInParent: true,
+        onListScroll: _onCourseMemberListScroll,
       );
     } else {
       final list = memberProvider.listForCourseTab;
@@ -493,12 +563,9 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
       }
       return NotificationListener<ScrollNotification>(
         onNotification: (n) {
+          _onCourseMemberListScroll(n);
           if (n is ScrollUpdateNotification) {
             final m = n.metrics;
-            final firstVisible = (m.pixels / _estimatedItemHeight)
-                .floor()
-                .clamp(0, 99999);
-            memberProvider.setVisibleRange(firstVisible);
             if (m.pixels >= m.maxScrollExtent - _loadMoreThreshold &&
                 memberProvider.hasMoreMembers &&
                 !memberProvider.isLoadingMore) {
@@ -562,10 +629,6 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
             onNotification: (notification) {
               if (notification is ScrollUpdateNotification) {
                 final m = notification.metrics;
-                final firstVisible = (m.pixels / _estimatedItemHeight)
-                    .floor()
-                    .clamp(0, 99999);
-                memberProvider.setVisibleRange(firstVisible);
                 if (m.pixels >= m.maxScrollExtent - _loadMoreThreshold &&
                     memberProvider.hasMoreMembers &&
                     !memberProvider.isLoadingMore) {
@@ -801,7 +864,7 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
           context,
           listen: false,
         );
-        memberProvider.setPlaceId(placeId);
+        memberProvider.setPlaceId(placeId, force: true);
       } catch (e2) {
         debugPrint('❌ [멤버 등록] 결과 표시/반영 중 오류 (무시): $e2');
         // 등록은 성공했으므로 오류 스낵바는 띄우지 않음

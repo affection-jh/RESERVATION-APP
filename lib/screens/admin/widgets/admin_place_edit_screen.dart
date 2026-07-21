@@ -557,20 +557,22 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     for (final v in deduped)
-                      MemberCard(
-                        backgroundColor: AppColors.backgroundLight.withOpacity(
-                          0.5,
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: MemberCard(
+                          backgroundColor: AppColors.backgroundLight
+                              .withOpacity(0.5),
+                          member: v,
+                          roleChipLabel: '매니저',
+                          openDetailSheetOnTap: false,
+                          onMemberTapped:
+                              () => _showFullManagerActionSheet(
+                                context,
+                                placeId: placeId,
+                                place: currentPlace,
+                                member: v,
+                              ),
                         ),
-                        member: v,
-                        roleChipLabel: '매니저',
-                        openDetailSheetOnTap: false,
-                        onMemberTapped:
-                            () => _showFullManagerActionSheet(
-                              context,
-                              placeId: placeId,
-                              place: currentPlace,
-                              member: v,
-                            ),
                       ),
                   ],
                 ),
@@ -615,18 +617,25 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
         if (place == null) return;
 
         final pendingSelected = selected.where((m) => m.isPending).toList();
-        final toAdd = selected.where((m) => !m.isPending).map((m) => m.userId).toList();
+        final toAdd =
+            selected.where((m) => !m.isPending).map((m) => m.userId).toList();
 
         // pending: 문서 role만 'manager'로 수정 → 가입 시 createEnrollmentsFromPendingMembers에서 매니저 반영 (Functions 안 탐)
         for (final m in pendingSelected) {
           if (!m.userId.startsWith('pending_')) continue;
           final pendingId = m.userId.substring(8);
-          await memberService.updatePendingMemberRole(placeId, pendingId, 'manager');
+          await memberService.updatePendingMemberRole(
+            placeId,
+            pendingId,
+            'manager',
+          );
         }
 
         if (toAdd.isNotEmpty) {
           final newAdminIds = [...place.adminIds, ...toAdd];
-          await placeProvider.updatePlace(place.copyWith(adminIds: newAdminIds));
+          await placeProvider.updatePlace(
+            place.copyWith(adminIds: newAdminIds),
+          );
           for (final uid in toAdd) {
             final current = await memberService.getPlaceMember(placeId, uid);
             if (current != null) {
@@ -1413,7 +1422,9 @@ class _FullManagerActionBottomSheetState
   Future<void> _removeFullManager(BuildContext context) async {
     // adminIds에 있는 사람만 '마지막 매니저'로 막음. role만 manager고 adminIds에 없으면 해제 허용
     final isInAdminIds = widget.place.adminIds.contains(widget.member.userId);
-    if (!widget.member.isPending && isInAdminIds && widget.place.adminIds.length <= 1) {
+    if (!widget.member.isPending &&
+        isInAdminIds &&
+        widget.place.adminIds.length <= 1) {
       SnackbarUtil.showInfo(context, '마지막 전체 매니저는 해제할 수 없어요.');
       return;
     }
@@ -1445,9 +1456,10 @@ class _FullManagerActionBottomSheetState
       try {
         final memberService = MemberService();
         if (member.isPending) {
-          final pendingId = member.userId.startsWith('pending_')
-              ? member.userId.substring(8)
-              : null;
+          final pendingId =
+              member.userId.startsWith('pending_')
+                  ? member.userId.substring(8)
+                  : null;
           if (pendingId != null) {
             final ok = await memberService.updatePendingMemberRole(
               placeId,
@@ -1458,8 +1470,10 @@ class _FullManagerActionBottomSheetState
             if (ok) {
               onRemoved();
               SnackbarUtil.showSuccess(ctx, '전체 매니저 초대를 해제했습니다.');
-              Provider.of<MemberProvider>(ctx, listen: false)
-                  .setPlaceId(placeId, force: true);
+              Provider.of<MemberProvider>(
+                ctx,
+                listen: false,
+              ).setPlaceId(placeId, force: true);
             } else {
               SnackbarUtil.showInfo(ctx, '해제에 실패했습니다.');
             }

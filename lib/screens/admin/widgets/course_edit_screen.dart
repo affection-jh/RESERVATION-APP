@@ -22,6 +22,7 @@ import '../../../providers/place_provider.dart';
 import '../../../providers/member_provider.dart';
 import '../../../utils/firestore_utils.dart';
 import 'course_schedule_edit_screen.dart';
+import 'course_policy_edit_screen.dart';
 import 'card_widgets.dart';
 import 'member_selection_side_panel.dart';
 import 'sub_manager_action_bottom_sheet.dart';
@@ -624,7 +625,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                               ),
 
                               const Spacer(),
-                              // 일정 편집 버튼
+                              // 정기 일정 편집
                               OutlinedButton(
                                 onPressed:
                                     (_isSaving || _isDeleting)
@@ -669,7 +670,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                                   ),
                                 ),
                                 child: Text(
-                                  '정기 일정 편집',
+                                  '일정 편집',
                                   style: TextStyle(
                                     fontSize: 14,
                                     color: AppColors.textPrimary,
@@ -678,7 +679,47 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                                 ),
                               ),
                               const SizedBox(width: 8),
-                              // 코스 삭제 버튼
+                              // 예약 정책
+                              OutlinedButton(
+                                onPressed:
+                                    (_isSaving || _isDeleting)
+                                        ? null
+                                        : () async {
+                                          await Navigator.of(context).push(
+                                            MaterialPageRoute(
+                                              builder:
+                                                  (_) => CoursePolicyEditScreen(
+                                                    courseId: widget.course.id,
+                                                    requireSave: false,
+                                                  ),
+                                            ),
+                                          );
+                                          if (mounted) setState(() {});
+                                        },
+                                style: OutlinedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 8,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  side: BorderSide(
+                                    color: AppColors.borderLight,
+                                    width: 1.5,
+                                  ),
+                                ),
+                                child: Text(
+                                  '예약 정책',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: AppColors.textPrimary,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              // 코스 삭제
                               OutlinedButton(
                                 onPressed:
                                     (_isSaving || _isDeleting)

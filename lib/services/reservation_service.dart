@@ -672,12 +672,14 @@ class ReservationService {
   Future<Map<String, dynamic>> batchCancelReservations({
     required List<String> reservationIds,
     required String placeId,
+    bool asAdminAction = false,
   }) async {
     final result = await FirebaseFunctions.instance
         .httpsCallable('batchCancelReservations')
         .call({
       'reservationIds': reservationIds,
       'placeId': placeId,
+      if (asAdminAction) 'asAdminAction': true,
     });
     return result.data as Map<String, dynamic>;
   }

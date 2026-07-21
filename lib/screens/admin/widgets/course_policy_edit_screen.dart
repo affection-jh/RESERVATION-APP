@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../models/course.dart' as reservation_models;
@@ -9,6 +10,10 @@ import '../../../theme/app_colors.dart';
 import '../../../utils/navigator_key.dart';
 import '../../../utils/snackbar_util.dart';
 import '../../../widgets/common_dialog.dart';
+
+enum _CloseBeforePickerKind { none, reserve, cancel }
+
+enum _WeeklyFieldPicker { none, day, time, weeks }
 
 /// 코스 예약 정책 설정 화면
 class CoursePolicyEditScreen extends StatefulWidget {
@@ -30,6 +35,8 @@ class CoursePolicyEditScreen extends StatefulWidget {
 }
 
 class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
+  static const int _maxCloseBeforeHours = 72;
+
   final FirestoreService _firestoreService = FirestoreService();
   bool _isLoading = true;
   bool _isSaving = false;
@@ -39,10 +46,14 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
   CoursePolicy? _original;
   BookingOpenStrategyType _type = BookingOpenStrategyType.weeklyRelease;
 
-  // 공통
-  int _closeBeforeMinutes = 60;
-  final TextEditingController _closeBeforeHoursController =
-      TextEditingController();
+  // 공통 — 예약/취소 마감(시작 N분 전)
+  int _reserveCloseBeforeMinutes = 60;
+  int _cancelCloseBeforeMinutes = 60;
+  _CloseBeforePickerKind _expandedCloseBefore = _CloseBeforePickerKind.none;
+  FixedExtentScrollController? _reserveHourCtrl;
+  FixedExtentScrollController? _reserveMinuteCtrl;
+  FixedExtentScrollController? _cancelHourCtrl;
+  FixedExtentScrollController? _cancelMinuteCtrl;
 
   // rolling window
   int _windowDays = 21;
@@ -52,21 +63,144 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
   int _releaseDayOfWeek = 1;
   TimeOfDay _releaseTime = const TimeOfDay(hour: 9, minute: 0);
   int _weeksAhead = 1;
+  _WeeklyFieldPicker _expandedWeeklyPicker = _WeeklyFieldPicker.none;
+  FixedExtentScrollController? _releaseDayCtrl;
+  FixedExtentScrollController? _releaseHourCtrl;
+  FixedExtentScrollController? _releaseMinuteCtrl;
+  FixedExtentScrollController? _weeksAheadCtrl;
+
+  static const _dayLabels = ['월', '화', '수', '목', '금', '토', '일'];
 
   @override
   void initState() {
     super.initState();
     _windowDaysController.text = _windowDays.toString();
-    _closeBeforeHoursController.text =
-        (_closeBeforeMinutes / 60).round().toString();
     _load();
   }
 
   @override
   void dispose() {
     _windowDaysController.dispose();
-    _closeBeforeHoursController.dispose();
+    _disposeCloseBeforeControllers();
+    _disposeWeeklyControllers();
     super.dispose();
+  }
+
+  void _disposeCloseBeforeControllers() {
+    _reserveHourCtrl?.dispose();
+    _reserveMinuteCtrl?.dispose();
+    _cancelHourCtrl?.dispose();
+    _cancelMinuteCtrl?.dispose();
+    _reserveHourCtrl = null;
+    _reserveMinuteCtrl = null;
+    _cancelHourCtrl = null;
+    _cancelMinuteCtrl = null;
+  }
+
+  void _disposeWeeklyControllers() {
+    _releaseDayCtrl?.dispose();
+    _releaseHourCtrl?.dispose();
+    _releaseMinuteCtrl?.dispose();
+    _weeksAheadCtrl?.dispose();
+    _releaseDayCtrl = null;
+    _releaseHourCtrl = null;
+    _releaseMinuteCtrl = null;
+    _weeksAheadCtrl = null;
+  }
+
+  int _clampHours(int totalMinutes) =>
+      (totalMinutes ~/ 60).clamp(0, _maxCloseBeforeHours);
+
+  int _clampMinutesPart(int totalMinutes) => (totalMinutes % 60).clamp(0, 59);
+
+  void _toggleCloseBeforePicker(_CloseBeforePickerKind kind) {
+    setState(() {
+      if (_expandedCloseBefore == kind) {
+        _expandedCloseBefore = _CloseBeforePickerKind.none;
+        _disposeCloseBeforeControllers();
+        return;
+      }
+
+      // 다른 펼침 피커 닫기
+      _expandedWeeklyPicker = _WeeklyFieldPicker.none;
+      _disposeWeeklyControllers();
+
+      _disposeCloseBeforeControllers();
+      _expandedCloseBefore = kind;
+      final total =
+          kind == _CloseBeforePickerKind.reserve
+              ? _reserveCloseBeforeMinutes
+              : _cancelCloseBeforeMinutes;
+      final hourCtrl = FixedExtentScrollController(
+        initialItem: _clampHours(total),
+      );
+      final minuteCtrl = FixedExtentScrollController(
+        initialItem: _clampMinutesPart(total),
+      );
+      if (kind == _CloseBeforePickerKind.reserve) {
+        _reserveHourCtrl = hourCtrl;
+        _reserveMinuteCtrl = minuteCtrl;
+      } else {
+        _cancelHourCtrl = hourCtrl;
+        _cancelMinuteCtrl = minuteCtrl;
+      }
+    });
+  }
+
+  void _toggleWeeklyFieldPicker(_WeeklyFieldPicker field) {
+    setState(() {
+      if (_expandedWeeklyPicker == field) {
+        _expandedWeeklyPicker = _WeeklyFieldPicker.none;
+        _disposeWeeklyControllers();
+        return;
+      }
+
+      _expandedCloseBefore = _CloseBeforePickerKind.none;
+      _disposeCloseBeforeControllers();
+      _disposeWeeklyControllers();
+      _expandedWeeklyPicker = field;
+
+      switch (field) {
+        case _WeeklyFieldPicker.day:
+          _releaseDayCtrl = FixedExtentScrollController(
+            initialItem: (_releaseDayOfWeek - 1).clamp(0, 6),
+          );
+        case _WeeklyFieldPicker.time:
+          _releaseHourCtrl = FixedExtentScrollController(
+            initialItem: _releaseTime.hour.clamp(0, 23),
+          );
+          _releaseMinuteCtrl = FixedExtentScrollController(
+            initialItem: _releaseTime.minute.clamp(0, 59),
+          );
+        case _WeeklyFieldPicker.weeks:
+          _weeksAheadCtrl = FixedExtentScrollController(
+            initialItem: (_weeksAhead - 1).clamp(0, 7),
+          );
+        case _WeeklyFieldPicker.none:
+          break;
+      }
+    });
+  }
+
+  void _setCloseBeforeFromPickers({
+    required _CloseBeforePickerKind kind,
+    int? hour,
+    int? minute,
+  }) {
+    final current =
+        kind == _CloseBeforePickerKind.reserve
+            ? _reserveCloseBeforeMinutes
+            : _cancelCloseBeforeMinutes;
+    final nextHours = hour ?? _clampHours(current);
+    final nextMinutes = minute ?? _clampMinutesPart(current);
+    final nextTotal = nextHours * 60 + nextMinutes;
+    setState(() {
+      if (kind == _CloseBeforePickerKind.reserve) {
+        _reserveCloseBeforeMinutes = nextTotal;
+      } else {
+        _cancelCloseBeforeMinutes = nextTotal;
+      }
+    });
   }
 
   Future<void> _load() async {
@@ -86,9 +220,8 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
       _original = policy;
 
       _type = policy.openStrategy.type;
-      _closeBeforeMinutes = policy.closeBeforeMinutes;
-      _closeBeforeHoursController.text =
-          (_closeBeforeMinutes / 60).round().toString();
+      _reserveCloseBeforeMinutes = policy.reserveCloseBeforeMinutes;
+      _cancelCloseBeforeMinutes = policy.cancelCloseBeforeMinutes;
 
       _windowDays = policy.openStrategy.rollingWindow?.windowDays ?? 21;
       _windowDaysController.text = _windowDays.toString();
@@ -104,8 +237,8 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
     } catch (e) {
       _original = null;
       _type = BookingOpenStrategyType.rollingWindow;
-      _closeBeforeMinutes = 60;
-      _closeBeforeHoursController.text = '1';
+      _reserveCloseBeforeMinutes = 60;
+      _cancelCloseBeforeMinutes = 60;
       _windowDays = 21;
       _windowDaysController.text = '21';
       _releaseDayOfWeek = 1;
@@ -128,7 +261,12 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
     final original = _original;
     if (original == null) return true;
     if (_type != original.openStrategy.type) return true;
-    if (_closeBeforeMinutes != original.closeBeforeMinutes) return true;
+    if (_reserveCloseBeforeMinutes != original.reserveCloseBeforeMinutes) {
+      return true;
+    }
+    if (_cancelCloseBeforeMinutes != original.cancelCloseBeforeMinutes) {
+      return true;
+    }
 
     if (_type == BookingOpenStrategyType.rollingWindow) {
       return _windowDays !=
@@ -159,26 +297,11 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
       }
     }
 
-    // 세션 시작 전 시간 체크
-    final closeBeforeHoursValue = int.tryParse(
-      _closeBeforeHoursController.text,
-    );
-    if (closeBeforeHoursValue == null || closeBeforeHoursValue < 0) {
+    if (_reserveCloseBeforeMinutes < 0 || _cancelCloseBeforeMinutes < 0) {
       return false;
     }
 
     return true;
-  }
-
-  Future<void> _pickReleaseTime() async {
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: _releaseTime,
-    );
-    if (picked == null) return;
-    setState(() {
-      _releaseTime = picked;
-    });
   }
 
   Future<void> _handleBackDuringSave() async {
@@ -211,15 +334,6 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
       _windowDays = windowDaysValue;
     }
 
-    final closeBeforeHoursValue = int.tryParse(
-      _closeBeforeHoursController.text,
-    );
-    if (closeBeforeHoursValue == null || closeBeforeHoursValue < 0) {
-      SnackbarUtil.showInfo(context, '세션 시작 전 시간은 0시간 이상 입력해주세요.');
-      return false;
-    }
-    _closeBeforeMinutes = closeBeforeHoursValue * 60;
-
     setState(() => _isSaving = true);
     try {
       if (_leaveRequested) return false;
@@ -237,7 +351,8 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
               );
 
       final policy = CoursePolicy(
-        closeBeforeMinutes: _closeBeforeMinutes,
+        reserveCloseBeforeMinutes: _reserveCloseBeforeMinutes,
+        cancelCloseBeforeMinutes: _cancelCloseBeforeMinutes,
         openStrategy: openStrategy,
         updatedAt: DateTime.now(),
       );
@@ -368,7 +483,7 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
           elevation: 0,
           scrolledUnderElevation: 0,
           title: const Text(
-            '예약 정책 설정',
+            ' 예약 정책 설정',
             style: TextStyle(
               color: AppColors.textPrimary,
               fontSize: 18,
@@ -402,7 +517,14 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
           backgroundColor: AppColors.backgroundLight,
           elevation: 0,
           scrolledUnderElevation: 0,
-
+          title: const Text(
+            ' 예약 정책 설정',
+            style: TextStyle(
+              color: AppColors.textPrimary,
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
           leading: IconButton(
             icon: const Icon(
               Icons.arrow_back_ios_rounded,
@@ -417,346 +539,523 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
             },
           ),
         ),
-        body: Column(
-          children: [
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
-                children: [
-                  _sectionTitle('예약 정책 설정'),
-
-                  const SizedBox(height: 20),
-                  if (_hasReservations) ...[
-                    Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: AppColors.backgroundWhite,
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Icon(
-                            Icons.info_outline_rounded,
-                            color: AppColors.primaryGreen,
-                            size: 20,
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              '정책을 변경하면 새로 예약되는 건에만 적용됩니다.\n기존 예약은 그대로 유지됩니다.',
-                              style: TextStyle(
-                                fontSize: 14,
-                                height: 1.35,
-                                color: AppColors.textSecondary.withOpacity(0.9),
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
+        body: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: Column(
+            children: [
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+                  children: [
+                    const SizedBox(height: 20),
+                    _buildCloseBeforeDurationCard(
+                      title: '얼마 전까지 예약 가능하게 할까요?',
+                      valueLabel: '전까지 예약 가능',
+                      kind: _CloseBeforePickerKind.reserve,
+                      totalMinutes: _reserveCloseBeforeMinutes,
+                      hourController: _reserveHourCtrl,
+                      minuteController: _reserveMinuteCtrl,
+                      accentColor: courseColor,
                     ),
-                    const SizedBox(height: 16),
-                  ],
 
-                  _segmented(
-                    value: _type,
-                    onChanged: (v) => setState(() => _type = v),
-                    activeColor: courseColor,
-                  ),
+                    const SizedBox(height: 40),
 
-                  const SizedBox(height: 6),
+                    _buildCloseBeforeDurationCard(
+                      title: '얼마 전까지 취소 가능하게 할까요?',
+                      valueLabel: '전까지 취소 가능',
+                      kind: _CloseBeforePickerKind.cancel,
+                      totalMinutes: _cancelCloseBeforeMinutes,
+                      hourController: _cancelHourCtrl,
+                      minuteController: _cancelMinuteCtrl,
+                      accentColor: courseColor,
+                    ),
 
-                  if (_type == BookingOpenStrategyType.rollingWindow) ...[
-                    _card(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const SizedBox(height: 6),
-                          Text(
-                            '오늘부터 며칠 뒤까지 예약을 받을지 정합니다',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: AppColors.textSecondary,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              const Text(
-                                '오늘부터 ',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              SizedBox(
-                                width: 80,
-                                child: _styledNumberTextField(
-                                  controller: _windowDaysController,
-                                  suffix: '일',
-                                  onChanged: (value) {
-                                    final days = int.tryParse(value) ?? 0;
-                                    if (days >= 1) {
-                                      setState(() => _windowDays = days);
-                                    }
-                                  },
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              const Text(
-                                '까지',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
-                          ),
-                          if (_windowDaysController.text.isNotEmpty &&
-                              (int.tryParse(_windowDaysController.text) ?? 0) <
-                                  1)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 8),
-                              child: Text(
-                                '1일 이상 입력해주세요',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.red,
-                                ),
-                              ),
-                            ),
-                          const SizedBox(height: 8),
-                        ],
+                    const SizedBox(height: 40),
+                    Text(
+                      '언제 다음 예약을 오픈할까요?',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        color: AppColors.textSecondary,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                  ] else ...[
-                    _card(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const SizedBox(height: 6),
-                          Text(
-                            '매주 정해진 요일과 시간에 예약을 오픈합니다',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: AppColors.textSecondary,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          Wrap(
-                            crossAxisAlignment: WrapCrossAlignment.center,
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              const Text(
-                                '매주',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  color: AppColors.textSecondary,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              _styledDropdown<int>(
-                                value: _releaseDayOfWeek,
-                                items: const [
-                                  DropdownMenuItem(value: 1, child: Text('월')),
-                                  DropdownMenuItem(value: 2, child: Text('화')),
-                                  DropdownMenuItem(value: 3, child: Text('수')),
-                                  DropdownMenuItem(value: 4, child: Text('목')),
-                                  DropdownMenuItem(value: 5, child: Text('금')),
-                                  DropdownMenuItem(value: 6, child: Text('토')),
-                                  DropdownMenuItem(value: 7, child: Text('일')),
-                                ],
-                                onChanged: (v) {
-                                  if (v == null) return;
-                                  setState(() => _releaseDayOfWeek = v);
-                                },
-                              ),
-                              _styledButton(
-                                onPressed: _pickReleaseTime,
-                                child: Text(
-                                  _toHHmm(_releaseTime),
-                                  style: const TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w700,
-                                    color: AppColors.textPrimary,
-                                  ),
-                                ),
-                              ),
-                              const Text(
-                                '에',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  color: AppColors.textSecondary,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              _styledDropdown<int>(
-                                value: _weeksAhead,
-                                items: List.generate(
-                                  8,
-                                  (i) => DropdownMenuItem(
-                                    value: i + 1,
-                                    child: Text(
-                                      '${i + 1}주 뒤',
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                onChanged: (v) {
-                                  if (v == null) return;
-                                  setState(() => _weeksAhead = v);
-                                },
-                              ),
-                              const Text(
-                                '까지',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  color: AppColors.textSecondary,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                        ],
-                      ),
-                    ),
-                  ],
-
-                  const SizedBox(height: 30),
-
-                  Text(
-                    '시작 얼마 전까지 예약/취소 가능할까요?',
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: AppColors.textSecondary,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  _card(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
+                    const SizedBox(height: 12),
+                    if (_hasReservations) ...[
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: AppColors.backgroundWhite,
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              '세션 시작',
-                              style: TextStyle(
-                                fontSize: 16,
-                                color: AppColors.textSecondary,
-                                fontWeight: FontWeight.w500,
-                              ),
+                            const Icon(
+                              Icons.info_outline_rounded,
+                              color: AppColors.primaryGreen,
+                              size: 20,
                             ),
-                            SizedBox(width: 12),
-
-                            SizedBox(
-                              width: 80,
-                              child: _styledNumberTextField(
-                                controller: _closeBeforeHoursController,
-                                suffix: '시간',
-                                onChanged: (value) {
-                                  final hours = int.tryParse(value) ?? 0;
-                                  if (hours >= 0) {
-                                    setState(
-                                      () => _closeBeforeMinutes = hours * 60,
-                                    );
-                                  }
-                                },
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            const Text(
-                              ' 전까지 예약/취소 가능',
-                              style: TextStyle(
-                                fontSize: 16,
-                                color: AppColors.textSecondary,
-                                fontWeight: FontWeight.w500,
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                '정책을 변경하면 새로 예약되는 건에만 적용됩니다.\n기존 예약은 그대로 유지됩니다.',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  height: 1.35,
+                                  color: AppColors.textSecondary.withOpacity(
+                                    0.9,
+                                  ),
+                                  fontWeight: FontWeight.w500,
+                                ),
                               ),
                             ),
                           ],
                         ),
-                        if (_closeBeforeHoursController.text.isNotEmpty &&
-                            (int.tryParse(_closeBeforeHoursController.text) ??
-                                    -1) <
-                                0)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 8),
-                            child: Text(
-                              '0시간 이상 입력해주세요',
-                              style: TextStyle(fontSize: 12, color: Colors.red),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-
-                ],
-              ),
-            ),
-            // 하단 고정 버튼
-            Container(
-              padding: const EdgeInsets.fromLTRB(24, 12, 24, 10),
-              decoration: BoxDecoration(color: AppColors.backgroundLight),
-              child: SafeArea(
-                child: SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed:
-                        (_isLoading || _isSaving || !_isValidInput())
-                            ? null
-                            : (widget.requireSave || _hasChanges)
-                            ? (widget.requireSave
-                                ? _saveAndRegisterCourse
-                                : () => _savePolicy(popAfterSave: true))
-                            : null,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primaryGreen,
-                      foregroundColor: Colors.white,
-                      disabledBackgroundColor:
-                          _isSaving
-                              ? AppColors.primaryGreen
-                              : AppColors.borderLight,
-                      disabledForegroundColor:
-                          _isSaving ? Colors.white : AppColors.textSecondary,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20),
                       ),
-                      elevation: 0,
+                      const SizedBox(height: 16),
+                    ],
+
+                    _segmented(
+                      value: _type,
+                      onChanged: (v) {
+                        setState(() {
+                          _type = v;
+                          if (v != BookingOpenStrategyType.weeklyRelease) {
+                            _expandedWeeklyPicker = _WeeklyFieldPicker.none;
+                            _disposeWeeklyControllers();
+                          }
+                        });
+                      },
+                      activeColor: courseColor,
                     ),
-                    child:
-                        _isSaving
-                            ? const SizedBox(
-                              width: 24,
-                              height: 24,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation<Color>(
-                                  Colors.white,
+
+                    const SizedBox(height: 6),
+
+                    if (_type == BookingOpenStrategyType.rollingWindow) ...[
+                      _card(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                const Text(
+                                  '오늘부터 ',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w500,
+                                    color: AppColors.textSecondary,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                SizedBox(
+                                  width: 80,
+                                  child: _styledNumberTextField(
+                                    controller: _windowDaysController,
+                                    suffix: '일 뒤',
+                                    onChanged: (value) {
+                                      final days = int.tryParse(value) ?? 0;
+                                      if (days >= 1) {
+                                        setState(() => _windowDays = days);
+                                      }
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                const Text(
+                                  '예약까지 오픈할게요',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    color: AppColors.textSecondary,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            if (_windowDaysController.text.isNotEmpty &&
+                                (int.tryParse(_windowDaysController.text) ??
+                                        0) <
+                                    1)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 8),
+                                child: Text(
+                                  '1일 이상 입력해주세요',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.red,
+                                  ),
                                 ),
                               ),
-                            )
-                            : Text(
-                              widget.requireSave ? '저장 및 코스 등록' : '정책 수정',
-                              style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
+                            const SizedBox(height: 8),
+                          ],
+                        ),
+                      ),
+                    ] else ...[
+                      _buildWeeklyReleaseCard(courseColor: courseColor),
+                    ],
+
+                    const SizedBox(height: 40),
+                  ],
+                ),
+              ),
+              // 하단 고정 버튼
+              Container(
+                padding: const EdgeInsets.fromLTRB(24, 12, 24, 10),
+                decoration: BoxDecoration(color: AppColors.backgroundLight),
+                child: SafeArea(
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed:
+                          (_isLoading || _isSaving || !_isValidInput())
+                              ? null
+                              : (widget.requireSave || _hasChanges)
+                              ? (widget.requireSave
+                                  ? _saveAndRegisterCourse
+                                  : () => _savePolicy(popAfterSave: true))
+                              : null,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primaryGreen,
+                        foregroundColor: Colors.white,
+                        disabledBackgroundColor:
+                            _isSaving
+                                ? AppColors.primaryGreen
+                                : AppColors.borderLight,
+                        disabledForegroundColor:
+                            _isSaving ? Colors.white : AppColors.textSecondary,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        elevation: 0,
+                      ),
+                      child:
+                          _isSaving
+                              ? const SizedBox(
+                                width: 24,
+                                height: 24,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    Colors.white,
+                                  ),
+                                ),
+                              )
+                              : Text(
+                                widget.requireSave ? '저장 및 코스 등록' : '정책 수정하기',
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                ),
                               ),
-                            ),
+                    ),
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
+    );
+  }
+
+  Widget _valueChip({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+    Color accentColor = AppColors.primaryGreen,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color:
+                selected
+                    ? accentColor.withOpacity(0.12)
+                    : AppColors.backgroundLight,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              color: selected ? accentColor : AppColors.textPrimary,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sentenceLabel(String text) {
+    return Text(
+      text,
+      style: const TextStyle(
+        fontSize: 16,
+        color: AppColors.textSecondary,
+        fontWeight: FontWeight.w500,
+      ),
+    );
+  }
+
+  Widget _buildExpandableWheel({
+    required bool isExpanded,
+    required Widget? child,
+  }) {
+    return ClipRRect(
+      borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeInOut,
+        height: isExpanded ? 180 : 0,
+        child: isExpanded && child != null ? child : const SizedBox.shrink(),
+      ),
+    );
+  }
+
+  Widget _cupertinoWheel({
+    required FixedExtentScrollController controller,
+    required int itemCount,
+    required ValueChanged<int> onSelectedItemChanged,
+    required String Function(int index) labelBuilder,
+  }) {
+    return CupertinoPicker(
+      scrollController: controller,
+      itemExtent: 40,
+      diameterRatio: 1.15,
+      squeeze: 1.05,
+      useMagnifier: true,
+      magnification: 1.12,
+      onSelectedItemChanged: onSelectedItemChanged,
+      children: List.generate(
+        itemCount,
+        (index) => Center(
+          child: Text(
+            labelBuilder(index),
+            style: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w500,
+              color: AppColors.textPrimary,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWeeklyReleaseCard({required Color courseColor}) {
+    final dayLabel = _dayLabels[(_releaseDayOfWeek - 1).clamp(0, 6)];
+    final daySelected = _expandedWeeklyPicker == _WeeklyFieldPicker.day;
+    final timeSelected = _expandedWeeklyPicker == _WeeklyFieldPicker.time;
+    final weeksSelected = _expandedWeeklyPicker == _WeeklyFieldPicker.weeks;
+    final isExpanded = _expandedWeeklyPicker != _WeeklyFieldPicker.none;
+
+    Widget? wheel;
+    if (daySelected && _releaseDayCtrl != null) {
+      wheel = _cupertinoWheel(
+        controller: _releaseDayCtrl!,
+        itemCount: _dayLabels.length,
+        onSelectedItemChanged: (index) {
+          setState(() => _releaseDayOfWeek = index + 1);
+        },
+        labelBuilder: (index) => '${_dayLabels[index]}요일',
+      );
+    } else if (timeSelected &&
+        _releaseHourCtrl != null &&
+        _releaseMinuteCtrl != null) {
+      wheel = Row(
+        children: [
+          Expanded(
+            child: _cupertinoWheel(
+              controller: _releaseHourCtrl!,
+              itemCount: 24,
+              onSelectedItemChanged: (index) {
+                setState(() {
+                  _releaseTime = TimeOfDay(
+                    hour: index,
+                    minute: _releaseTime.minute,
+                  );
+                });
+              },
+              labelBuilder: (index) => '${index.toString().padLeft(2, '0')}시',
+            ),
+          ),
+          Expanded(
+            child: _cupertinoWheel(
+              controller: _releaseMinuteCtrl!,
+              itemCount: 60,
+              onSelectedItemChanged: (index) {
+                setState(() {
+                  _releaseTime = TimeOfDay(
+                    hour: _releaseTime.hour,
+                    minute: index,
+                  );
+                });
+              },
+              labelBuilder: (index) => '${index.toString().padLeft(2, '0')}분',
+            ),
+          ),
+        ],
+      );
+    } else if (weeksSelected && _weeksAheadCtrl != null) {
+      wheel = _cupertinoWheel(
+        controller: _weeksAheadCtrl!,
+        itemCount: 8,
+        onSelectedItemChanged: (index) {
+          setState(() => _weeksAhead = index + 1);
+        },
+        labelBuilder: (index) => '${index + 1}주 뒤',
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.backgroundWhite,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
+            child: Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              runSpacing: 10,
+              children: [
+                _sentenceLabel('매주'),
+                _valueChip(
+                  label: dayLabel,
+                  selected: daySelected,
+                  onTap: () => _toggleWeeklyFieldPicker(_WeeklyFieldPicker.day),
+                  accentColor: courseColor,
+                ),
+                _valueChip(
+                  label: _toHHmm(_releaseTime),
+                  selected: timeSelected,
+                  onTap:
+                      () => _toggleWeeklyFieldPicker(_WeeklyFieldPicker.time),
+                  accentColor: courseColor,
+                ),
+                _sentenceLabel('에'),
+                _valueChip(
+                  label: '$_weeksAhead주 뒤',
+                  selected: weeksSelected,
+                  onTap:
+                      () => _toggleWeeklyFieldPicker(_WeeklyFieldPicker.weeks),
+                  accentColor: courseColor,
+                ),
+                _sentenceLabel('예약까지 오픈할게요'),
+              ],
+            ),
+          ),
+          _buildExpandableWheel(isExpanded: isExpanded, child: wheel),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCloseBeforeDurationCard({
+    required String title,
+    required String valueLabel,
+    required _CloseBeforePickerKind kind,
+    required int totalMinutes,
+    required FixedExtentScrollController? hourController,
+    required FixedExtentScrollController? minuteController,
+    required Color accentColor,
+  }) {
+    final isExpanded = _expandedCloseBefore == kind;
+    final hours = _clampHours(totalMinutes);
+    final minutes = _clampMinutesPart(totalMinutes);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 16,
+            color: AppColors.textSecondary,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 10),
+        Container(
+          decoration: BoxDecoration(
+            color: AppColors.backgroundWhite,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+                child: Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 8,
+                  runSpacing: 10,
+                  children: [
+                    _sentenceLabel('세션 시작'),
+                    _valueChip(
+                      label: '$hours시간',
+                      selected: isExpanded,
+                      onTap: () => _toggleCloseBeforePicker(kind),
+                      accentColor: accentColor,
+                    ),
+                    _valueChip(
+                      label: '$minutes분',
+                      selected: isExpanded,
+                      onTap: () => _toggleCloseBeforePicker(kind),
+                      accentColor: accentColor,
+                    ),
+                    _sentenceLabel(valueLabel),
+                  ],
+                ),
+              ),
+              _buildExpandableWheel(
+                isExpanded: isExpanded,
+                child:
+                    hourController != null && minuteController != null
+                        ? Row(
+                          children: [
+                            Expanded(
+                              child: _cupertinoWheel(
+                                controller: hourController,
+                                itemCount: _maxCloseBeforeHours + 1,
+                                onSelectedItemChanged:
+                                    (index) => _setCloseBeforeFromPickers(
+                                      kind: kind,
+                                      hour: index,
+                                    ),
+                                labelBuilder: (index) => '$index시간',
+                              ),
+                            ),
+                            Expanded(
+                              child: _cupertinoWheel(
+                                controller: minuteController,
+                                itemCount: 60,
+                                onSelectedItemChanged:
+                                    (index) => _setCloseBeforeFromPickers(
+                                      kind: kind,
+                                      minute: index,
+                                    ),
+                                labelBuilder: (index) => '$index분',
+                              ),
+                            ),
+                          ],
+                        )
+                        : null,
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -845,59 +1144,6 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
         borderRadius: BorderRadius.circular(16),
       ),
       child: child,
-    );
-  }
-
-  Widget _styledDropdown<T>({
-    required T? value,
-    required List<DropdownMenuItem<T>> items,
-    required ValueChanged<T?> onChanged,
-  }) {
-    return Container(
-      height: 44,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: AppColors.backgroundLight,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<T>(
-          value: value,
-          items: items,
-          onChanged: onChanged,
-          isExpanded: false,
-          icon: Icon(
-            Icons.keyboard_arrow_down_rounded,
-            color: AppColors.textSecondary,
-            size: 20,
-          ),
-          style: const TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary,
-          ),
-          dropdownColor: AppColors.backgroundWhite,
-          borderRadius: BorderRadius.circular(12),
-        ),
-      ),
-    );
-  }
-
-  Widget _styledButton({
-    required VoidCallback? onPressed,
-    required Widget child,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: AppColors.backgroundLight,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: InkWell(
-        onTap: onPressed,
-        borderRadius: BorderRadius.circular(12),
-        child: child,
-      ),
     );
   }
 

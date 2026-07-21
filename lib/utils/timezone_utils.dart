@@ -36,6 +36,38 @@ class TimezoneUtils {
     return '${seoul.year}-${seoul.month.toString().padLeft(2, '0')}-${seoul.day.toString().padLeft(2, '0')}';
   }
 
+  /// UI 표시용 날짜 "YYYY.MM.DD"
+  static String formatDateDisplayToSeoul(DateTime date) {
+    return formatDateToSeoul(date).replaceAll('-', '.');
+  }
+
+  /// UI 표시용 날짜 문자열 (YYYY-MM-DD / YYYY.MM.DD → YYYY.MM.DD)
+  static String formatDateStringDisplay(String? value) {
+    if (value == null || value.isEmpty) return '';
+    final normalized = value.trim().replaceAll('.', '-');
+    final match = RegExp(r'^(\d{4})-(\d{2})-(\d{2})').firstMatch(normalized);
+    if (match == null) return value;
+    return '${match.group(1)}.${match.group(2)}.${match.group(3)}';
+  }
+
+  /// details 등 텍스트 안의 YYYY-MM-DD → YYYY.MM.DD
+  static String formatDetailsDisplay(String? details) {
+    if (details == null || details.isEmpty) return '';
+    return details.replaceAllMapped(
+      RegExp(r'(\d{4})-(\d{2})-(\d{2})'),
+      (m) => '${m[1]}.${m[2]}.${m[3]}',
+    );
+  }
+
+  /// 날짜·시각을 서울 시간대 기준 "YYYY.MM.DD (HH:mm)" 형식으로 변환
+  static String formatDateTimeToSeoul(DateTime date) {
+    final seoul = date.toUtc().add(const Duration(hours: 9));
+    final datePart = formatDateDisplayToSeoul(date);
+    final timePart =
+        '${seoul.hour.toString().padLeft(2, '0')}:${seoul.minute.toString().padLeft(2, '0')}';
+    return '$datePart ($timePart)';
+  }
+
   /// 서울 시간대 기준 오늘 날짜만 반환 (시간 제거)
   static DateTime getSeoulToday() {
     final seoul = getSeoulDateTime();

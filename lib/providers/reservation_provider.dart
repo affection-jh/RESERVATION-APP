@@ -363,7 +363,10 @@ class ReservationProvider with ChangeNotifier {
   }
 
   /// 예약 취소 (권장: 예약 객체를 넘겨서 in-flight/캘린더 UI 표시까지 가능)
-  Future<void> cancelReservation(SessionReservation reservation) async {
+  Future<void> cancelReservation(
+    SessionReservation reservation, {
+    bool asAdminAction = false,
+  }) async {
     debugPrint('[ReservationProvider] cancelReservation 시작');
     debugPrint('[ReservationProvider] reservationId: ${reservation.id}');
     debugPrint('[ReservationProvider] placeId: ${reservation.placeId}');
@@ -384,6 +387,7 @@ class ReservationProvider with ChangeNotifier {
       final result = await _firestoreService.batchCancelReservations(
         reservationIds: [reservation.id],
         placeId: reservation.placeId,
+        asAdminAction: asAdminAction,
       );
       ReservationService.throwIfBatchCancelFailed(result);
 

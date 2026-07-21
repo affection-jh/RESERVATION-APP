@@ -9,7 +9,6 @@ import '../../../models/course_enrollment.dart';
 import '../../../models/enrollment_action.dart';
 import '../../../models/member_view.dart';
 import '../../../models/enrollment_timeline_item.dart';
-import '../../../models/session_reservation.dart';
 import '../../../providers/member_provider.dart';
 import '../../../providers/place_provider.dart';
 import '../../../providers/enrollment_provider.dart';
@@ -22,6 +21,7 @@ import '../../../utils/text_field_decoration_util.dart';
 import '../../../utils/timezone_utils.dart';
 import '../../../utils/snackbar_util.dart';
 import '../../../utils/navigator_key.dart';
+import '../../../utils/enrollment_timeline_display.dart';
 import '../../../utils/format_utils.dart';
 import '../../../utils/date_range_picker_util.dart';
 import '../../../utils/enrollment_valid_until_util.dart';
@@ -285,6 +285,9 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
     super.dispose();
   }
 
+  BuildContext? _snackbarContext() =>
+      navigatorKey.currentContext ?? (mounted ? context : null);
+
   // 탭 1: 횟수 조정 저장
   bool _hasRemainingReservationsChanges() {
     final remaining = int.tryParse(_remainingReservationsController.text);
@@ -332,8 +335,8 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         }
         return;
       }
-      final loadCtx = navigatorKey.currentContext;
-      if (loadCtx != null) SnackbarUtil.showLoading(loadCtx, '저장 중…');
+      final snackCtx = _snackbarContext();
+      if (snackCtx != null) SnackbarUtil.showLoading(snackCtx, '저장 중…');
 
       final enrollmentService = EnrollmentService();
       final remaining = int.parse(_remainingReservationsController.text);
@@ -364,8 +367,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         );
         memberProvider.setPlaceId(placeId);
         // 나갔어도 로딩 스낵바를 닫고 결과 표시
-        final resultCtxPending =
-            mounted ? context : navigatorKey.currentContext;
+        final resultCtxPending = _snackbarContext();
         if (resultCtxPending != null) {
           SnackbarUtil.showSuccess(resultCtxPending, '대기 등록 정보가 변경되었습니다.');
         }
@@ -420,14 +422,14 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         }
 
         // 나갔어도 로딩 스낵바를 닫고 결과 표시
-        final resultCtx = mounted ? context : navigatorKey.currentContext;
+        final resultCtx = _snackbarContext();
         if (resultCtx != null) {
           SnackbarUtil.showSuccess(resultCtx, '남은 횟수가 변경되었습니다.');
         }
         if (_leaveRequested) return;
       }
     } catch (e) {
-      final resultCtx = mounted ? context : navigatorKey.currentContext;
+      final resultCtx = _snackbarContext();
       if (resultCtx != null) {
         SnackbarUtil.showInfoFromError(
           resultCtx,
@@ -437,9 +439,6 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
       }
     } finally {
       SnackbarUtil.dismissLoading();
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        SnackbarUtil.dismissLoading();
-      });
       if (mounted) {
         setState(() {
           _isSaving = false;
@@ -591,9 +590,8 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         }
         return;
       }
-      final loadCtxPeriod = navigatorKey.currentContext;
-      if (loadCtxPeriod != null)
-        SnackbarUtil.showLoading(loadCtxPeriod, '저장 중…');
+      final snackCtx = _snackbarContext();
+      if (snackCtx != null) SnackbarUtil.showLoading(snackCtx, '저장 중…');
 
       final enrollmentService = EnrollmentService();
 
@@ -622,8 +620,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
 
         Provider.of<MemberProvider>(context, listen: false).setPlaceId(placeId);
         // 나갔어도 로딩 스낵바를 닫고 결과 표시
-        final resultCtxPendingPeriod =
-            mounted ? context : navigatorKey.currentContext;
+        final resultCtxPendingPeriod = _snackbarContext();
         if (resultCtxPendingPeriod != null) {
           SnackbarUtil.showSuccess(
             resultCtxPendingPeriod,
@@ -644,7 +641,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
             performedAt: TimezoneUtils.getSeoulDateTime(),
             performedBy: 'admin', // TODO: 실제 admin ID로 변경
             details:
-                '유효기간 ${TimezoneUtils.formatDateToSeoul(_originalValidUntil)} → ${TimezoneUtils.formatDateToSeoul(_extendedValidUntil)}',
+                '유효기간 ${TimezoneUtils.formatDateDisplayToSeoul(_originalValidUntil)} → ${TimezoneUtils.formatDateDisplayToSeoul(_extendedValidUntil)}',
             oldValue: {'validUntil': _originalValidUntil.toIso8601String()},
             newValue: {'validUntil': _extendedValidUntil.toIso8601String()},
           ),
@@ -674,14 +671,13 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           ).setPlaceId(placeIdForRefresh);
         }
 
-        final resultCtxPeriod = mounted ? context : navigatorKey.currentContext;
+        final resultCtxPeriod = _snackbarContext();
         if (resultCtxPeriod != null) {
           SnackbarUtil.showSuccess(resultCtxPeriod, '유효기간이 변경되었습니다.');
         }
       }
     } catch (e) {
-      final resultCtxPeriodErr =
-          mounted ? context : navigatorKey.currentContext;
+      final resultCtxPeriodErr = _snackbarContext();
       if (resultCtxPeriodErr != null) {
         SnackbarUtil.showInfoFromError(
           resultCtxPeriodErr,
@@ -691,9 +687,6 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
       }
     } finally {
       SnackbarUtil.dismissLoading();
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        SnackbarUtil.dismissLoading();
-      });
       if (mounted) {
         setState(() {
           _isSaving = false;
@@ -2367,7 +2360,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         final allItems = provider.timelineItems;
         final availableFilters = <String>{};
         for (final item in allItems) {
-          availableFilters.add(_getTimelineFilterCategory(item));
+          availableFilters.add(EnrollmentTimelineDisplay.filterCategory(item));
         }
 
         List<EnrollmentTimelineItem> filteredItems = allItems;
@@ -2376,7 +2369,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
               allItems
                   .where(
                     (item) =>
-                        _getTimelineFilterCategory(item) ==
+                        EnrollmentTimelineDisplay.filterCategory(item) ==
                         _selectedTimelineFilter,
                   )
                   .toList();
@@ -2498,20 +2491,6 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
     );
   }
 
-  String _getTimelineFilterCategory(EnrollmentTimelineItem item) {
-    return switch (item) {
-      ReservationTimelineItem() => '예약',
-      ActionTimelineItem(:final action) => switch (action.actionType) {
-        EnrollmentActionType.adjustCount => '횟수조정',
-        EnrollmentActionType.periodAdjust => '기간조정',
-        EnrollmentActionType.reenroll => '재등록',
-        EnrollmentActionType.reservationMove ||
-        EnrollmentActionType.reservationCancel => '예약',
-        EnrollmentActionType.cancel || EnrollmentActionType.other => '기타',
-      },
-    };
-  }
-
   Widget _buildTimelineFilterChip({
     required String label,
     required bool isSelected,
@@ -2575,16 +2554,11 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
   }
 
   Widget _buildTimelineItem(EnrollmentTimelineItem item, bool isLast) {
-    final Widget content = switch (item) {
-      ReservationTimelineItem(:final reservation) =>
-        _buildReservationTimelineItem(reservation),
-      ActionTimelineItem(:final action) => _buildActionTimelineItem(action),
-    };
     final color = switch (item) {
-      ReservationTimelineItem() => AppColors.primaryGreen,
       ActionTimelineItem(:final action) => _getTimelineItemColor(
         action.actionType,
       ),
+      _ => AppColors.textSecondary,
     };
 
     return Stack(
@@ -2592,7 +2566,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
       children: [
         Padding(
           padding: EdgeInsets.only(bottom: isLast ? 0 : 12),
-          child: content,
+          child: EnrollmentTimelineDisplay.buildTimelineEntry(item: item),
         ),
         Positioned(
           left: -18,
@@ -2603,46 +2577,16 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
             decoration: BoxDecoration(color: color, shape: BoxShape.circle),
           ),
         ),
-        // 점에서 카드로 이어지는 가로선 (점의 오른쪽에서 카드 왼쪽까지)
         Positioned(
-          left: -9, // 점의 오른쪽 가장자리 (left: -15 + 6 = -9, 점의 중심에서 오른쪽으로)
-          top: 5, // 점의 중앙 높이 (12/2 - 2/2 = 5)
+          left: -9,
+          top: 5,
           child: Container(
-            width: 9, // 점의 중심(left: -9)에서 카드 왼쪽(left: 0)까지
+            width: 9,
             height: 2,
             color: AppColors.borderLight,
           ),
         ),
       ],
-    );
-  }
-
-  Widget _buildReservationTimelineItem(SessionReservation r) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.backgroundWhite,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            '예약',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '일시: ${TimezoneUtils.formatDateToSeoul(r.reservedDate)} ${r.startTime}',
-            style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
-          ),
-        ],
-      ),
     );
   }
 
@@ -2653,66 +2597,12 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
       case EnrollmentActionType.adjustCount:
       case EnrollmentActionType.periodAdjust:
       case EnrollmentActionType.reenroll:
+      case EnrollmentActionType.reservationCreate:
       case EnrollmentActionType.reservationMove:
       case EnrollmentActionType.reservationCancel:
         return const Color.fromARGB(255, 59, 59, 59);
       default:
         return AppColors.textSecondary;
-    }
-  }
-
-  Widget _buildActionTimelineItem(EnrollmentAction action) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.backgroundWhite,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            _getActionTypeLabel(action.actionType),
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '일시: ${TimezoneUtils.formatDateToSeoul(action.performedAt)}',
-            style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
-          ),
-          if (action.details != null && action.details!.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(
-              '내용: ${action.details}',
-              style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  String _getActionTypeLabel(EnrollmentActionType type) {
-    switch (type) {
-      case EnrollmentActionType.adjustCount:
-        return '횟수 조정';
-      case EnrollmentActionType.periodAdjust:
-        return '유효기간 조정';
-      case EnrollmentActionType.reenroll:
-        return '재등록';
-      case EnrollmentActionType.cancel:
-        return '수강 취소';
-      case EnrollmentActionType.reservationMove:
-        return '예약 이동';
-      case EnrollmentActionType.reservationCancel:
-        return '예약 취소';
-      case EnrollmentActionType.other:
-        return '기타';
     }
   }
 }

@@ -63,6 +63,19 @@ class CourseEnrollment {
 
   bool get canReserve => isValid && remainingReservations > 0;
 
+  /// 서울 기준 날짜만 비교: 세션 날짜가 validFrom~validUntil 구간 안인지 (시작일·마감일 포함).
+  bool isSessionDateWithinValidity(DateTime sessionDate) {
+    final sessionDateSeoul = TimezoneUtils.getSeoulDateOnly(sessionDate);
+    final validFromDateSeoul = TimezoneUtils.getSeoulDateOnly(validFrom);
+    final validUntilDateSeoul = TimezoneUtils.getSeoulDateOnly(validUntil);
+    return !sessionDateSeoul.isBefore(validFromDateSeoul) &&
+        !sessionDateSeoul.isAfter(validUntilDateSeoul);
+  }
+
+  /// 세션 날짜 기준 예약 가능 여부 (유효기간 + 남은 횟수).
+  bool canReserveForSessionDate(DateTime sessionDate) =>
+      isSessionDateWithinValidity(sessionDate) && remainingReservations > 0;
+
   bool get isOneTime => totalReservations == 1 && totalEnrollmentCount == 1;
 
   CourseEnrollment useReservation() {

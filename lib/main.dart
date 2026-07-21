@@ -101,12 +101,12 @@ class _AppLifecycleNotifierState extends State<_AppLifecycleNotifier>
 
       if (admin != null) {
         notificationProvider
-            .loadNotifications(admin.userId, isAdmin: true, placeId: placeId)
-            .catchError((e) => debugPrint('[AppLifecycle] 관리자 알림 재로드 실패: $e'));
+            .refreshUnreadBadge(admin.userId, isAdmin: true, placeId: placeId)
+            .catchError((e) => debugPrint('[AppLifecycle] 관리자 알림 배지 갱신 실패: $e'));
       } else if (user != null) {
         notificationProvider
-            .loadNotifications(user.userId, isAdmin: false, placeId: placeId)
-            .catchError((e) => debugPrint('[AppLifecycle] 사용자 알림 재로드 실패: $e'));
+            .refreshUnreadBadge(user.userId, isAdmin: false, placeId: placeId)
+            .catchError((e) => debugPrint('[AppLifecycle] 사용자 알림 배지 갱신 실패: $e'));
       }
     } catch (e) {
       debugPrint('[AppLifecycle] 알림 재로드 오류: $e');

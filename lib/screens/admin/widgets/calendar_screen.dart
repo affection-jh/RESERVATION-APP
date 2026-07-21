@@ -1339,7 +1339,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
     final CourseEnrollment? enrollment =
         enrollmentProvider.enrollmentsByCourseId[course.id];
     final isEnrolled = enrollment != null;
-    final enrollmentCanReserve = enrollment?.canReserve ?? false;
+    final enrollmentCanReserve =
+        enrollment?.canReserveForSessionDate(date) ?? false;
 
     // 디버그: noCreditsOrExpired 원인 (코스 불일치 vs 만료/0회)
     if (kDebugMode && userId != null && !enrollmentCanReserve) {
@@ -1435,8 +1436,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
       courseColor: course.colorValue,
     );
 
-    // 예약 불가(잠긴) 세션은 박스 숨김 — 세션 칸만 유지
-    if (isLocked) {
+    // 예약 불가(잠긴) 세션은 박스 숨김 — 단, 본인 예약은 취소를 위해 표시
+    if (isLocked && !hasUserReservation) {
       return Positioned(
         top: topPosition,
         left: _sessionPadding,
@@ -1571,7 +1572,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
           if (!TimezoneUtils.getSeoulDateTime().isBefore(sessionStart)) {
             SnackbarUtil.showInfo(
               context,
-              '세션 시작 ${_formatCloseBefore(policy.closeBeforeMinutes)} 전까지만 예약 가능합니다.',
+              '세션 시작 ${_formatCloseBefore(policy.reserveCloseBeforeMinutes)} 전까지만 예약 가능합니다.',
             );
             return;
           }
@@ -1583,7 +1584,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
             case ReservationLockReason.closedBeforeStart:
               SnackbarUtil.showInfo(
                 context,
-                '세션 시작 ${_formatCloseBefore(policy.closeBeforeMinutes)} 전까지만 예약 가능합니다.',
+                '세션 시작 ${_formatCloseBefore(policy.reserveCloseBeforeMinutes)} 전까지만 예약 가능합니다.',
               );
               return;
             case ReservationLockReason.full:
@@ -1605,21 +1606,21 @@ class _CalendarScreenState extends State<CalendarScreen> {
               }
               if (enrollment.remainingReservations <= 0) {
                 SnackbarUtil.showInfo(context, '예약 가능한 횟수가 없습니다.');
-              } else if (!enrollment.isValid) {
-                final today = TimezoneUtils.getSeoulToday();
+              } else if (!enrollment.isSessionDateWithinValidity(date)) {
+                final sessionDateOnly = TimezoneUtils.getSeoulDateOnly(date);
                 final vf = TimezoneUtils.getSeoulDateOnly(enrollment.validFrom);
                 final vu = TimezoneUtils.getSeoulDateOnly(
                   enrollment.validUntil,
                 );
-                if (today.isBefore(vf)) {
+                if (sessionDateOnly.isBefore(vf)) {
                   SnackbarUtil.showInfo(
                     context,
-                    '아직 수강 시작 전입니다. 관리자에게 시작일 조정을 요청해 주세요.',
+                    '수강 시작 전 날짜는 예약할 수 없습니다.',
                   );
-                } else if (today.isAfter(vu)) {
+                } else if (sessionDateOnly.isAfter(vu)) {
                   SnackbarUtil.showInfo(
                     context,
-                    '수강 기간이 만료되었습니다. 관리자에게 기간 연장을 요청해 주세요.',
+                    '수강 기간이 만료된 날짜는 예약할 수 없습니다.',
                   );
                 } else {
                   SnackbarUtil.showInfo(context, '현재 예약할 수 없습니다.');

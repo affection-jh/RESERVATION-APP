@@ -1,8 +1,8 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:reservation/utils/timezone_utils.dart';
-import 'package:shimmer/shimmer.dart';
 import 'package:provider/provider.dart';
+import 'package:reservation/utils/timezone_utils.dart';
 import '../theme/app_colors.dart';
 import '../models/notification.dart';
 import '../providers/notification_provider.dart';
@@ -28,13 +28,23 @@ class _NotificationScreenState extends State<NotificationScreen> {
   @override
   void initState() {
     super.initState();
-    // 알림 화면에 들어올 때마다 최신 목록 재로드 (포그라운드에서 onMessage 미수신 시에도 빨간 점/목록 동기화)
+    _scrollController.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _refreshNotifications();
     });
   }
 
-  void _refreshNotifications() {
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    if (pos.pixels < pos.maxScrollExtent - 200) return;
+    final provider = Provider.of<NotificationProvider>(context, listen: false);
+    if (provider.hasMoreNotifications && !provider.isLoadingMore) {
+      provider.loadMoreNotifications();
+    }
+  }
+
+  Future<void> _refreshNotifications({bool clearExisting = true}) async {
     if (!mounted) return;
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
@@ -50,11 +60,12 @@ class _NotificationScreenState extends State<NotificationScreen> {
       final isAdmin = admin != null;
       final userId = isAdmin ? admin.userId : user!.userId;
       final placeId = currentPlace?.id;
-      notificationProvider.loadNotifications(
+      await notificationProvider.loadNotifications(
         userId,
         isAdmin: isAdmin,
         placeId: placeId,
         forceRefresh: true,
+        clearExisting: clearExisting,
       );
     }
   }
@@ -267,9 +278,11 @@ class _NotificationScreenState extends State<NotificationScreen> {
       builder: (context, notificationProvider, _) {
         final notifications = notificationProvider.notifications;
         final isLoading = notificationProvider.isLoading;
+        final hasLoadedOnce = notificationProvider.hasLoadedOnce;
         final error = notificationProvider.error;
         final unreadCount = notificationProvider.unreadCount;
         final authProvider = Provider.of<AuthProvider>(context, listen: false);
+        final showContent = hasLoadedOnce && !isLoading;
         return Scaffold(
           backgroundColor: AppColors.backgroundLight,
           appBar: AppBar(
@@ -320,7 +333,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
               ],
             ),
             actions: [
-              if (notifications.isNotEmpty)
+              if (showContent && notifications.isNotEmpty)
                 TextButton(
                   onPressed: () async {
                     final confirmed = await CommonDialog.show(
@@ -354,45 +367,78 @@ class _NotificationScreenState extends State<NotificationScreen> {
                 ),
             ],
           ),
-          body: RefreshIndicator(
-            onRefresh: () async {
-              _refreshNotifications();
-              await Future.delayed(const Duration(milliseconds: 400));
-            },
-            child: _buildBody(
-              notifications,
-              isLoading,
-              error,
-              notificationProvider,
-            ),
+          body: _buildScrollBody(
+            notifications,
+            isLoading,
+            hasLoadedOnce,
+            notificationProvider.isLoadingMore,
+            notificationProvider.hasMoreNotifications,
+            error,
+            notificationProvider,
           ),
         );
       },
     );
   }
 
-  Widget _buildBody(
+  Widget _buildScrollBody(
     List<AppNotification> notifications,
     bool isLoading,
+    bool hasLoadedOnce,
+    bool isLoadingMore,
+    bool hasMore,
     String? error,
     NotificationProvider provider,
   ) {
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final hasUser = authProvider.currentUser != null;
+    final showInitialLoading =
+        !hasLoadedOnce || (isLoading && notifications.isEmpty);
 
-    if (isLoading && notifications.isEmpty) return _buildShimmerLoading();
-    if (notifications.isEmpty || !hasUser) {
-      return Center(
-        child: Text(
-          '알림이 없습니다',
-          style: TextStyle(
-            fontSize: 16,
-            color: AppColors.textSecondary.withOpacity(0.6),
-          ),
+    return CustomScrollView(
+      controller: _scrollController,
+      physics: const AlwaysScrollableScrollPhysics(
+        parent: BouncingScrollPhysics(),
+      ),
+      slivers: [
+        CupertinoSliverRefreshControl(
+          onRefresh: () => _refreshNotifications(clearExisting: false),
         ),
-      );
-    }
+        if (showInitialLoading)
+          const SliverFillRemaining(
+            hasScrollBody: false,
+            child: Center(child: CupertinoActivityIndicator(radius: 14)),
+          )
+        else if (notifications.isEmpty || !hasUser)
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Center(
+              child: Text(
+                '알림이 없습니다',
+                style: TextStyle(
+                  fontSize: 16,
+                  color: AppColors.textSecondary.withOpacity(0.6),
+                ),
+              ),
+            ),
+          )
+        else
+          ..._buildNotificationSlivers(
+            notifications: notifications,
+            provider: provider,
+            isLoadingMore: isLoadingMore,
+            hasMore: hasMore,
+          ),
+      ],
+    );
+  }
 
+  List<Widget> _buildNotificationSlivers({
+    required List<AppNotification> notifications,
+    required NotificationProvider provider,
+    required bool isLoadingMore,
+    required bool hasMore,
+  }) {
     final todayStart = TimezoneUtils.getSeoulToday();
     final weekStart = todayStart.subtract(const Duration(days: 7));
     final monthStart = todayStart.subtract(const Duration(days: 30));
@@ -420,17 +466,53 @@ class _NotificationScreenState extends State<NotificationScreen> {
           notifications.where((n) => !n.createdAt.isAfter(monthStart)).toList(),
     };
 
-    return ListView(
-      controller: _scrollController,
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      children: [
-        for (final entry in sections.entries)
-          if (entry.value.isNotEmpty) ...[
-            _buildSectionHeader(entry.key),
-            ...entry.value.map((n) => _buildNotificationItem(n, provider)),
-          ],
-      ],
-    );
+    final slivers = <Widget>[
+      const SliverPadding(padding: EdgeInsets.only(top: 8)),
+    ];
+    for (final entry in sections.entries) {
+      if (entry.value.isEmpty) continue;
+      slivers.add(SliverToBoxAdapter(child: _buildSectionHeader(entry.key)));
+      slivers.add(
+        SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (context, index) =>
+                _buildNotificationItem(entry.value[index], provider),
+            childCount: entry.value.length,
+          ),
+        ),
+      );
+    }
+    if (isLoadingMore) {
+      slivers.add(
+        const SliverToBoxAdapter(
+          child: Padding(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Center(
+              child: CupertinoActivityIndicator(radius: 12),
+            ),
+          ),
+        ),
+      );
+    } else if (!hasMore && notifications.isNotEmpty) {
+      slivers.add(
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Center(
+              child: Text(
+                '마지막 알림입니다',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: AppColors.textSecondary.withOpacity(0.5),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    slivers.add(const SliverPadding(padding: EdgeInsets.only(bottom: 8)));
+    return slivers;
   }
 
   Widget _buildSectionHeader(String title) {
@@ -443,99 +525,6 @@ class _NotificationScreenState extends State<NotificationScreen> {
           fontWeight: FontWeight.bold,
           color: AppColors.textPrimary,
         ),
-      ),
-    );
-  }
-
-  Widget _buildShimmerLoading() {
-    return ListView(
-      controller: _scrollController,
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      children: [
-        _buildSectionHeader('오늘'),
-        ...List.generate(5, (index) => _buildShimmerNotificationCard(index)),
-      ],
-    );
-  }
-
-  Widget _buildShimmerNotificationCard(int index) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 프로필 아바타 쉬머
-          Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Shimmer.fromColors(
-                baseColor: AppColors.textSecondary.withOpacity(0.1),
-                highlightColor: AppColors.textSecondary.withOpacity(0.1),
-                period: const Duration(milliseconds: 1200),
-                child: Container(
-                  width: 65,
-                  height: 65,
-                  decoration: const BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(width: 12),
-          // 알림 내용 쉬머
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // 제목 쉬머 (2줄)
-                Shimmer.fromColors(
-                  baseColor: AppColors.textSecondary.withOpacity(0.1),
-                  highlightColor: AppColors.textSecondary.withOpacity(0.1),
-                  period: const Duration(milliseconds: 1200),
-                  child: Container(
-                    width: double.infinity,
-                    height: 20,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Shimmer.fromColors(
-                  baseColor: AppColors.textSecondary.withOpacity(0.1),
-                  highlightColor: AppColors.textSecondary.withOpacity(0.1),
-                  period: const Duration(milliseconds: 1200),
-                  child: Container(
-                    width: 200,
-                    height: 20,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                // 타임스탬프 쉬머
-                Shimmer.fromColors(
-                  baseColor: AppColors.textSecondary.withOpacity(0.1),
-                  highlightColor: AppColors.textSecondary.withOpacity(0.1),
-                  period: const Duration(milliseconds: 1200),
-                  child: Container(
-                    width: 80,
-                    height: 14,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }

@@ -254,9 +254,11 @@ class FirestoreService {
   Future<Map<String, dynamic>> batchCancelReservations({
     required List<String> reservationIds,
     required String placeId,
+    bool asAdminAction = false,
   }) => _reservationService.batchCancelReservations(
     reservationIds: reservationIds,
     placeId: placeId,
+    asAdminAction: asAdminAction,
   );
 
   // ==================== Capacity Overrides ====================
@@ -367,14 +369,28 @@ class FirestoreService {
 
   // ==================== Notifications ====================
 
-  Future<List<AppNotification>> getUserNotifications(
+  Future<({List<AppNotification> items, Object? nextPageCursor})>
+  getUserNotificationsPage(
     String userId, {
     bool isAdmin = false,
-  }) => _notificationService.getUserNotifications(userId, isAdmin: isAdmin);
-  Stream<List<AppNotification>> watchUserNotifications(
+    int limit = NotificationFirestoreService.defaultPageSize,
+    Object? startAfterCursor,
+  }) => _notificationService.getUserNotificationsPage(
+    userId,
+    isAdmin: isAdmin,
+    limit: limit,
+    startAfterCursor: startAfterCursor,
+  );
+
+  Future<int> getUnreadNotificationCount(
     String userId, {
     bool isAdmin = false,
-  }) => _notificationService.watchUserNotifications(userId, isAdmin: isAdmin);
+    String? placeId,
+  }) => _notificationService.getUnreadNotificationCount(
+    userId,
+    isAdmin: isAdmin,
+    placeId: placeId,
+  );
   Future<AppNotification?> getNotificationById(
     String notificationId,
     String userId,

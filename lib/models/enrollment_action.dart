@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../utils/timezone_utils.dart';
+
 /// 관리자가 해당 수강(enrollment)에 대해 수행한 모든 중요 조치의 히스토리.
 /// 법적·감사 목적, 과하지 않은 범위로 기록한다.
 ///
@@ -13,7 +15,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 /// - [EnrollmentActionType.reenroll]: newValue에 새 validFrom, validUntil, totalReservations 등. details에 사유/요약.
 /// - [EnrollmentActionType.cancel]: oldValue에 취소 시점 상태. details에 사유(선택).
 /// - [EnrollmentActionType.reservationMove]: oldValue에 sessionId, fromDate 등, newValue에 toSessionId, toDate 등. details에 "A일 → B일" 요약.
-/// - [EnrollmentActionType.reservationCancel]: oldValue에 sessionId, sessionDate 등. details에 세션 식별 요약.
+/// - [EnrollmentActionType.reservationCreate]: oldValue에 sessionId, sessionDate, dayOfWeek 등. details에 세션 식별 요약.
+/// - [EnrollmentActionType.reservationCancel]: oldValue에 sessionId, sessionDate, cancelledByAdmin 등. details에 세션 식별 요약.
 class EnrollmentAction {
   final String id;
   final EnrollmentActionType actionType;
@@ -59,10 +62,10 @@ class EnrollmentAction {
   }
 
   static DateTime _parsePerformedAt(dynamic value) {
-    if (value == null) return DateTime.now();
+    if (value == null) return DateTime.fromMillisecondsSinceEpoch(0);
     if (value is String) return DateTime.parse(value);
     if (value is Timestamp) return value.toDate();
-    return DateTime.now();
+    return DateTime.fromMillisecondsSinceEpoch(0);
   }
 
   /// 기존 저장값 호환: extendPeriod → periodAdjust, memoUpdated → other
@@ -74,6 +77,95 @@ class EnrollmentAction {
       (e) => e.name == value,
       orElse: () => EnrollmentActionType.other,
     );
+  }
+
+  /// 예약 취소가 관리자에 의해 수행됐는지 (oldValue.cancelledByAdmin)
+  bool get isReservationCancelledByAdmin {
+    if (actionType != EnrollmentActionType.reservationCancel) return false;
+    if (oldValue?['cancelledByAdmin'] == true) return true;
+    final text = details ?? '';
+    return text.contains('관리자 취소');
+  }
+
+  /// 관리자가 대신 예약했는지 (newValue.createdByAdmin)
+  bool get isReservationCreatedByAdmin =>
+      actionType == EnrollmentActionType.reservationCreate &&
+      newValue?['createdByAdmin'] == true;
+
+  /// 타임라인 카드 제목 — 관리자 취소일 때만 (관리자) 표시
+  String get reservationCancelDisplayLabel =>
+      isReservationCancelledByAdmin ? '예약 취소 (관리자)' : '예약 취소';
+
+  /// 타임라인 카드 제목 — 관리자 예약일 때만 (관리자) 표시
+  String get reservationCreateDisplayLabel =>
+      isReservationCreatedByAdmin ? '예약 (관리자)' : '예약';
+
+  String? get reservationId =>
+      oldValue?['reservationId'] as String? ??
+      newValue?['reservationId'] as String?;
+
+  Map<String, dynamic>? get _sessionFields => oldValue ?? newValue;
+
+  int? get reservationDayOfWeek {
+    final raw = _sessionFields?['dayOfWeek'];
+    if (raw is int) return raw;
+    if (raw is num) return raw.toInt();
+    return null;
+  }
+
+  String? get reservationSessionDate =>
+      _sessionFields?['sessionDate'] as String?;
+
+  String? get reservationStartTime => _sessionFields?['startTime'] as String?;
+
+  static const _dayNames = ['', '월', '화', '수', '목', '금', '토', '일'];
+
+  String? get reservationWeekdayLabel {
+    final dow = reservationDayOfWeek;
+    if (dow == null || dow < 1 || dow > 7) return null;
+    return _dayNames[dow];
+  }
+
+  /// UI 「일시」 — 조치 수행 시각 (performedAt)
+  String get performedDateTimeLine =>
+      '일시: ${TimezoneUtils.formatDateTimeToSeoul(performedAt)}';
+
+  /// UI 「일시」 — 예약/취소를 수행한 시각 (performedAt)
+  String get reservationPerformedDateTimeLine => performedDateTimeLine;
+
+  /// UI 「내용」용 — 세션 날짜·요일·시간
+  String get reservationSessionInfoLabel {
+    final sessionDate = reservationSessionDate;
+    final startTime = reservationStartTime;
+    final weekday = reservationWeekdayLabel;
+    if (sessionDate != null && sessionDate.isNotEmpty) {
+      final dateLabel = TimezoneUtils.formatDateStringDisplay(sessionDate);
+      final weekdayPart = weekday != null ? ' ($weekday)' : '';
+      final timePart =
+          startTime != null && startTime.isNotEmpty ? ' $startTime' : '';
+      return '$dateLabel$weekdayPart$timePart 세션';
+    }
+    if (details != null && details!.isNotEmpty) {
+      return TimezoneUtils.formatDetailsDisplay(details);
+    }
+    return '세션';
+  }
+
+  /// UI 「내용」 — details (날짜 포맷 통일)
+  String get detailsDisplayLine {
+    final text = TimezoneUtils.formatDetailsDisplay(details);
+    if (text.isEmpty) return '';
+    return '내용: $text';
+  }
+
+  /// UI 「내용」 — 세션 정보
+  String get reservationCreateContentLine =>
+      '내용: $reservationSessionInfoLabel 예약';
+
+  /// UI 「내용」 — 세션 정보 + 취소 주체
+  String get reservationCancelContentLine {
+    final actor = isReservationCancelledByAdmin ? '관리자 취소' : '본인 취소';
+    return '내용: $reservationSessionInfoLabel · $actor';
   }
 }
 
@@ -93,7 +185,10 @@ enum EnrollmentActionType {
   /// 관리자 권한 예약 이동. oldValue: sessionId, fromDate. newValue: toSessionId, toDate. details: "A일 → B일" 요약.
   reservationMove,
 
-  /// 관리자 권한 예약 취소. oldValue: sessionId, sessionDate. details: 세션 식별 요약.
+  /// 예약 생성. oldValue: sessionId, sessionDate, dayOfWeek. details: 세션 식별 요약.
+  reservationCreate,
+
+  /// 예약 취소. oldValue: sessionId, sessionDate, cancelledByAdmin. details: 세션 식별 요약.
   reservationCancel,
 
   other,
