@@ -4,6 +4,7 @@ import '../theme/app_colors.dart';
 import '../utils/format_utils.dart';
 import '../utils/snackbar_util.dart';
 import '../utils/text_field_decoration_util.dart';
+import 'keyboard_bleed_fill.dart';
 
 /// 전화번호(·선택 시 이름) 직접 입력 공통 바텀시트.
 ///
@@ -178,18 +179,19 @@ class _DirectPhoneInputBottomSheetState
     final mq = MediaQuery.of(context);
     return Padding(
       padding: EdgeInsets.only(bottom: mq.viewInsets.bottom),
-      child: Container(
-        decoration: BoxDecoration(
-          color: AppColors.backgroundWhite,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        padding: EdgeInsets.only(
-          left: 24,
-          right: 24,
-          top: 24,
-          bottom: 24 + mq.padding.bottom,
-        ),
-        child: Form(
+      child: KeyboardBleedFill(
+        child: Container(
+          decoration: BoxDecoration(
+            color: AppColors.backgroundWhite,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          padding: EdgeInsets.only(
+            left: 24,
+            right: 24,
+            top: 24,
+            bottom: 24 + mq.padding.bottom,
+          ),
+          child: Form(
           key: _formKey,
           child: SingleChildScrollView(
             child: Column(
@@ -299,6 +301,7 @@ class _DirectPhoneInputBottomSheetState
             ),
           ),
         ),
+      ),
       ),
     );
   }

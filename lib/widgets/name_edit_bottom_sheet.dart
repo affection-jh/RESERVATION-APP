@@ -7,6 +7,7 @@ import '../theme/app_colors.dart';
 import '../utils/snackbar_util.dart';
 import '../providers/auth_provider.dart';
 import '../services/member_service.dart';
+import 'keyboard_bleed_fill.dart';
 
 /// 이름 변경 바텀시트
 class NameEditBottomSheet extends StatefulWidget {
@@ -133,7 +134,9 @@ class _NameEditBottomSheetState extends State<NameEditBottomSheet> {
       padding: EdgeInsets.only(bottom: viewInsetsBottom),
       child: Container(
         decoration: const BoxDecoration(color: Colors.transparent),
+        clipBehavior: Clip.none,
         child: Stack(
+          clipBehavior: Clip.none,
           children: [
             // 배경 탭 시 닫기
             Positioned.fill(
@@ -145,23 +148,26 @@ class _NameEditBottomSheetState extends State<NameEditBottomSheet> {
             // 바텀시트 컨텐츠
             Align(
               alignment: Alignment.bottomCenter,
-              child: GestureDetector(
-                onTap: () {},
-                child: Container(
-                  constraints: BoxConstraints(
-                    maxHeight: MediaQuery.of(context).size.height * 0.9,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppColors.backgroundWhite,
-                    borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-                  ),
-                  padding: EdgeInsets.only(
-                    left: 24,
-                    right: 24,
-                    top: 12,
-                    bottom: 12 + paddingBottom,
-                  ),
-                child: SingleChildScrollView(
+              child: KeyboardBleedFill(
+                child: GestureDetector(
+                  onTap: () {},
+                  child: Container(
+                    constraints: BoxConstraints(
+                      maxHeight: MediaQuery.of(context).size.height * 0.9,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.backgroundWhite,
+                      borderRadius: BorderRadius.vertical(
+                        top: Radius.circular(20),
+                      ),
+                    ),
+                    padding: EdgeInsets.only(
+                      left: 24,
+                      right: 24,
+                      top: 12,
+                      bottom: 12 + paddingBottom,
+                    ),
+                    child: SingleChildScrollView(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -265,10 +271,11 @@ class _NameEditBottomSheetState extends State<NameEditBottomSheet> {
                 ),
               ),
             ),
-          ),
-        ],
+              ),
+            ),
+          ],
+        ),
       ),
-    ),
     );
   }
 }

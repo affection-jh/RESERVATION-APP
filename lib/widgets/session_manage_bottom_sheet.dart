@@ -3,6 +3,7 @@ import 'package:reservation/utils/snackbar_util.dart';
 import 'package:reservation/utils/text_field_decoration_util.dart';
 import '../models/course.dart';
 import '../theme/app_colors.dart';
+import 'keyboard_bleed_fill.dart';
 
 /// 세션 관리 바텀시트 (수용인원 변경, 세션 취소)
 ///
@@ -61,15 +62,16 @@ class _SessionManageBottomSheetState extends State<SessionManageBottomSheet> {
     final paddingBottom = mq.padding.bottom;
     return Padding(
       padding: EdgeInsets.only(bottom: viewInsetsBottom),
-      child: Container(
-        decoration: BoxDecoration(
-          color: AppColors.backgroundWhite,
-          borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(24),
-            topRight: Radius.circular(24),
+      child: KeyboardBleedFill(
+        child: Container(
+          decoration: BoxDecoration(
+            color: AppColors.backgroundWhite,
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(24),
+              topRight: Radius.circular(24),
+            ),
           ),
-        ),
-        child: SafeArea(
+          child: SafeArea(
           bottom: false,
           child: Padding(
             padding: EdgeInsets.only(bottom: paddingBottom),
@@ -222,7 +224,8 @@ class _SessionManageBottomSheetState extends State<SessionManageBottomSheet> {
           ),
         ),
       ),
-    ),
+        ),
+      ),
     );
   }
 

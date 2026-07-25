@@ -6,6 +6,7 @@ import '../../../models/member_view.dart';
 import '../../../theme/app_colors.dart';
 import '../../../utils/snackbar_util.dart';
 import '../../../utils/navigator_key.dart';
+import '../../../widgets/keyboard_bleed_fill.dart';
 
 /// 오버레이에서 나온 결과
 class MemberCardFocusResult {
@@ -195,8 +196,9 @@ class _MemberCardFocusOverlayBodyState
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
     final keyboard = media.viewInsets.bottom;
+    // 키보드 위 갭(+12)은 iOS 26 라운드 키보드에서 딤이 비쳐 어색하므로 붙임
     final panelBottom =
-        keyboard > 0 ? keyboard + 12 : media.padding.bottom + 24;
+        keyboard > 0 ? keyboard : media.padding.bottom + 24;
     final memoPreview = widget.initialMemo.trim();
 
     return PopScope(
@@ -217,6 +219,7 @@ class _MemberCardFocusOverlayBodyState
             final t = _enterAnim.value;
             final sigma = _blurSigma * t;
             return Stack(
+              clipBehavior: Clip.none,
               children: [
                 // 블러: opacity fade가 아니라 sigma를 올려 부드럽게 등장
                 Positioned.fill(
@@ -381,18 +384,22 @@ class _MemberCardFocusOverlayBodyState
                         },
                         child:
                             _editingMemo
-                                ? _MemoEditorPanel(
+                                ? KeyboardBleedFill(
                                   key: const ValueKey('memo'),
-                                  controller: _memoController,
-                                  focusNode: _memoFocus,
-                                  memberName: widget.member.adminDisplayName,
-                                  phoneLabel:
-                                      widget.member.phoneNumber.trim().isEmpty
-                                          ? null
-                                          : _formatPhone(
-                                            widget.member.phoneNumber,
-                                          ),
-                                  onSave: _saveMemo,
+                                  child: _MemoEditorPanel(
+                                    controller: _memoController,
+                                    focusNode: _memoFocus,
+                                    memberName: widget.member.adminDisplayName,
+                                    phoneLabel:
+                                        widget.member.phoneNumber
+                                                .trim()
+                                                .isEmpty
+                                            ? null
+                                            : _formatPhone(
+                                              widget.member.phoneNumber,
+                                            ),
+                                    onSave: _saveMemo,
+                                  ),
                                 )
                                 : _ActionsPanel(
                                   key: const ValueKey('actions'),

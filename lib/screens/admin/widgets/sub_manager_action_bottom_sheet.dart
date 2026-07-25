@@ -10,6 +10,7 @@ import '../../../widgets/common_dialog.dart';
 import '../../../services/member_service.dart';
 import '../../../providers/member_provider.dart';
 import '../../../utils/navigator_key.dart';
+import '../../../widgets/keyboard_bleed_fill.dart';
 
 /// 코스 편집 화면에서 부매니저 카드 탭 시: 이름 변경 + 부매니저 지정 취소만 제공
 /// 이름 변경은 MemberDetailBottomSheet와 동일하게 인라인 편집(연필 탭 → TextField → 완료 시 저장)
@@ -196,12 +197,13 @@ class _SubManagerActionBottomSheetState
     // 키보드 올라올 때 시트 전체를 viewInsets만큼 위로 밀어 입력란 가림 방지 (member_detail과 동일)
     return Padding(
       padding: EdgeInsets.only(bottom: viewInsetsBottom),
-      child: Container(
-        decoration: BoxDecoration(
-          color: AppColors.backgroundWhite,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: SafeArea(
+      child: KeyboardBleedFill(
+        child: Container(
+          decoration: BoxDecoration(
+            color: AppColors.backgroundWhite,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: SafeArea(
           top: false,
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -322,6 +324,7 @@ class _SubManagerActionBottomSheetState
             ],
           ),
         ),
+      ),
       ),
     );
   }

@@ -9,6 +9,7 @@ import '../../../providers/member_provider.dart';
 import '../../../theme/app_colors.dart';
 import '../../../services/member_service.dart';
 import '../../../utils/snackbar_util.dart';
+import '../../../widgets/keyboard_bleed_fill.dart';
 
 /// 멤버 수정 바텀시트
 class MemberEditBottomSheet extends StatefulWidget {
@@ -64,7 +65,9 @@ class _MemberEditBottomSheetState extends State<MemberEditBottomSheet> {
         final paddingBottom = MediaQuery.of(context).padding.bottom;
         return Container(
           padding: EdgeInsets.only(bottom: bottomInset + paddingBottom),
+          clipBehavior: Clip.none,
           child: Stack(
+            clipBehavior: Clip.none,
             children: [
               Positioned.fill(
                 child: GestureDetector(
@@ -74,26 +77,27 @@ class _MemberEditBottomSheetState extends State<MemberEditBottomSheet> {
               ),
               Align(
                 alignment: Alignment.bottomCenter,
-                child: GestureDetector(
-                  onTap: () {},
-                  child: Container(
-                    constraints: BoxConstraints(
-                      maxHeight: MediaQuery.of(context).size.height * 0.9,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppColors.backgroundWhite,
-                      borderRadius: const BorderRadius.only(
-                        topLeft: Radius.circular(30),
-                        topRight: Radius.circular(30),
+                child: KeyboardBleedFill(
+                  child: GestureDetector(
+                    onTap: () {},
+                    child: Container(
+                      constraints: BoxConstraints(
+                        maxHeight: MediaQuery.of(context).size.height * 0.9,
                       ),
-                    ),
-                    padding: EdgeInsets.only(
-                      left: 24,
-                      right: 24,
-                      top: 32,
-                      bottom: 32 + MediaQuery.of(context).padding.bottom,
-                    ),
-                    child: SingleChildScrollView(
+                      decoration: BoxDecoration(
+                        color: AppColors.backgroundWhite,
+                        borderRadius: const BorderRadius.only(
+                          topLeft: Radius.circular(30),
+                          topRight: Radius.circular(30),
+                        ),
+                      ),
+                      padding: EdgeInsets.only(
+                        left: 24,
+                        right: 24,
+                        top: 32,
+                        bottom: 32 + MediaQuery.of(context).padding.bottom,
+                      ),
+                      child: SingleChildScrollView(
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -479,6 +483,7 @@ class _MemberEditBottomSheetState extends State<MemberEditBottomSheet> {
                     ),
                   ),
                 ),
+              ),
               ),
             ],
           ),

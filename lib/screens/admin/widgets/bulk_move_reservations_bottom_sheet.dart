@@ -16,6 +16,7 @@ import '../../../utils/navigator_key.dart';
 import '../../../utils/text_field_decoration_util.dart';
 import '../../../utils/local_storage_util.dart';
 import '../../../widgets/admin_send_notification_checkbox.dart';
+import '../../../widgets/keyboard_bleed_fill.dart';
 
 /// 예약 이동 바텀시트 (개별/일괄 공통)
 class BulkMoveReservationsBottomSheet extends StatefulWidget {
@@ -152,18 +153,19 @@ class _BulkMoveReservationsBottomSheetState
     final maxHeight = MediaQuery.sizeOf(context).height * 0.88;
     return Padding(
       padding: EdgeInsets.only(bottom: viewInsetsBottom),
-      child: Container(
-        decoration: BoxDecoration(
-          color: AppColors.backgroundWhite,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
-        ),
-        padding: EdgeInsets.only(
-          left: 0,
-          right: 0,
-          top: 32,
-          bottom: 32 + paddingBottom,
-        ),
-        child: ConstrainedBox(
+      child: KeyboardBleedFill(
+        child: Container(
+          decoration: BoxDecoration(
+            color: AppColors.backgroundWhite,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+          ),
+          padding: EdgeInsets.only(
+            left: 0,
+            right: 0,
+            top: 32,
+            bottom: 32 + paddingBottom,
+          ),
+          child: ConstrainedBox(
           constraints: BoxConstraints(maxHeight: maxHeight),
           child: SingleChildScrollView(
             child: Column(
@@ -586,6 +588,7 @@ class _BulkMoveReservationsBottomSheetState
             ),
           ),
         ),
+      ),
       ),
     );
   }

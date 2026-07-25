@@ -5,6 +5,7 @@ import '../../../theme/app_colors.dart';
 import '../../../utils/snackbar_util.dart';
 import '../../../utils/text_field_decoration_util.dart';
 import '../../../models/session_draft.dart';
+import '../../../widgets/keyboard_bleed_fill.dart';
 
 /// 커스텀 체크박스 위젯
 class CustomCheckbox extends StatelessWidget {
@@ -425,13 +426,14 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
 
     return Padding(
       padding: EdgeInsets.only(bottom: viewInsetsBottom),
-      child: Container(
-        constraints: BoxConstraints(maxHeight: maxHeight),
-        decoration: BoxDecoration(
-          color: AppColors.backgroundWhite,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        child: SafeArea(
+      child: KeyboardBleedFill(
+        child: Container(
+          constraints: BoxConstraints(maxHeight: maxHeight),
+          decoration: BoxDecoration(
+            color: AppColors.backgroundWhite,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: SafeArea(
           bottom: false,
           child: SingleChildScrollView(
             child: Column(
@@ -830,7 +832,8 @@ class _SessionEditBottomSheetState extends State<SessionEditBottomSheet> {
           ),
         ),
       ),
-    ),
+        ),
+      ),
     );
   }
 

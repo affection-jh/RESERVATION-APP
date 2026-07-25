@@ -22,6 +22,7 @@ import '../../../services/member_service.dart';
 import '../../../utils/timezone_utils.dart';
 import '../../../utils/date_range_picker_util.dart';
 import '../../../utils/format_utils.dart';
+import '../../../widgets/keyboard_bleed_fill.dart';
 import 'enrollment_detail_screen.dart';
 import 'member_course_enrollment_screen.dart';
 import 'course_edit_screen.dart';
@@ -346,7 +347,9 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 0),
       decoration: const BoxDecoration(color: Colors.transparent),
+      clipBehavior: Clip.none,
       child: Stack(
+        clipBehavior: Clip.none,
         children: [
           // 배경 탭 시 닫기
           Positioned.fill(
@@ -362,26 +365,27 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
               padding: EdgeInsets.only(
                 bottom: MediaQuery.of(context).viewInsets.bottom,
               ),
-              child: GestureDetector(
-                onTap: () {},
-                child: Container(
-                  constraints: BoxConstraints(
-                    maxHeight: MediaQuery.of(context).size.height * 0.9,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppColors.backgroundWhite,
-                    borderRadius: BorderRadius.only(
-                      topLeft: Radius.circular(20),
-                      topRight: Radius.circular(20),
+              child: KeyboardBleedFill(
+                child: GestureDetector(
+                  onTap: () {},
+                  child: Container(
+                    constraints: BoxConstraints(
+                      maxHeight: MediaQuery.of(context).size.height * 0.9,
                     ),
-                  ),
-                  padding: EdgeInsets.only(
-                    left: 20,
-                    right: 24,
-                    top: 24,
-                    bottom: 40 + MediaQuery.of(context).padding.bottom,
-                  ),
-                  child: SingleChildScrollView(
+                    decoration: BoxDecoration(
+                      color: AppColors.backgroundWhite,
+                      borderRadius: BorderRadius.only(
+                        topLeft: Radius.circular(20),
+                        topRight: Radius.circular(20),
+                      ),
+                    ),
+                    padding: EdgeInsets.only(
+                      left: 20,
+                      right: 24,
+                      top: 24,
+                      bottom: 40 + MediaQuery.of(context).padding.bottom,
+                    ),
+                    child: SingleChildScrollView(
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -420,6 +424,7 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                 ),
               ),
             ),
+          ),
           ),
         ],
       ),

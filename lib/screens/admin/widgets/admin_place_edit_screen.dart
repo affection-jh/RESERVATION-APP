@@ -24,6 +24,7 @@ import '../../../utils/firestore_utils.dart';
 import '../../../utils/cloud_functions_util.dart';
 import '../../../utils/navigator_key.dart';
 import '../../../widgets/common_dialog.dart';
+import '../../../widgets/keyboard_bleed_fill.dart';
 import 'place_delete_confirm_screen.dart';
 import 'card_widgets.dart';
 import 'member_selection_side_panel.dart';
@@ -1555,12 +1556,13 @@ class _FullManagerActionBottomSheetState
 
     return Padding(
       padding: EdgeInsets.only(bottom: mq.viewInsets.bottom),
-      child: Container(
-        decoration: BoxDecoration(
-          color: AppColors.backgroundWhite,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: SafeArea(
+      child: KeyboardBleedFill(
+        child: Container(
+          decoration: BoxDecoration(
+            color: AppColors.backgroundWhite,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: SafeArea(
           top: false,
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1693,6 +1695,7 @@ class _FullManagerActionBottomSheetState
             ],
           ),
         ),
+      ),
       ),
     );
   }

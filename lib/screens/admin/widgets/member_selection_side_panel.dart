@@ -19,6 +19,7 @@ import '../../../utils/local_storage_util.dart';
 import '../../../providers/place_provider.dart';
 import '../../../widgets/direct_phone_input_bottom_sheet.dart';
 import '../../../widgets/admin_send_notification_checkbox.dart';
+import '../../../widgets/keyboard_bleed_fill.dart';
 
 /// 멤버 선택 바텀시트 (예약 추가용)
 ///
@@ -388,6 +389,7 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
     return Padding(
       padding: EdgeInsets.only(bottom: viewInsetsBottom),
       child: Stack(
+        clipBehavior: Clip.none,
         alignment: Alignment.bottomCenter,
         children: [
           // 배경 탭 시 닫기
@@ -401,20 +403,22 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
           // 패널: 정석 Column(헤더 | 본문(Expanded) | 푸터), 높이 85% 고정
           Material(
             color: Colors.transparent,
-            child: Container(
-              height: panelHeight,
-              decoration: BoxDecoration(
-                color: AppColors.backgroundWhite,
-                borderRadius: BorderRadius.circular(30),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.max,
-                mainAxisAlignment: MainAxisAlignment.start,
-                children: [
-                  _buildHeader(),
-                  _buildBody(),
-                  _buildFooter(paddingBottom),
-                ],
+            child: KeyboardBleedFill(
+              child: Container(
+                height: panelHeight,
+                decoration: BoxDecoration(
+                  color: AppColors.backgroundWhite,
+                  borderRadius: BorderRadius.circular(30),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.max,
+                  mainAxisAlignment: MainAxisAlignment.start,
+                  children: [
+                    _buildHeader(),
+                    _buildBody(),
+                    _buildFooter(paddingBottom),
+                  ],
+                ),
               ),
             ),
           ),

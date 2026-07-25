@@ -341,12 +341,15 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
 
   Widget _buildBulkActionBar() {
     final count = _selectedReservationIds.length;
+    // 키보드가 올라오면 padding.bottom이 0이 되어 -10이 될 수 있으므로 clamp
+    final bottomPadding =
+        (MediaQuery.of(context).padding.bottom - 10).clamp(0.0, double.infinity);
     return Container(
       padding: EdgeInsets.only(
         left: 20,
         right: 20,
         top: 12,
-        bottom: MediaQuery.of(context).padding.bottom - 10,
+        bottom: bottomPadding,
       ),
       decoration: BoxDecoration(color: AppColors.backgroundWhite),
       child: SafeArea(
