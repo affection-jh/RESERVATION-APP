@@ -24,6 +24,12 @@ class CourseEnrollment {
   //statistic
   final int totalEnrollmentCount;
 
+  /// 코스별 탭에서 비활성 처리 시 true → 해당 코스 목록에서만 숨김
+  final bool isInactive;
+
+  /// 비활성/관리용 메모 (코스 단위)
+  final String? inactiveMemo;
+
   /// 관리자가 이 수강에 대해 한 모든 중요 조치 (횟수조정, 유효기간 조정, 재등록, 수강 취소, 예약 이동/취소 등). 감사·분쟁 대비.
   final List<EnrollmentAction>? actionHistory;
 
@@ -40,6 +46,8 @@ class CourseEnrollment {
     required this.validUntil,
     required this.totalReservations,
     required this.remainingReservations,
+    this.isInactive = false,
+    this.inactiveMemo,
     this.actionHistory,
   });
 
@@ -62,6 +70,9 @@ class CourseEnrollment {
   }
 
   bool get canReserve => isValid && remainingReservations > 0;
+
+  /// 비활성 처리 가능: 유효기간 만료 또는 남은 횟수 0
+  bool get isDeactivatable => isExpired || remainingReservations <= 0;
 
   /// 서울 기준 날짜만 비교: 세션 날짜가 validFrom~validUntil 구간 안인지 (시작일·마감일 포함).
   bool isSessionDateWithinValidity(DateTime sessionDate) {
@@ -107,6 +118,9 @@ class CourseEnrollment {
     String? memo,
     bool clearMemo = false,
     String? adminDisplayName,
+    bool? isInactive,
+    String? inactiveMemo,
+    bool clearInactiveMemo = false,
     List<EnrollmentAction>? actionHistory,
   }) {
     return CourseEnrollment(
@@ -123,6 +137,9 @@ class CourseEnrollment {
       remainingReservations:
           remainingReservations ?? this.remainingReservations,
       adminDisplayName: adminDisplayName ?? this.adminDisplayName,
+      isInactive: isInactive ?? this.isInactive,
+      inactiveMemo:
+          clearInactiveMemo ? null : (inactiveMemo ?? this.inactiveMemo),
       actionHistory: actionHistory ?? this.actionHistory,
     );
   }
@@ -141,6 +158,8 @@ class CourseEnrollment {
       'totalReservations': totalReservations,
       'remainingReservations': remainingReservations,
       'adminDisplayName': adminDisplayName,
+      'isInactive': isInactive,
+      if (inactiveMemo != null) 'inactiveMemo': inactiveMemo,
     };
   }
 
@@ -164,6 +183,8 @@ class CourseEnrollment {
           (json['adminDisplayName'] as String?) ??
           (json['displayName'] as String?) ??
           '',
+      isInactive: json['isInactive'] == true,
+      inactiveMemo: json['inactiveMemo'] as String?,
     );
   }
 

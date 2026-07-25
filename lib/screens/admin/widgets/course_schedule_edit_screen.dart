@@ -13,6 +13,7 @@ import '../../../theme/app_colors.dart';
 import '../../../utils/calendar_utils.dart';
 import '../../../utils/snackbar_util.dart';
 import '../../../utils/timezone_utils.dart';
+import '../../../utils/local_storage_util.dart';
 import '../../../widgets/common_dialog.dart';
 import 'drag_calendar_editor.dart';
 import 'session_edit_bottom_sheet.dart';
@@ -914,10 +915,13 @@ class _CourseScheduleEditScreenState extends State<CourseScheduleEditScreen> {
         return;
       }
 
+      final sendNotification =
+          await StorageService().getAdminReservationSendNotification() ?? true;
       final result = await _firestoreService.batchCancelReservations(
         reservationIds: allReservations.map((r) => r.id).toList(),
         placeId: placeId,
         asAdminAction: true,
+        sendNotification: sendNotification,
       );
 
       final cancelledCount = result['cancelledCount'] as int? ?? 0;

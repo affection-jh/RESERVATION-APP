@@ -10,6 +10,7 @@ import 'widgets/shared_widgets.dart';
 import 'widgets/course_member_list_content.dart';
 import 'widgets/member_edit_bottom_sheet.dart';
 import 'widgets/member_registration_screen.dart';
+import 'widgets/member_card_focus_overlay.dart';
 import '../../../models/course.dart';
 import '../../models/member_view.dart';
 
@@ -40,8 +41,8 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
   bool _courseSelectorCompactByScroll = false;
   double _lastCourseListScrollOffset = 0;
 
-  /// 코스별 탭 진입 시 복원 한 번만 수행 (플레이스별)
-  String? _courseTabRestoredForPlaceId;
+  /// 플레이스별 마지막 탭/칩 복원 1회
+  String? _memberPrefsRestoredForPlaceId;
 
   @override
   void initState() {
@@ -77,7 +78,17 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
         currentPlace.id,
         isSubManagerForPlace: isSubManager,
       );
-      if (isSubManager && memberProvider.selectedTab == 0) {
+
+      // 마지막 탭 + 칩을 prefs→캐시에 올린 뒤 한 번에 적용
+      if (_memberPrefsRestoredForPlaceId != currentPlace.id) {
+        _memberPrefsRestoredForPlaceId = currentPlace.id;
+        final courseIds = courseProvider.courses.map((c) => c.id).toList();
+        await memberProvider.hydrateMemberUiPrefs(
+          currentPlace.id,
+          validCourseIds: courseIds,
+          isSubManager: isSubManager,
+        );
+      } else if (isSubManager && memberProvider.selectedTab == 0) {
         memberProvider.setSelectedTab(1);
       }
     } catch (e) {
@@ -151,7 +162,11 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
     final placeId = placeProvider.currentPlace?.id;
     final isSubManager =
         placeId != null && authProvider.isSubManagerForPlace(placeId);
-    final showCourseTab = memberProvider.selectedTab == 1 || isSubManager;
+    final showCourseTab = memberProvider.selectedTab == 1;
+    final showInactiveTab = memberProvider.selectedTab == 2;
+    // 비활성 탭 코스 패널: 주매니저만 (부매니저는 패널 없음)
+    final showInactiveCoursePanel = showInactiveTab && !isSubManager;
+    final showCourseSelector = showCourseTab || showInactiveCoursePanel;
     final placeMember =
         placeId != null ? authProvider.getPlaceMemberForPlace(placeId) : null;
     final coursesForTab =
@@ -173,21 +188,17 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
       });
     }
 
-    // 코스별 탭 진입 시 선택이 비어 있으면 SharedPreferences 복원 또는 첫 코스 선택 (부매니저는 관리 코스만)
+    // 코스별 탭: 선택이 비어 있으면 캐시로 즉시 복원
     if (showCourseTab &&
         memberProvider.selectedCourseIds.isEmpty &&
-        coursesForTab.isNotEmpty &&
-        placeId != null &&
-        placeId != _courseTabRestoredForPlaceId) {
-      _courseTabRestoredForPlaceId = placeId;
+        coursesForTab.isNotEmpty) {
       final validCourseIds = coursesForTab.map((c) => c.id).toList();
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         final mp = Provider.of<MemberProvider>(context, listen: false);
-        final pid = placeProvider.currentPlace?.id;
-        if (pid == null || validCourseIds.isEmpty) return;
+        if (mp.selectedTab != 1) return;
         if (mp.selectedCourseIds.isNotEmpty) return;
-        await mp.restoreCourseSelectionForCourseTab(pid, validCourseIds);
+        mp.applyCourseTabSelectionFromCache(validCourseIds);
       });
     }
 
@@ -198,16 +209,17 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
         _buildTabs(),
         _buildSearchBar(),
 
-        // 코스 선택 (코스별 탭일 때만, 부매니저는 항상·관리 코스만)
+        // 코스 선택: 코스별 탭, 또는 비활성 탭(주매니저만)
         AnimatedSize(
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeInOut,
           child:
-              showCourseTab
+              showCourseSelector
                   ? _buildCourseSelector(
                     memberProvider,
                     coursesForTab,
                     compactByScroll: _courseSelectorCompactByScroll,
+                    isInactiveTab: showInactiveTab,
                   )
                   : const SizedBox.shrink(),
         ),
@@ -219,8 +231,16 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
                       color: AppColors.primaryGreen,
                     ),
                   )
+                  : showInactiveTab
+                  ? _buildInactiveMemberList(
+                    memberProvider,
+                    coursesForTab,
+                    showCoursePanel: showInactiveCoursePanel,
+                  )
                   : showCourseTab && memberProvider.selectedCourseIds.isNotEmpty
                   ? _buildCourseMemberList(memberProvider, coursesForTab)
+                  : showCourseTab
+                  ? _buildEmptyMemberState(context, '코스를 선택해주세요')
                   : _buildMemberList(memberProvider),
         ),
       ],
@@ -315,7 +335,7 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
     );
   }
 
-  // 탭 (부매니저일 때는 '전체' 탭 숨김, 코스별만 표시)
+  // 탭 (부매니저일 때는 '전체' 탭 숨김)
   Widget _buildTabs() {
     final memberProvider = Provider.of<MemberProvider>(context);
     final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
@@ -324,38 +344,93 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
     final isSubManager =
         placeId != null && authProvider.isSubManagerForPlace(placeId);
 
-    final onCourseTab = memberProvider.selectedTab == 1 || isSubManager;
+    final onCourseTab = memberProvider.selectedTab == 1;
+    final onInactiveTab = memberProvider.selectedTab == 2;
     final hasCourseSelection = memberProvider.selectedCourseIds.isNotEmpty;
+    // 로딩 중 (0)→(N) 깜빡임 방지: 카운트는 로드 완료 후 한 번에 표시
+    final showCounts = !memberProvider.isLoading;
 
     String allTabLabel() {
-      if (onCourseTab) return '전체';
+      if (onCourseTab || onInactiveTab) return '전체';
+      if (!showCounts) return '전체';
       return '전체(${memberProvider.listForAllTab.length})';
     }
 
     String courseTabLabel() {
       if (!hasCourseSelection) return '코스별';
-      // 전체 탭에서는 비활성 코스별 탭에 숫자 미표시
       if (!onCourseTab) return '코스별';
+      if (!showCounts) return '코스별';
       return '코스별(${memberProvider.listForCourseTab.length})';
+    }
+
+    String inactiveTabLabel() {
+      if (!onInactiveTab) return '비활성';
+      if (!showCounts) return '비활성';
+      final courseId =
+          memberProvider.selectedCourseIds.length == 1
+              ? memberProvider.selectedCourseIds.first
+              : null;
+      // 주매니저: 미선택=모든 코스 비활성(전체), 선택=해당 코스 비활성
+      // 부매니저: 비활이 하나라도 있는 멤버
+      final count =
+          memberProvider
+              .listForInactiveTab(
+                courseId: isSubManager ? null : courseId,
+                fullyInactiveOnly: !isSubManager && courseId == null,
+              )
+              .length;
+      return '비활성($count)';
+    }
+
+    final labels =
+        isSubManager
+            ? [courseTabLabel(), inactiveTabLabel()]
+            : [allTabLabel(), courseTabLabel(), inactiveTabLabel()];
+
+    int uiSelectedIndex() {
+      if (isSubManager) {
+        return memberProvider.selectedTab == 2 ? 1 : 0;
+      }
+      return memberProvider.selectedTab.clamp(0, 2);
+    }
+
+    void onUiTabChanged(int index) {
+      final courseProvider = Provider.of<CourseProvider>(context, listen: false);
+      final ids = courseProvider.courses.map((c) => c.id).toList();
+
+      if (isSubManager) {
+        // 0=코스별(1), 1=비활성(2)
+        final nextTab = index == 0 ? 1 : 2;
+        if (nextTab == 1) {
+          memberProvider.applyCourseTabSelectionFromCache(ids, notify: false);
+        }
+        memberProvider.setSelectedTab(nextTab);
+        return;
+      }
+      if (index == 0) {
+        setState(_resetCourseSelectorScrollState);
+      }
+      if (index == 1) {
+        // 코스별: 캐시된 칩을 탭 전환과 한 프레임에 적용
+        setState(_resetCourseSelectorScrollState);
+        memberProvider.applyCourseTabSelectionFromCache(ids, notify: false);
+      }
+      if (index == 2) {
+        // 비활성: 열린 패널 + 캐시된 칩을 탭 전환과 한 프레임에 적용
+        setState(_resetCourseSelectorScrollState);
+        memberProvider.setCourseSelectorExpanded(true);
+        memberProvider.applyInactiveTabSelectionFromCache(ids, notify: false);
+      }
+      memberProvider.setSelectedTab(index);
     }
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
       child: DefaultTapbar(
-        labels:
-            isSubManager
-                ? [courseTabLabel()]
-                : [allTabLabel(), courseTabLabel()],
-        selectedIndex: isSubManager ? 0 : memberProvider.selectedTab,
+        labels: labels,
+        selectedIndex: uiSelectedIndex(),
         onTabChanged:
-            isSubManager
-                ? (_) {}
-                : (index) {
-                  if (index == 0) {
-                    setState(_resetCourseSelectorScrollState);
-                  }
-                  memberProvider.setSelectedTab(index);
-                },
+            isSubManager && labels.length == 1 ? (_) {} : onUiTabChanged,
         showIndicator: false,
         trailing: IconButton(
           icon: Icon(Icons.add_circle, color: AppColors.primaryGreen, size: 34),
@@ -370,6 +445,7 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
     MemberProvider memberProvider,
     List<Course> courses, {
     bool compactByScroll = false,
+    bool isInactiveTab = false,
   }) {
     final selectedCourses =
         courses
@@ -382,9 +458,11 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
     final showCourseChips =
         !compactByScroll && memberProvider.isCourseSelectorExpanded;
     final isSimpleHeader = !showCourseChips;
+    // 비활성 탭: 선택이 없으면 '전체'로 표기
+    final emptyLabel = isInactiveTab ? '전체' : '코스별';
     final headerCourseLabel =
         firstSelectedCourse == null
-            ? '코스별'
+            ? emptyLabel
             : remainingCount > 0
             ? '${firstSelectedCourse.name} 외 $remainingCount'
             : firstSelectedCourse.name;
@@ -466,8 +544,14 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
                         spacing: 8,
                         runSpacing: 8,
                         children: [
+                          if (isInactiveTab)
+                            _buildAllCoursesFilterButton(memberProvider),
                           for (final course in courses)
-                            _buildCourseFilterButton(memberProvider, course),
+                            _buildCourseFilterButton(
+                              memberProvider,
+                              course,
+                              isInactiveTab: isInactiveTab,
+                            ),
                         ],
                       ),
                     )
@@ -478,15 +562,47 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
     );
   }
 
+  // 비활성 탭 전용 '전체' 칩 (선택 해제 = 전체 비활성)
+  Widget _buildAllCoursesFilterButton(MemberProvider memberProvider) {
+    final isSelected = memberProvider.selectedCourseIds.isEmpty;
+    return GestureDetector(
+      onTap: () => memberProvider.selectInactiveCourseFilter(null),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeInOut,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? AppColors.textPrimary : AppColors.backgroundLight,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: AnimatedDefaultTextStyle(
+          duration: const Duration(milliseconds: 200),
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w500,
+            color:
+                isSelected ? AppColors.backgroundWhite : AppColors.textPrimary,
+          ),
+          child: const Text('전체'),
+        ),
+      ),
+    );
+  }
+
   // 코스 필터 버튼 (단일 선택 + SharedPreferences 저장)
   Widget _buildCourseFilterButton(
     MemberProvider memberProvider,
-    Course course,
-  ) {
+    Course course, {
+    bool isInactiveTab = false,
+  }) {
     final isSelected = memberProvider.selectedCourseIds.contains(course.id);
     return GestureDetector(
       onTap: () {
-        memberProvider.selectSingleCourseForCourseTab(course.id);
+        if (isInactiveTab) {
+          memberProvider.selectInactiveCourseFilter(course.id);
+        } else {
+          memberProvider.selectSingleCourseForCourseTab(course.id);
+        }
       },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
@@ -552,6 +668,13 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
                 : '등록된 멤버가 없어요.',
         showEmptyCta: memberProvider.searchQuery.isEmpty,
         onMemberTapped: () {},
+        onMemberLongPressed:
+            (member, rect) => _onMemberLongPress(
+              member: member,
+              cardRect: rect,
+              courseId: selectedCourseId,
+              showCourseDetail: true,
+            ),
         onSortChanged: (v) => memberProvider.setCourseSortBy(v),
         onSortOrderChanged: (v) => memberProvider.setCourseSortAscending(v),
         courseForDirectDetail: course,
@@ -612,6 +735,13 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
               child: MemberCard(
                 member: v,
                 onMemberTapped: () {},
+                onMemberLongPressed:
+                    (rect) => _onMemberLongPress(
+                      member: v,
+                      cardRect: rect,
+                      courseId: null,
+                      showCourseDetail: false,
+                    ),
                 showCourseEnrollmentDetail: false,
               ),
             );
@@ -681,7 +811,17 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
                     horizontal: 16,
                     vertical: 4,
                   ),
-                  child: MemberCard(member: v, onMemberTapped: () {}),
+                  child: MemberCard(
+                    member: v,
+                    onMemberTapped: () {},
+                    onMemberLongPressed:
+                        (rect) => _onMemberLongPress(
+                          member: v,
+                          cardRect: rect,
+                          courseId: null,
+                          showCourseDetail: false,
+                        ),
+                  ),
                 );
               },
             ),
@@ -689,6 +829,226 @@ class _AdminMemberScreenState extends State<AdminMemberScreen> {
         ),
       ],
     );
+  }
+
+  Widget _buildInactiveMemberList(
+    MemberProvider memberProvider,
+    List<Course> courses, {
+    required bool showCoursePanel,
+  }) {
+    // 주매니저: 선택 없음 = '전체'(모든 코스에서 비활성), 선택 = 해당 코스 비활성
+    // 부매니저(패널 없음): 비활이 하나라도 있는 멤버
+    final String? courseId =
+        showCoursePanel && memberProvider.selectedCourseIds.length == 1
+            ? memberProvider.selectedCourseIds.first
+            : null;
+    final fullyInactiveOnly = showCoursePanel && courseId == null;
+
+    final list = memberProvider.listForInactiveTab(
+      courseId: courseId,
+      fullyInactiveOnly: fullyInactiveOnly,
+    );
+    if (list.isEmpty) {
+      if (memberProvider.isSearchLoading) {
+        return const Center(child: CircularProgressIndicator());
+      }
+      return Center(
+        child: _buildEmptyMemberState(
+          context,
+          memberProvider.searchQuery.isNotEmpty
+              ? '검색 결과가 없어요.'
+              : '비활성 멤버가 없어요.',
+        ),
+      );
+    }
+
+    final course =
+        courseId == null
+            ? null
+            : courses.where((c) => c.id == courseId).firstOrNull;
+
+    return NotificationListener<ScrollNotification>(
+      onNotification: (n) {
+        if (showCoursePanel) _onCourseMemberListScroll(n);
+        return false;
+      },
+      child: ListView.builder(
+        padding: const EdgeInsets.symmetric(vertical: 0),
+        itemCount: list.length,
+        itemBuilder: (context, index) {
+          final v = list[index];
+          // 코스 스코프면 enrollment 붙여 코스별과 동일하게 횟수/기간 표시
+          final member =
+              courseId == null
+                  ? v
+                  : v.copyWith(
+                    enrollment: memberProvider.getEnrollmentForUserAndCourse(
+                      v.userId,
+                      courseId,
+                    ),
+                  );
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: MemberCard(
+              member: member,
+              onMemberTapped: () {},
+              showCourseEnrollmentDetail: courseId != null,
+              courseForDirectDetail: course,
+              onMemberLongPressed:
+                  (rect) => _onMemberLongPress(
+                    member: member,
+                    cardRect: rect,
+                    courseId: courseId,
+                    showCourseDetail: courseId != null,
+                    fromInactiveTab: true,
+                  ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _onMemberLongPress({
+    required MemberView member,
+    required Rect cardRect,
+    required String? courseId,
+    required bool showCourseDetail,
+    bool fromInactiveTab = false,
+  }) async {
+    if (member.isPending) {
+      SnackbarUtil.showInfo(context, '가입 대기 멤버는 비활성할 수 없습니다.');
+      return;
+    }
+
+    final memberProvider = Provider.of<MemberProvider>(context, listen: false);
+    final scopedCourseId =
+        (courseId != null && courseId.isNotEmpty) ? courseId : null;
+    final isCourseScope = scopedCourseId != null;
+    final enrollment =
+        isCourseScope
+            ? memberProvider.getEnrollmentForUserAndCourse(
+              member.userId,
+              scopedCourseId,
+            )
+            : null;
+    final initialMemo =
+        isCourseScope
+            ? (enrollment?.inactiveMemo ?? '')
+            : (member.inactiveMemo ?? '');
+
+    final isCurrentlyInactive =
+        isCourseScope
+            ? member.inactiveCourseIds.contains(scopedCourseId)
+            : member.isPlaceInactive ||
+                (fromInactiveTab && member.inactiveCourseIds.isNotEmpty);
+
+    final canDeactivate =
+        isCourseScope
+            ? memberProvider.canDeactivateForCourse(
+              member.userId,
+              scopedCourseId,
+            )
+            : memberProvider.canDeactivateAtPlace(member.userId);
+
+    final result = await MemberCardFocusOverlay.show(
+      context: context,
+      cardRect: cardRect,
+      member: member,
+      showCourseDetail: showCourseDetail,
+      canDeactivate: canDeactivate,
+      isCurrentlyInactive: isCurrentlyInactive,
+      initialMemo: initialMemo,
+    );
+    if (!mounted || result == null) return;
+
+    if (result.isDeactivateOrReactivate) {
+      if (fromInactiveTab && !member.isPlaceInactive) {
+        await _reactivateFromInactiveTab(member);
+      } else {
+        await _toggleInactive(
+          member: member,
+          courseId: scopedCourseId,
+          makeInactive: !isCurrentlyInactive,
+        );
+      }
+      return;
+    }
+
+    if (result.memoText != null) {
+      final ok = await memberProvider.setInactiveMemo(
+        userId: member.userId,
+        memo: result.memoText,
+        courseId: scopedCourseId,
+      );
+      if (!mounted) return;
+      if (ok) {
+        SnackbarUtil.showSuccess(context, '메모를 저장했습니다.');
+      } else {
+        SnackbarUtil.showInfo(context, '메모 저장에 실패했습니다.');
+      }
+    }
+  }
+
+  Future<void> _reactivateFromInactiveTab(MemberView member) async {
+    final memberProvider = Provider.of<MemberProvider>(context, listen: false);
+    if (member.isPlaceInactive) {
+      await _toggleInactive(
+        member: member,
+        courseId: null,
+        makeInactive: false,
+      );
+      return;
+    }
+    var anyOk = false;
+    for (final courseId in member.inactiveCourseIds) {
+      final ok = await memberProvider.setCourseInactive(
+        userId: member.userId,
+        courseId: courseId,
+        isInactive: false,
+      );
+      anyOk = anyOk || ok;
+    }
+    if (!mounted) return;
+    if (anyOk) {
+      SnackbarUtil.showSuccess(context, '활성으로 복구했습니다.');
+    } else {
+      SnackbarUtil.showInfo(context, '처리에 실패했습니다.');
+    }
+  }
+
+  Future<void> _toggleInactive({
+    required MemberView member,
+    required String? courseId,
+    required bool makeInactive,
+  }) async {
+    final memberProvider = Provider.of<MemberProvider>(context, listen: false);
+    final isCourseScope = courseId != null && courseId.isNotEmpty;
+
+    final ok =
+        isCourseScope
+            ? await memberProvider.setCourseInactive(
+              userId: member.userId,
+              courseId: courseId!,
+              isInactive: makeInactive,
+            )
+            : await memberProvider.setPlaceInactive(
+              userId: member.userId,
+              isInactive: makeInactive,
+            );
+
+    if (!mounted) return;
+    if (ok) {
+      SnackbarUtil.showSuccess(
+        context,
+        makeInactive ? '비활성 처리했습니다.' : '활성으로 복구했습니다.',
+      );
+    } else {
+      SnackbarUtil.showInfo(
+        context,
+        makeInactive ? '유효기간·남은 횟수를 확인해주세요.' : '처리에 실패했습니다.',
+      );
+    }
   }
 
   /// 멤버 없음/검색 결과 없음 빈 상태 (member_detail_bottom_sheet CTA 디자인과 동일)

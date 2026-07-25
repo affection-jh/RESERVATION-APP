@@ -25,6 +25,7 @@ import '../../../utils/firestore_utils.dart';
 import '../../../widgets/session_manage_bottom_sheet.dart';
 import '../../../providers/course_provider.dart';
 import '../../../providers/reservation_summary_provider.dart';
+import '../../../utils/local_storage_util.dart';
 import 'enrollment_detail_screen.dart';
 import 'dart:async';
 
@@ -417,15 +418,23 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
   Future<void> _handleBulkCancel() async {
     if (_selectedReservationIds.isEmpty) return;
     final ids = _selectedReservationIds.toList();
-    final confirmed = await CommonDialog.show(
+    final initialSend =
+        await StorageService().getAdminReservationSendNotification() ?? true;
+    if (!mounted) return;
+    final sendNotification = await CommonDialog.showWithNotificationOption(
       context: context,
       title: '일괄 예약 취소',
       message: '선택한 ${ids.length}명의 예약을 취소하시겠습니까?',
       cancelText: '취소',
       confirmText: '확인',
       confirmButtonColor: Colors.red,
+      initialSendNotification: initialSend,
     );
-    if (confirmed != true || !mounted) return;
+    // null = 다이얼로그 취소
+    if (sendNotification == null || !mounted) return;
+    StorageService()
+        .saveAdminReservationSendNotification(sendNotification)
+        .ignore();
 
     setState(() {
       _isBulkCancelling = true;
@@ -437,6 +446,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
         reservationIds: ids,
         placeId: widget.placeId,
         asAdminAction: true,
+        sendNotification: sendNotification,
       );
       ReservationService.throwIfBatchCancelFailed(result);
       if (mounted) {
@@ -597,8 +607,11 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                   reservedCount: reservedCount,
                   existingReservationUserIds:
                       _dateReservations.map((r) => r.userId).toList(),
-                  onMembersSelected: (members) async {
-                    await _addReservationsForUsers(members);
+                  onMembersSelected: (members, {sendNotification = true}) async {
+                    await _addReservationsForUsers(
+                      members,
+                      sendNotification: sendNotification,
+                    );
                   },
                 );
               },
@@ -914,16 +927,22 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     await memberProvider.ensureMembersForUserIds([reservation.userId]);
     if (!mounted) return;
 
+    // 캐시가 아닌 서버 최신 enrollment로 진입 (횟수/유효기간 stale 방지)
     CourseEnrollment? enrollment;
     if (reservation.enrollmentId.isNotEmpty) {
       enrollment = await memberProvider.ensureEnrollmentById(
         reservation.enrollmentId,
+        force: true,
       );
     }
-    enrollment ??= memberProvider.getEnrollmentForUserAndCourse(
-      reservation.userId,
-      widget.course.id,
-    );
+    if (enrollment == null) {
+      await memberProvider.refreshEnrollmentsForUserIds([reservation.userId]);
+      if (!mounted) return;
+      enrollment = memberProvider.getEnrollmentForUserAndCourse(
+        reservation.userId,
+        widget.course.id,
+      );
+    }
     if (enrollment == null) {
       SnackbarUtil.showInfo(context, '이 코스에 등록되지 않은 멤버입니다.');
       return;
@@ -987,7 +1006,10 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     return out;
   }
 
-  Future<void> _addReservationsForUsers(List<MemberView> members) async {
+  Future<void> _addReservationsForUsers(
+    List<MemberView> members, {
+    bool sendNotification = true,
+  }) async {
     if (members.isEmpty) return;
 
     final uniqueMembers = _uniqueMembersByUserId(members);
@@ -1042,6 +1064,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                 )
                 .toList(),
         force: true, // 관리자 추가 시 제한사유 조사 없이 강제 추가
+        sendNotification: sendNotification,
       );
     } on FirebaseFunctionsException catch (e) {
       if (mounted) {

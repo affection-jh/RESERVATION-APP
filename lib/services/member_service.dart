@@ -223,6 +223,80 @@ class MemberService {
     return _enrollmentService.getEnrollmentById(enrollmentId);
   }
 
+  /// 플레이스 단위 멤버 비활성/활성
+  Future<bool> setPlaceMemberInactive({
+    required String placeId,
+    required String userId,
+    required bool isInactive,
+  }) async {
+    if (placeId.isEmpty || userId.isEmpty) return false;
+    try {
+      await _firestore
+          .collection('places')
+          .doc(placeId)
+          .collection('members')
+          .doc(userId)
+          .set({
+            'isInactive': isInactive,
+            'updatedAt': Timestamp.fromDate(TimezoneUtils.getSeoulDateTime()),
+          }, SetOptions(merge: true));
+      return true;
+    } catch (e) {
+      debugPrint('[MemberService] setPlaceMemberInactive error: $e');
+      return false;
+    }
+  }
+
+  /// 플레이스 단위 비활성 메모
+  Future<bool> setPlaceMemberInactiveMemo({
+    required String placeId,
+    required String userId,
+    required String? memo,
+  }) async {
+    if (placeId.isEmpty || userId.isEmpty) return false;
+    try {
+      final trimmed = memo?.trim();
+      await _firestore
+          .collection('places')
+          .doc(placeId)
+          .collection('members')
+          .doc(userId)
+          .set({
+            'inactiveMemo':
+                (trimmed == null || trimmed.isEmpty)
+                    ? FieldValue.delete()
+                    : trimmed,
+            'updatedAt': Timestamp.fromDate(TimezoneUtils.getSeoulDateTime()),
+          }, SetOptions(merge: true));
+      return true;
+    } catch (e) {
+      debugPrint('[MemberService] setPlaceMemberInactiveMemo error: $e');
+      return false;
+    }
+  }
+
+  /// 코스 단위 비활성/활성
+  Future<bool> setEnrollmentInactive({
+    required String enrollmentId,
+    required bool isInactive,
+  }) {
+    return _enrollmentService.setEnrollmentInactive(
+      enrollmentId: enrollmentId,
+      isInactive: isInactive,
+    );
+  }
+
+  /// 코스 단위 비활성 메모
+  Future<bool> setEnrollmentInactiveMemo({
+    required String enrollmentId,
+    required String? memo,
+  }) {
+    return _enrollmentService.setEnrollmentInactiveMemo(
+      enrollmentId: enrollmentId,
+      memo: memo,
+    );
+  }
+
   /// 전화번호 정규화 (숫자만 추출, 82로 시작하면 0으로 변환)
   String _normalizePhone(String phoneNumber) {
     return PhoneUtils.normalizeForStorage(phoneNumber);

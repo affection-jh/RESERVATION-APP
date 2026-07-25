@@ -13,6 +13,7 @@ import '../../../providers/member_provider.dart';
 import '../../../utils/navigator_key.dart';
 import 'package:provider/provider.dart';
 import '../../../utils/timezone_utils.dart';
+import '../../../utils/local_storage_util.dart';
 import 'enrollment_detail_screen.dart';
 
 /// 예약 관리 간단 바텀시트 (예약 취소, 예약 변경 버튼만)
@@ -345,7 +346,7 @@ class SessionReservationManageBottomSheet extends StatelessWidget {
                         ),
                         elevation: 0,
                       ),
-                      child: Text(
+                      child: const Text(
                         '예약 변경',
                         style: TextStyle(
                           fontSize: 16,
@@ -402,7 +403,9 @@ class SessionReservationManageBottomSheet extends StatelessWidget {
         sourceDate.weekday >= 1 && sourceDate.weekday <= 7
             ? dayNames[sourceDate.weekday]
             : '';
-    final confirmed = await CommonDialog.show(
+    final initialSend =
+        await StorageService().getAdminReservationSendNotification() ?? true;
+    final sendNotification = await CommonDialog.showWithNotificationOption(
       context: ctx,
       title: '예약 취소',
       message:
@@ -411,9 +414,13 @@ class SessionReservationManageBottomSheet extends StatelessWidget {
       cancelText: '취소',
       confirmText: '예약 취소',
       confirmButtonColor: Colors.red,
+      initialSendNotification: initialSend,
     );
 
-    if (confirmed != true) return;
+    if (sendNotification == null) return;
+    StorageService()
+        .saveAdminReservationSendNotification(sendNotification)
+        .ignore();
 
     // 취소 시작 알림 (로딩 스피너 표시를 위해)
     onCancelled?.call();
@@ -423,7 +430,11 @@ class SessionReservationManageBottomSheet extends StatelessWidget {
       if (reservation.id.isEmpty) {
         throw Exception('예약 ID가 없습니다.');
       }
-      await rp.cancelReservation(reservation, asAdminAction: true);
+      await rp.cancelReservation(
+        reservation,
+        asAdminAction: true,
+        sendNotification: sendNotification,
+      );
     } catch (e) {
       final errorCtx = navigatorKey.currentContext;
       if (errorCtx != null && errorCtx.mounted) {

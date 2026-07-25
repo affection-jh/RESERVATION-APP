@@ -163,6 +163,7 @@ class _EnrollmentDetailContentState extends State<_EnrollmentDetailContent> {
               const SizedBox(height: 48),
               // 히스토리 (관리자 enrollment_detail과 동일 UI, 일반 유저용)
               _buildTimelineSection(context),
+              const SizedBox(height: 58),
             ],
           ),
         );

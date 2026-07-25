@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 import '../utils/snackbar_util.dart';
+import 'admin_send_notification_checkbox.dart';
 
 /// 일반 확인 다이얼로그
 class CommonDialog extends StatelessWidget {
@@ -74,6 +75,42 @@ class CommonDialog extends StatelessWidget {
             onCancel: onCancel,
             onConfirm: onConfirm,
             confirmButtonColor: confirmButtonColor,
+          ),
+    );
+  }
+
+  /// 확인 다이얼로그 + 「알림 보내기」 체크.
+  ///
+  /// - 취소/닫기: `null`
+  /// - 확인: `sendNotification` 값 (`true`/`false`)
+  static Future<bool?> showWithNotificationOption({
+    required BuildContext context,
+    required String title,
+    required String message,
+    String? secondaryMessage,
+    String cancelText = '취소',
+    String confirmText = '확인',
+    Color? confirmButtonColor,
+    bool initialSendNotification = true,
+    String notificationLabel = '알림 보내기',
+    String notificationOffHint = '알림 없이 취소',
+    String notificationOnHint = '사용자에게 알림',
+  }) {
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder:
+          (context) => _CommonDialogWithNotification(
+            title: title,
+            message: message,
+            secondaryMessage: secondaryMessage,
+            cancelText: cancelText,
+            confirmText: confirmText,
+            confirmButtonColor: confirmButtonColor,
+            initialSendNotification: initialSendNotification,
+            notificationLabel: notificationLabel,
+            notificationOffHint: notificationOffHint,
+            notificationOnHint: notificationOnHint,
           ),
     );
   }
@@ -174,6 +211,168 @@ class CommonDialog extends StatelessWidget {
                     child: Text(
                       confirmText,
                       style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.backgroundWhite,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// [CommonDialog.showWithNotificationOption]용 내부 다이얼로그
+class _CommonDialogWithNotification extends StatefulWidget {
+  final String title;
+  final String message;
+  final String? secondaryMessage;
+  final String cancelText;
+  final String confirmText;
+  final Color? confirmButtonColor;
+  final bool initialSendNotification;
+  final String notificationLabel;
+  final String notificationOffHint;
+  final String notificationOnHint;
+
+  const _CommonDialogWithNotification({
+    required this.title,
+    required this.message,
+    this.secondaryMessage,
+    required this.cancelText,
+    required this.confirmText,
+    this.confirmButtonColor,
+    required this.initialSendNotification,
+    required this.notificationLabel,
+    required this.notificationOffHint,
+    required this.notificationOnHint,
+  });
+
+  @override
+  State<_CommonDialogWithNotification> createState() =>
+      _CommonDialogWithNotificationState();
+}
+
+class _CommonDialogWithNotificationState
+    extends State<_CommonDialogWithNotification> {
+  late bool _sendNotification;
+
+  @override
+  void initState() {
+    super.initState();
+    _sendNotification = widget.initialSendNotification;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 32, 24, 4),
+            child: Text(
+              widget.title,
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: AppColors.textPrimary,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Column(
+              children: [
+                Text(
+                  widget.message,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    color: AppColors.textPrimary,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                if (widget.secondaryMessage != null) ...[
+                  Text(
+                    widget.secondaryMessage!,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      color: AppColors.textSecondary,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 30),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: AdminSendNotificationCheckbox(
+              value: _sendNotification,
+              onChanged: (v) => setState(() => _sendNotification = v),
+              label: widget.notificationLabel,
+              offHint: widget.notificationOffHint,
+              onHint: widget.notificationOnHint,
+            ),
+          ),
+          const SizedBox(height: 24),
+          Row(
+            children: [
+              Expanded(
+                child: InkWell(
+                  onTap: () => Navigator.of(context).pop(),
+                  borderRadius: const BorderRadius.only(
+                    bottomLeft: Radius.circular(20),
+                  ),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    decoration: const BoxDecoration(
+                      color: AppColors.backgroundLight,
+                      borderRadius: BorderRadius.only(
+                        bottomLeft: Radius.circular(20),
+                      ),
+                    ),
+                    child: Text(
+                      widget.cancelText,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+              ),
+              Expanded(
+                child: InkWell(
+                  onTap: () => Navigator.of(context).pop(_sendNotification),
+                  borderRadius: const BorderRadius.only(
+                    bottomRight: Radius.circular(20),
+                  ),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 16,
+                      horizontal: 41,
+                    ),
+                    decoration: BoxDecoration(
+                      color: widget.confirmButtonColor ?? AppColors.textPrimary,
+                      borderRadius: const BorderRadius.only(
+                        bottomRight: Radius.circular(20),
+                      ),
+                    ),
+                    child: Text(
+                      widget.confirmText,
+                      style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
                         color: AppColors.backgroundWhite,

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -13,8 +14,11 @@ import '../../../utils/format_utils.dart';
 import '../../../utils/snackbar_util.dart';
 import '../../../utils/navigator_key.dart';
 import '../../../services/member_service.dart';
+import '../../../services/enrollment_service.dart';
+import '../../../utils/local_storage_util.dart';
 import '../../../providers/place_provider.dart';
 import '../../../widgets/direct_phone_input_bottom_sheet.dart';
+import '../../../widgets/admin_send_notification_checkbox.dart';
 
 /// 멤버 선택 바텀시트 (예약 추가용)
 ///
@@ -22,8 +26,14 @@ import '../../../widgets/direct_phone_input_bottom_sheet.dart';
 /// - totalCapacity, reservedCount: ReservationSummaryProvider (reservationSummary 구독)
 /// - existingReservationUserIds: watchSessionReservations (reservations 구독) → 이미 예약한 유저 제외
 /// - 멤버 목록: MemberProvider (places/{placeId}/members)
+/// - 남은 횟수: enrollments(placeId+courseId) 실시간 구독
 ///
 /// SessionDetailScreen에서 호출. N/M은 reservationSummary, 예약자 목록(누가)은 reservations.
+///
+/// [sendNotification]은 예약 추가(justMemberAdd)에서만 의미가 있다. 그 외 모드는 무시해도 된다.
+typedef MembersSelectedCallback =
+    void Function(List<MemberView> members, {bool sendNotification});
+
 enum MemberSelectionMode {
   /// 예약 추가용 (이미 예약한 유저 제외, 남은 횟수 표시)
   justMemberAdd,
@@ -47,7 +57,7 @@ class MemberSelectionSidePanel extends StatefulWidget {
   final int totalCapacity;
   final int reservedCount;
   final List<String> existingReservationUserIds;
-  final Function(List<MemberView> members) onMembersSelected;
+  final MembersSelectedCallback onMembersSelected;
 
   const MemberSelectionSidePanel({
     super.key,
@@ -69,7 +79,7 @@ class MemberSelectionSidePanel extends StatefulWidget {
     required int totalCapacity,
     required int reservedCount,
     required List<String> existingReservationUserIds,
-    required Function(List<MemberView> members) onMembersSelected,
+    required MembersSelectedCallback onMembersSelected,
   }) {
     showModalBottomSheet(
       context: context,
@@ -97,7 +107,7 @@ class MemberSelectionSidePanel extends StatefulWidget {
     required BuildContext context,
     required String placeId,
     required Course course,
-    required Function(List<MemberView> members) onMembersSelected,
+    required MembersSelectedCallback onMembersSelected,
   }) {
     showModalBottomSheet(
       context: context,
@@ -122,7 +132,7 @@ class MemberSelectionSidePanel extends StatefulWidget {
     required BuildContext context,
     required String placeId,
     required List<String> currentAdminIds,
-    required Function(List<MemberView> members) onMembersSelected,
+    required MembersSelectedCallback onMembersSelected,
   }) {
     showModalBottomSheet(
       context: context,
@@ -150,7 +160,7 @@ class MemberSelectionSidePanel extends StatefulWidget {
     required int totalCapacity,
     required int reservedCount,
     required List<String> existingReservationUserIds,
-    required Function(List<MemberView> members) onMembersSelected,
+    required MembersSelectedCallback onMembersSelected,
   }) {
     showModalBottomSheet(
       context: context,
@@ -183,12 +193,22 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
   String _searchQuery = '';
   Set<String> _selectedUserIds = {};
 
+  /// 코스 enrollment 실시간 구독 (남은 횟수 표시용)
+  StreamSubscription<List<CourseEnrollment>>? _courseEnrollmentsSub;
+  final Map<String, int> _liveRemainingByUserId = {};
+
+  /// 예약 추가 시 예약자에게 알림 전송 여부 (마지막 선택값 로컬 저장)
+  bool _sendReservationNotification = true;
+
   @override
   void initState() {
     super.initState();
     _searchController.addListener(() {
       setState(() => _searchQuery = _searchController.text);
     });
+    if (widget.mode == MemberSelectionMode.justMemberAdd) {
+      _restoreSendNotificationPref();
+    }
     // Provider 업데이트는 빌드 완료 후로 미룸 (setState during build 방지)
     // 부매니저일 때는 코스별 멤버만 구독(전체 멤버 미로드)
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -209,13 +229,40 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
         if (isSubManager) {
           memberProvider.selectSingleCourseForCourseTab(course.id, save: false);
         }
+        _startCourseEnrollmentWatch(course.id);
       }
       memberProvider.setShowPending(true);
     });
   }
 
+  void _startCourseEnrollmentWatch(String courseId) {
+    _courseEnrollmentsSub?.cancel();
+    _courseEnrollmentsSub = EnrollmentService()
+        .watchCourseEnrollments(widget.placeId, courseId)
+        .listen(
+          (list) {
+            if (!mounted) return;
+            setState(() {
+              _liveRemainingByUserId
+                ..clear()
+                ..addEntries(
+                  list.map(
+                    (e) => MapEntry(e.userId, e.remainingReservations),
+                  ),
+                );
+            });
+          },
+          onError: (e) {
+            debugPrint(
+              '[MemberSelectionSidePanel] course enrollments watch error: $e',
+            );
+          },
+        );
+  }
+
   @override
   void dispose() {
+    _courseEnrollmentsSub?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -291,8 +338,33 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
     }).toList();
   }
 
-  /// 코스별 남은 횟수 (MemberProvider.enrollments 단일 소스 — 멤버관리 등과 동일)
+  Future<void> _restoreSendNotificationPref() async {
+    final saved = await StorageService().getAdminReservationSendNotification();
+    if (!mounted || saved == null) return;
+    if (_sendReservationNotification == saved) return;
+    setState(() => _sendReservationNotification = saved);
+  }
+
+  void _setSendReservationNotification(bool value) {
+    if (_sendReservationNotification == value) return;
+    setState(() => _sendReservationNotification = value);
+    StorageService().saveAdminReservationSendNotification(value).ignore();
+  }
+
+  void _emitSelection(List<MemberView> selected) {
+    if (context.mounted) Navigator.of(context).pop();
+    widget.onMembersSelected(
+      selected,
+      sendNotification: _sendReservationNotification,
+    );
+  }
+
+  /// 코스별 남은 횟수 — enrollments(placeId+courseId) 실시간 구독 우선
   int _getRemainingForCourse(MemberView v, List<CourseEnrollment> enrollments) {
+    final live = _liveRemainingByUserId[v.userId];
+    if (live != null) return live;
+
+    // 구독 첫 emit 전 fallback (MemberProvider 캐시)
     final cid = widget.course?.id;
     if (cid == null || cid.isEmpty) return 0;
     final matches =
@@ -574,6 +646,9 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
       builder: (context, memberProvider, _) {
         if (memberProvider.isLoading) return const SizedBox.shrink();
         final displayList = _getDisplayMembers(memberProvider);
+        final isReservationMode =
+            widget.mode == MemberSelectionMode.justMemberAdd;
+        final hasSelection = _selectedUserIds.isNotEmpty;
         return Container(
           width: double.infinity,
           padding: EdgeInsets.fromLTRB(20, 12, 20, 20 + paddingBottom),
@@ -586,84 +661,91 @@ class _MemberSelectionSidePanelState extends State<MemberSelectionSidePanel> {
               ),
             ),
           ),
-          child: SizedBox(
-            width: double.infinity,
-            child: Builder(
-              builder: (context) {
-                final isSubManagerMode =
-                    widget.mode == MemberSelectionMode.forSubManagerAdd;
-                final isFullManagerMode =
-                    widget.mode == MemberSelectionMode.forFullManagerAdd;
-                final hasSelection = _selectedUserIds.isNotEmpty;
-                final String buttonText;
-                final VoidCallback? onPressed;
-                if (isFullManagerMode) {
-                  if (hasSelection) {
-                    buttonText = '추가 (${_selectedUserIds.length}명)';
-                    onPressed = () {
-                      final selected = _selectedMembersFrom(
-                        displayList,
-                        _selectedUserIds,
-                      );
-                      if (context.mounted) Navigator.of(context).pop();
-                      widget.onMembersSelected(selected);
-                    };
-                  } else {
-                    buttonText = '직접 전화번호 입력';
-                    onPressed = () => _showDirectPhoneInputDialog();
-                  }
-                } else if (isSubManagerMode) {
-                  if (hasSelection) {
-                    buttonText = '코스매니저로 추가';
-                    onPressed = () {
-                      final selected = _selectedMembersFrom(
-                        displayList,
-                        _selectedUserIds,
-                      );
-                      if (context.mounted) Navigator.of(context).pop();
-                      widget.onMembersSelected(selected);
-                    };
-                  } else {
-                    buttonText = '직접 전화번호 입력';
-                    onPressed = () => _showDirectPhoneInputDialog();
-                  }
-                } else {
-                  buttonText = '추가하기';
-                  onPressed =
-                      hasSelection
-                          ? () {
-                            final selected = _selectedMembersFrom(
-                              displayList,
-                              _selectedUserIds,
-                            );
-                            if (context.mounted) Navigator.of(context).pop();
-                            widget.onMembersSelected(selected);
-                          }
-                          : null;
-                }
-                return ElevatedButton(
-                  onPressed: onPressed,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primaryGreen,
-                    foregroundColor: Colors.white,
-                    disabledBackgroundColor: AppColors.backgroundLight,
-                    disabledForegroundColor: AppColors.textSecondary,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    elevation: 0,
-                  ),
-                  child: Text(
-                    buttonText,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                );
-              },
-            ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (isReservationMode && hasSelection) ...[
+                AdminSendNotificationCheckbox(
+                  value: _sendReservationNotification,
+                  onChanged: _setSendReservationNotification,
+                  label: '예약 알림 보내기',
+                  offHint: '알림 없이 추가',
+                ),
+                const SizedBox(height: 10),
+              ],
+              SizedBox(
+                width: double.infinity,
+                child: Builder(
+                  builder: (context) {
+                    final isSubManagerMode =
+                        widget.mode == MemberSelectionMode.forSubManagerAdd;
+                    final isFullManagerMode =
+                        widget.mode == MemberSelectionMode.forFullManagerAdd;
+                    final String buttonText;
+                    final VoidCallback? onPressed;
+                    if (isFullManagerMode) {
+                      if (hasSelection) {
+                        buttonText = '추가 (${_selectedUserIds.length}명)';
+                        onPressed = () {
+                          _emitSelection(
+                            _selectedMembersFrom(displayList, _selectedUserIds),
+                          );
+                        };
+                      } else {
+                        buttonText = '직접 전화번호 입력';
+                        onPressed = () => _showDirectPhoneInputDialog();
+                      }
+                    } else if (isSubManagerMode) {
+                      if (hasSelection) {
+                        buttonText = '코스매니저로 추가';
+                        onPressed = () {
+                          _emitSelection(
+                            _selectedMembersFrom(displayList, _selectedUserIds),
+                          );
+                        };
+                      } else {
+                        buttonText = '직접 전화번호 입력';
+                        onPressed = () => _showDirectPhoneInputDialog();
+                      }
+                    } else {
+                      buttonText = '추가하기';
+                      onPressed =
+                          hasSelection
+                              ? () {
+                                _emitSelection(
+                                  _selectedMembersFrom(
+                                    displayList,
+                                    _selectedUserIds,
+                                  ),
+                                );
+                              }
+                              : null;
+                    }
+                    return ElevatedButton(
+                      onPressed: onPressed,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primaryGreen,
+                        foregroundColor: Colors.white,
+                        disabledBackgroundColor: AppColors.backgroundLight,
+                        disabledForegroundColor: AppColors.textSecondary,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        elevation: 0,
+                      ),
+                      child: Text(
+                        buttonText,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
           ),
         );
       },

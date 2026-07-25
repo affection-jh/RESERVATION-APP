@@ -14,6 +14,8 @@ import '../../../utils/week_range_calculator.dart';
 import '../../../utils/timezone_utils.dart';
 import '../../../utils/navigator_key.dart';
 import '../../../utils/text_field_decoration_util.dart';
+import '../../../utils/local_storage_util.dart';
+import '../../../widgets/admin_send_notification_checkbox.dart';
 
 /// 예약 이동 바텀시트 (개별/일괄 공통)
 class BulkMoveReservationsBottomSheet extends StatefulWidget {
@@ -30,6 +32,7 @@ class BulkMoveReservationsBottomSheet extends StatefulWidget {
         (sessionWeekMonday.difference(thisWeekMonday).inDays / 7).round();
     return weekDiff.clamp(0, 9);
   }
+
   final Course course;
   final CourseSession sourceSession;
   final DateTime sourceDate;
@@ -42,6 +45,7 @@ class BulkMoveReservationsBottomSheet extends StatefulWidget {
   final Function()? onAllMovingCompleted; // 모든 이동 완료 시
   /// 스낵바를 붙일 context (화면 쪽 context 권장, null이면 navigatorKey.currentContext 사용)
   final BuildContext? snackbarContext;
+
   /// 진입 시 선택할 주차 오프셋 (sourceDate가 속한 주. null이면 0=이번주)
   final int? initialWeekOffset;
 
@@ -85,6 +89,7 @@ class _BulkMoveReservationsBottomSheetState
   Set<String> _loadingReservationIds = {}; // 이동 중인 예약 ID들
   bool _isMovingInBackground = false; // 백그라운드에서 이동 중인지
   bool get _isSingleReservation => widget.reservations.length == 1;
+  bool _sendNotification = true;
 
   @override
   void initState() {
@@ -94,6 +99,19 @@ class _BulkMoveReservationsBottomSheetState
     final maxOffset = _weekOffset > 2 ? _weekOffset : 2;
     _availableWeekOffsets = List.generate(maxOffset + 1, (i) => i);
     _loadUserData();
+    _restoreSendNotificationPref();
+  }
+
+  Future<void> _restoreSendNotificationPref() async {
+    final saved = await StorageService().getAdminReservationSendNotification();
+    if (!mounted || saved == null || saved == _sendNotification) return;
+    setState(() => _sendNotification = saved);
+  }
+
+  void _setSendNotification(bool value) {
+    if (_sendNotification == value) return;
+    setState(() => _sendNotification = value);
+    StorageService().saveAdminReservationSendNotification(value).ignore();
   }
 
   Future<void> _loadUserData() async {
@@ -145,393 +163,430 @@ class _BulkMoveReservationsBottomSheetState
           top: 32,
           bottom: 32 + paddingBottom,
         ),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: maxHeight),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 12),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxHeight),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 12),
 
-              // 주차 선택 탭바 (기본 3주) + 화살표 토글 버튼
-              WeekTabBar(
-                selectedIndex:
-                    _isUsingCustomWeek
-                        ? -1
-                        : _availableWeekOffsets
-                            .indexOf(_weekOffset)
-                            .clamp(0, _availableWeekOffsets.length - 1),
-                onTabChanged: (index) {
-                  if (index < _availableWeekOffsets.length) {
-                    setState(() {
-                      _weekOffset = _availableWeekOffsets[index];
-                      _isUsingCustomWeek = false;
-                      _customWeekController.clear();
-                      // 주차 변경 시 선택된 세션 초기화
-                      _selectedTargetSession = null;
-                      _selectedTargetDate = null;
-                    });
-                  }
-                },
-                availableWeekOffsets: _availableWeekOffsets,
-                trailing: GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      if (_isCustomWeekExpanded) {
-                        // 닫을 때 이번주로 돌리기
-                        _isCustomWeekExpanded = false;
-                        if (_weekOffset != 0) {
-                          _weekOffset = 0;
-                        }
+                // 주차 선택 탭바 (기본 3주) + 화살표 토글 버튼
+                WeekTabBar(
+                  selectedIndex:
+                      _isUsingCustomWeek
+                          ? -1
+                          : _availableWeekOffsets
+                              .indexOf(_weekOffset)
+                              .clamp(0, _availableWeekOffsets.length - 1),
+                  onTabChanged: (index) {
+                    if (index < _availableWeekOffsets.length) {
+                      setState(() {
+                        _weekOffset = _availableWeekOffsets[index];
                         _isUsingCustomWeek = false;
                         _customWeekController.clear();
+                        // 주차 변경 시 선택된 세션 초기화
                         _selectedTargetSession = null;
                         _selectedTargetDate = null;
-                      } else {
-                        // 열 때
-                        _isCustomWeekExpanded = true;
-                      }
-                    });
+                      });
+                    }
                   },
-                  child: Icon(
-                    _isCustomWeekExpanded
-                        ? Icons.keyboard_arrow_up
-                        : Icons.keyboard_arrow_down,
-                    color: AppColors.textSecondary,
-                    size: 24,
+                  availableWeekOffsets: _availableWeekOffsets,
+                  trailing: GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        if (_isCustomWeekExpanded) {
+                          // 닫을 때 이번주로 돌리기
+                          _isCustomWeekExpanded = false;
+                          if (_weekOffset != 0) {
+                            _weekOffset = 0;
+                          }
+                          _isUsingCustomWeek = false;
+                          _customWeekController.clear();
+                          _selectedTargetSession = null;
+                          _selectedTargetDate = null;
+                        } else {
+                          // 열 때
+                          _isCustomWeekExpanded = true;
+                        }
+                      });
+                    },
+                    child: Icon(
+                      _isCustomWeekExpanded
+                          ? Icons.keyboard_arrow_up
+                          : Icons.keyboard_arrow_down,
+                      color: AppColors.textSecondary,
+                      size: 24,
+                    ),
                   ),
                 ),
-              ),
 
-              // 커스텀 주차 입력 필드 (토글 가능)
-              AnimatedSize(
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeInOut,
-                child:
-                    _isCustomWeekExpanded
-                        ? Padding(
-                          padding: const EdgeInsets.only(top: 12),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 20),
-                            child: Row(
-                              children: [
-                                SizedBox(width: 42),
-                                Text(
-                                  '또는 ',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    color: AppColors.textSecondary,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: TextField(
-                                    controller: _customWeekController,
-                                    keyboardType: TextInputType.number,
-                                    decoration:
-                                        TextFieldDecorationUtil.standardDecoration(
-                                          hintText: '몇 주 후',
-                                          borderRadius: 12,
-                                          contentPadding:
-                                              const EdgeInsets.symmetric(
-                                                horizontal: 12,
-                                                vertical: 10,
-                                              ),
-                                        ),
+                // 커스텀 주차 입력 필드 (토글 가능)
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeInOut,
+                  child:
+                      _isCustomWeekExpanded
+                          ? Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                              ),
+                              child: Row(
+                                children: [
+                                  SizedBox(width: 42),
+                                  Text(
+                                    '또는 ',
                                     style: TextStyle(
                                       fontSize: 16,
-                                      color: AppColors.textPrimary,
-                                      fontWeight: FontWeight.w600,
+                                      color: AppColors.textSecondary,
                                     ),
-                                    onChanged: (value) {
-                                      final weekNum = int.tryParse(value);
-                                      if (weekNum != null) {
-                                        setState(() {
-                                          if (weekNum == 1) {
-                                            // 1 입력 시 다음주로
-                                            _weekOffset = 1;
-                                            _isUsingCustomWeek = false;
-                                          } else if (weekNum == 2) {
-                                            // 2 입력 시 다다음주로
-                                            _weekOffset = 2;
-                                            _isUsingCustomWeek = false;
-                                          } else if (weekNum >= 3) {
-                                            // 3 이상은 커스텀 주차
-                                            _weekOffset = weekNum;
-                                            _isUsingCustomWeek = true;
-                                          }
-                                          // 주차 변경 시 선택된 세션 초기화
-                                          _selectedTargetSession = null;
-                                          _selectedTargetDate = null;
-                                        });
-                                      } else if (value.isEmpty) {
-                                        setState(() {
-                                          _isUsingCustomWeek = false;
-                                          _weekOffset = 0;
-                                          _selectedTargetSession = null;
-                                          _selectedTargetDate = null;
-                                        });
-                                      }
-                                    },
                                   ),
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  '주 후',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    color: AppColors.textSecondary,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        )
-                        : const SizedBox.shrink(),
-              ),
-              const SizedBox(height: 12),
-
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                height: 500,
-                decoration: BoxDecoration(color: AppColors.backgroundWhite),
-                child: Stack(
-                  children: [
-                    ClipRRect(
-                      child: CompactCalendarWidget(
-                        courses: [widget.course],
-                        usage: CompactCalendarUsage.adminSelectNewSlot,
-                        weekOffset: _weekOffset,
-                        availableWeekOffsets: _availableWeekOffsets,
-                        height: 500,
-                        onSwipeToPrevWeek:
-                            _availableWeekOffsets.length > 1
-                                ? () {
-                                  final i = _availableWeekOffsets
-                                      .indexOf(_weekOffset)
-                                      .clamp(
-                                        0,
-                                        _availableWeekOffsets.length - 1,
-                                      );
-                                  if (i > 0) {
-                                    setState(() {
-                                      _weekOffset =
-                                          _availableWeekOffsets[i - 1];
-                                      _selectedTargetSession = null;
-                                      _selectedTargetDate = null;
-                                    });
-                                  }
-                                }
-                                : null,
-                        onSwipeToNextWeek:
-                            _availableWeekOffsets.length > 1
-                                ? () {
-                                  final i = _availableWeekOffsets
-                                      .indexOf(_weekOffset)
-                                      .clamp(
-                                        0,
-                                        _availableWeekOffsets.length - 1,
-                                      );
-                                  if (i < _availableWeekOffsets.length - 1) {
-                                    setState(() {
-                                      _weekOffset =
-                                          _availableWeekOffsets[i + 1];
-                                      _selectedTargetSession = null;
-                                      _selectedTargetDate = null;
-                                    });
-                                  }
-                                }
-                                : null,
-                        onSessionTap: (course, session, date) async {
-                          // 정확히 같은 세션(요일+시간+날짜)으로는 이동 불가
-                          if (session.dayOfWeek ==
-                                  widget.sourceSession.dayOfWeek &&
-                              session.startTime ==
-                                  widget.sourceSession.startTime &&
-                              date.year == widget.sourceDate.year &&
-                              date.month == widget.sourceDate.month &&
-                              date.day == widget.sourceDate.day) {
-                            return false;
-                          }
-
-                          // 지나간 세션인지 확인
-                          final now = TimezoneUtils.getSeoulDateTime();
-                          final sessionDateTime =
-                              TimezoneUtils.combineDateAndTimeSeoul(
-                                date,
-                                session.startTime,
-                              );
-                          final isPastSession = sessionDateTime.isBefore(now);
-
-                          if (isPastSession) {
-                            SnackbarUtil.showInfo(
-                              widget.snackbarContext ?? context,
-                              '지나간 세션으로는 이동할 수 없습니다.',
-                            );
-                            return false;
-                          }
-
-                          // 관리자 이동: 정원 마감 여부와 관계없이 선택 허용 (다이얼로그 없음)
-                          setState(() {
-                            // 같은 세션이면 선택 해제
-                            if (_selectedTargetSession != null &&
-                                _selectedTargetDate != null &&
-                                _selectedTargetSession!.dayOfWeek ==
-                                    session.dayOfWeek &&
-                                _selectedTargetSession!.startTime ==
-                                    session.startTime &&
-                                _selectedTargetDate!.year == date.year &&
-                                _selectedTargetDate!.month == date.month &&
-                                _selectedTargetDate!.day == date.day) {
-                              _selectedTargetSession = null;
-                              _selectedTargetDate = null;
-                            } else {
-                              _selectedTargetSession = session;
-                              _selectedTargetDate = date;
-                            }
-                          });
-                          return true;
-                        },
-                        hideCourseSelector: true,
-                        adminSelectionMode: true,
-                        currentReservationDayOfWeek:
-                            widget.sourceSession.dayOfWeek,
-                        currentReservationStartTime:
-                            widget.sourceSession.startTime,
-                        currentReservationDate: widget.sourceDate,
-                        selectedSessionDayOfWeek:
-                            _selectedTargetSession?.dayOfWeek,
-                        selectedSessionStartTime:
-                            _selectedTargetSession?.startTime,
-                        selectedSessionDate: _selectedTargetDate,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              AnimatedSize(
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeInOut,
-                child:
-                    _selectedTargetSession != null &&
-                            _selectedTargetDate != null
-                        ? Padding(
-                          padding: const EdgeInsets.only(top: 16),
-                          child: _buildSessionInfo(
-                            _selectedTargetSession!,
-                            _selectedTargetDate!,
-                            isSource: false,
-                          ),
-                        )
-                        : const SizedBox.shrink(),
-              ),
-              const SizedBox(height: 12),
-              // 액션 버튼들
-              if (_isSingleReservation) ...[
-                // 개별 예약: 변경 버튼만
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed:
-                          (_isMoving ||
-                                  _selectedTargetSession == null ||
-                                  _selectedTargetDate == null)
-                              ? null
-                              : _moveAllReservations,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primaryGreen,
-                        foregroundColor: Colors.white,
-                        disabledBackgroundColor: AppColors.backgroundLight,
-                        disabledForegroundColor: AppColors.textSecondary,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        elevation: 0,
-                      ),
-                      child:
-                          _isMoving
-                              ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                    AppColors.primaryGreen,
-                                  ),
-                                ),
-                              )
-                              : Text(
-                                _getMoveButtonText(),
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                    ),
-                  ),
-                ),
-              ] else ...[
-                // 일괄 이동 버튼
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed:
-                          (_isMoving ||
-                                  _selectedTargetSession == null ||
-                                  _selectedTargetDate == null)
-                              ? null
-                              : _moveAllReservations,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primaryGreen,
-                        foregroundColor: Colors.white,
-                        disabledBackgroundColor: AppColors.backgroundLight,
-                        disabledForegroundColor: AppColors.textSecondary,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        elevation: 0,
-                      ),
-                      child:
-                          _isMoving
-                              ? Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  const SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      valueColor: AlwaysStoppedAnimation<Color>(
-                                        AppColors.primaryGreen,
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: TextField(
+                                      controller: _customWeekController,
+                                      keyboardType: TextInputType.number,
+                                      decoration:
+                                          TextFieldDecorationUtil.standardDecoration(
+                                            hintText: '몇 주 후',
+                                            borderRadius: 12,
+                                            contentPadding:
+                                                const EdgeInsets.symmetric(
+                                                  horizontal: 12,
+                                                  vertical: 10,
+                                                ),
+                                          ),
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        color: AppColors.textPrimary,
+                                        fontWeight: FontWeight.w600,
                                       ),
+                                      onChanged: (value) {
+                                        final weekNum = int.tryParse(value);
+                                        if (weekNum != null) {
+                                          setState(() {
+                                            if (weekNum == 1) {
+                                              // 1 입력 시 다음주로
+                                              _weekOffset = 1;
+                                              _isUsingCustomWeek = false;
+                                            } else if (weekNum == 2) {
+                                              // 2 입력 시 다다음주로
+                                              _weekOffset = 2;
+                                              _isUsingCustomWeek = false;
+                                            } else if (weekNum >= 3) {
+                                              // 3 이상은 커스텀 주차
+                                              _weekOffset = weekNum;
+                                              _isUsingCustomWeek = true;
+                                            }
+                                            // 주차 변경 시 선택된 세션 초기화
+                                            _selectedTargetSession = null;
+                                            _selectedTargetDate = null;
+                                          });
+                                        } else if (value.isEmpty) {
+                                          setState(() {
+                                            _isUsingCustomWeek = false;
+                                            _weekOffset = 0;
+                                            _selectedTargetSession = null;
+                                            _selectedTargetDate = null;
+                                          });
+                                        }
+                                      },
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    '주 후',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      color: AppColors.textSecondary,
                                     ),
                                   ),
                                 ],
-                              )
-                              : Text(
-                                '${widget.reservations.length}명 일괄 이동',
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                ),
                               ),
-                    ),
+                            ),
+                          )
+                          : const SizedBox.shrink(),
+                ),
+                const SizedBox(height: 12),
+
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  height: 450,
+                  decoration: BoxDecoration(color: AppColors.backgroundWhite),
+                  child: Stack(
+                    children: [
+                      ClipRRect(
+                        child: CompactCalendarWidget(
+                          courses: [widget.course],
+                          usage: CompactCalendarUsage.adminSelectNewSlot,
+                          weekOffset: _weekOffset,
+                          availableWeekOffsets: _availableWeekOffsets,
+                          height: 500,
+                          onSwipeToPrevWeek:
+                              _availableWeekOffsets.length > 1
+                                  ? () {
+                                    final i = _availableWeekOffsets
+                                        .indexOf(_weekOffset)
+                                        .clamp(
+                                          0,
+                                          _availableWeekOffsets.length - 1,
+                                        );
+                                    if (i > 0) {
+                                      setState(() {
+                                        _weekOffset =
+                                            _availableWeekOffsets[i - 1];
+                                        _selectedTargetSession = null;
+                                        _selectedTargetDate = null;
+                                      });
+                                    }
+                                  }
+                                  : null,
+                          onSwipeToNextWeek:
+                              _availableWeekOffsets.length > 1
+                                  ? () {
+                                    final i = _availableWeekOffsets
+                                        .indexOf(_weekOffset)
+                                        .clamp(
+                                          0,
+                                          _availableWeekOffsets.length - 1,
+                                        );
+                                    if (i < _availableWeekOffsets.length - 1) {
+                                      setState(() {
+                                        _weekOffset =
+                                            _availableWeekOffsets[i + 1];
+                                        _selectedTargetSession = null;
+                                        _selectedTargetDate = null;
+                                      });
+                                    }
+                                  }
+                                  : null,
+                          onSessionTap: (course, session, date) async {
+                            // 정확히 같은 세션(요일+시간+날짜)으로는 이동 불가
+                            if (session.dayOfWeek ==
+                                    widget.sourceSession.dayOfWeek &&
+                                session.startTime ==
+                                    widget.sourceSession.startTime &&
+                                date.year == widget.sourceDate.year &&
+                                date.month == widget.sourceDate.month &&
+                                date.day == widget.sourceDate.day) {
+                              return false;
+                            }
+
+                            // 지나간 세션인지 확인
+                            final now = TimezoneUtils.getSeoulDateTime();
+                            final sessionDateTime =
+                                TimezoneUtils.combineDateAndTimeSeoul(
+                                  date,
+                                  session.startTime,
+                                );
+                            final isPastSession = sessionDateTime.isBefore(now);
+
+                            if (isPastSession) {
+                              SnackbarUtil.showInfo(
+                                widget.snackbarContext ?? context,
+                                '지나간 세션으로는 이동할 수 없습니다.',
+                              );
+                              return false;
+                            }
+
+                            // 관리자 이동: 정원 마감 여부와 관계없이 선택 허용 (다이얼로그 없음)
+                            setState(() {
+                              // 같은 세션이면 선택 해제
+                              if (_selectedTargetSession != null &&
+                                  _selectedTargetDate != null &&
+                                  _selectedTargetSession!.dayOfWeek ==
+                                      session.dayOfWeek &&
+                                  _selectedTargetSession!.startTime ==
+                                      session.startTime &&
+                                  _selectedTargetDate!.year == date.year &&
+                                  _selectedTargetDate!.month == date.month &&
+                                  _selectedTargetDate!.day == date.day) {
+                                _selectedTargetSession = null;
+                                _selectedTargetDate = null;
+                              } else {
+                                _selectedTargetSession = session;
+                                _selectedTargetDate = date;
+                              }
+                            });
+                            return true;
+                          },
+                          hideCourseSelector: true,
+                          adminSelectionMode: true,
+                          currentReservationDayOfWeek:
+                              widget.sourceSession.dayOfWeek,
+                          currentReservationStartTime:
+                              widget.sourceSession.startTime,
+                          currentReservationDate: widget.sourceDate,
+                          selectedSessionDayOfWeek:
+                              _selectedTargetSession?.dayOfWeek,
+                          selectedSessionStartTime:
+                              _selectedTargetSession?.startTime,
+                          selectedSessionDate: _selectedTargetDate,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
+
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeInOut,
+                  child:
+                      _selectedTargetSession != null &&
+                              _selectedTargetDate != null
+                          ? Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: _buildSessionInfo(
+                              _selectedTargetSession!,
+                              _selectedTargetDate!,
+                              isSource: false,
+                            ),
+                          )
+                          : const SizedBox.shrink(),
+                ),
+                const SizedBox(height: 12),
+                // 액션 버튼들
+                if (_isSingleReservation) ...[
+                  // 개별 예약: 변경 버튼만
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (_selectedTargetSession != null &&
+                            _selectedTargetDate != null) ...[
+                          AdminSendNotificationCheckbox(
+                            value: _sendNotification,
+                            onChanged: _setSendNotification,
+                            label: '변경 알림 보내기',
+                            offHint: '알림 없이 변경',
+                          ),
+                          const SizedBox(height: 10),
+                        ],
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed:
+                                (_isMoving ||
+                                        _selectedTargetSession == null ||
+                                        _selectedTargetDate == null)
+                                    ? null
+                                    : _moveAllReservations,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primaryGreen,
+                              foregroundColor: Colors.white,
+                              disabledBackgroundColor:
+                                  AppColors.backgroundLight,
+                              disabledForegroundColor: AppColors.textSecondary,
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              elevation: 0,
+                            ),
+                            child:
+                                _isMoving
+                                    ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        valueColor:
+                                            AlwaysStoppedAnimation<Color>(
+                                              AppColors.primaryGreen,
+                                            ),
+                                      ),
+                                    )
+                                    : Text(
+                                      _getMoveButtonText(),
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ] else ...[
+                  // 일괄 이동 버튼
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (_selectedTargetSession != null &&
+                            _selectedTargetDate != null) ...[
+                          AdminSendNotificationCheckbox(
+                            value: _sendNotification,
+                            onChanged: _setSendNotification,
+                            label: '변경 알림 보내기',
+                            offHint: '알림 없이 이동',
+                          ),
+                          const SizedBox(height: 10),
+                        ],
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed:
+                                (_isMoving ||
+                                        _selectedTargetSession == null ||
+                                        _selectedTargetDate == null)
+                                    ? null
+                                    : _moveAllReservations,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primaryGreen,
+                              foregroundColor: Colors.white,
+                              disabledBackgroundColor:
+                                  AppColors.backgroundLight,
+                              disabledForegroundColor: AppColors.textSecondary,
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              elevation: 0,
+                            ),
+                            child:
+                                _isMoving
+                                    ? Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        const SizedBox(
+                                          width: 20,
+                                          height: 20,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            valueColor:
+                                                AlwaysStoppedAnimation<Color>(
+                                                  AppColors.primaryGreen,
+                                                ),
+                                          ),
+                                        ),
+                                      ],
+                                    )
+                                    : Text(
+                                      '${widget.reservations.length}명 일괄 이동',
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
-    ),
     );
   }
 
@@ -738,6 +793,7 @@ class _BulkMoveReservationsBottomSheetState
         newDayOfWeek: targetSession.dayOfWeek,
         newStartTime: targetSession.startTime,
         newReservedDate: targetDate,
+        sendNotification: _sendNotification,
       );
 
       // 서버에서 정상 응답을 받은 시점에 성공으로 간주 (이후 UI 예외는 실패 스낵바 미표시)

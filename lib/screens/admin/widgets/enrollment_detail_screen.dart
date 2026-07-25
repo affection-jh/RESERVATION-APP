@@ -26,6 +26,7 @@ import '../../../utils/format_utils.dart';
 import '../../../utils/date_range_picker_util.dart';
 import '../../../utils/enrollment_valid_until_util.dart';
 import '../../../utils/firestore_utils.dart';
+import '../../../utils/local_storage_util.dart';
 import '../../../widgets/defualt_tapbar.dart';
 import '../../../widgets/valid_period_input_widget.dart';
 import '../../../widgets/reservations_input_widget.dart';
@@ -98,9 +99,12 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
   bool _isReenrolling = false; // 재등록용
   bool _leaveRequested = false;
   bool _isDetailExpanded = false; // 자세히 보기 펼침 상태
+  /// 변경 알림 보내기 (기본 ON). 야간 작업 시 끌 수 있음.
+  bool _sendChangeNotification = true;
   String? _selectedTimelineFilter; // 타임라인 필터 (null이면 전체)
   int _timelineDisplayLimit = 20; // 타임라인 표시 개수 제한
   bool _enrollmentSubscriptionStarted = false;
+  EnrollmentProvider? _syncEnrollmentProvider; // 입력칸 동기화용 리스너 대상
 
   // 타임라인 프로바이더가 관리 (loadTimelineOnce / invalidate)
 
@@ -120,7 +124,70 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         userId: widget.member.userId,
         placeId: widget.enrollment.placeId,
       );
+      // 구독(EnrollmentProvider)이 최신값을 emit하면 "남은 횟수 조정" 입력칸도 동기화.
+      // 진입 시 넘어온 스냅샷이 stale이어도 실시간 값으로 교정된다.
+      _syncEnrollmentProvider = enrollmentProvider;
+      enrollmentProvider.addListener(_syncEnrollmentFieldsFromProvider);
+      // 초기 호출은 build 단계(didChangeDependencies) 중이므로 setState를 건너뜀
+      // (직후 build가 이어지므로 값만 반영해도 화면에 나타난다)
+      _syncEnrollmentFieldsFromProvider(false);
     }
+  }
+
+  /// 구독된 최신 enrollment로 횟수/유효기간 입력 상태를 맞춘다.
+  /// 단, 사용자가 해당 필드를 직접 수정했거나 저장 중이면 덮어쓰지 않는다.
+  void _syncEnrollmentFieldsFromProvider([bool allowSetState = true]) {
+    if (!mounted || _isSaving) return;
+    final provider = _syncEnrollmentProvider;
+    if (provider == null) return;
+
+    final matches =
+        provider.enrollments
+            .where((e) => e.id == widget.enrollment.id)
+            .toList();
+    if (matches.isEmpty) return;
+
+    final latest = matches.first;
+    var changed = false;
+
+    // 횟수 조정
+    final latestRemaining = latest.remainingReservations;
+    if (latestRemaining != _originalRemainingReservations) {
+      final userEditedRemaining =
+          _remainingReservationsController.text !=
+          _originalRemainingReservations.toString();
+      _originalRemainingReservations = latestRemaining;
+      if (!userEditedRemaining) {
+        _remainingReservationsController.text = latestRemaining.toString();
+      }
+      changed = true;
+    }
+
+    // 기간 조정 (사용자가 아직 손대지 않은 경우에만)
+    final latestUntil = latest.validUntil;
+    final latestUntilDate = EnrollmentValidUntilUtil.toSeoulDateOnly(
+      latestUntil,
+    );
+    final originalUntilDate = EnrollmentValidUntilUtil.toSeoulDateOnly(
+      _originalValidUntil,
+    );
+    if (latestUntilDate != originalUntilDate) {
+      final currentUntilDate = EnrollmentValidUntilUtil.toSeoulDateOnly(
+        _extendedValidUntil,
+      );
+      final userEditedPeriod =
+          currentUntilDate != originalUntilDate || _extensionPeriodValue != 0;
+      _originalValidUntil = latestUntil;
+      _extensionBaseValidUntil = latestUntilDate;
+      if (!userEditedPeriod) {
+        _extendedValidUntil = _clampValidUntil(latestUntilDate);
+        _extensionPeriodValue = 0;
+        _extensionPeriodController.text = '0';
+      }
+      changed = true;
+    }
+
+    if (changed && allowSetState) setState(() {});
   }
 
   @override
@@ -146,6 +213,9 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
       }
       setState(() {}); // 탭 변경 시 UI 업데이트
     });
+
+    // 마지막 사용한 변경 알림 여부 복원
+    unawaited(_restoreSendChangeNotificationPref());
 
     // 탭 1: 횟수 조정 초기화
     _originalRemainingReservations = widget.enrollment.remainingReservations;
@@ -277,6 +347,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
 
   @override
   void dispose() {
+    _syncEnrollmentProvider?.removeListener(_syncEnrollmentFieldsFromProvider);
     _tabController.dispose();
     _remainingReservationsController.dispose();
     _extensionPeriodController.dispose();
@@ -361,11 +432,11 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           _originalRemainingReservations = remaining;
         });
 
-        final memberProvider = Provider.of<MemberProvider>(
+        // setPlaceId는 같은 placeId면 no-op → pendingMembers를 직접 다시 읽는다
+        await Provider.of<MemberProvider>(
           context,
           listen: false,
-        );
-        memberProvider.setPlaceId(placeId);
+        ).refreshPendingMembers();
         // 나갔어도 로딩 스낵바를 닫고 결과 표시
         final resultCtxPending = _snackbarContext();
         if (resultCtxPending != null) {
@@ -400,6 +471,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
               'remainingReservations': remaining,
               'totalReservations': newTotal,
             },
+            sendNotification: _sendChangeNotification,
           ),
         );
 
@@ -409,17 +481,17 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         });
         _invalidateTimelineAndReloadIfExpanded();
 
-        final placeProvider = Provider.of<PlaceProvider>(
+        // setPlaceId는 같은 placeId면 no-op → 이 유저의 enrollment만 서버에서 갱신
+        // (사이드 패널·멤버 목록의 남은 횟수/유효기간 정합성 유지)
+        final mpForRemaining = Provider.of<MemberProvider>(
           context,
           listen: false,
         );
-        final placeIdForRefresh = placeProvider.currentPlace?.id;
-        if (placeIdForRefresh != null) {
-          Provider.of<MemberProvider>(
-            context,
-            listen: false,
-          ).setPlaceId(placeIdForRefresh);
-        }
+        await mpForRemaining.refreshEnrollmentsForUserIds([
+          widget.enrollment.userId,
+        ]);
+        // 횟수가 회복되면 비활성 자동 해제
+        await mpForRemaining.reconcileInactiveForUser(widget.enrollment.userId);
 
         // 나갔어도 로딩 스낵바를 닫고 결과 표시
         final resultCtx = _snackbarContext();
@@ -618,7 +690,10 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           _updateExtensionValidUntil();
         });
 
-        Provider.of<MemberProvider>(context, listen: false).setPlaceId(placeId);
+        await Provider.of<MemberProvider>(
+          context,
+          listen: false,
+        ).refreshPendingMembers();
         // 나갔어도 로딩 스낵바를 닫고 결과 표시
         final resultCtxPendingPeriod = _snackbarContext();
         if (resultCtxPendingPeriod != null) {
@@ -644,6 +719,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                 '유효기간 ${TimezoneUtils.formatDateDisplayToSeoul(_originalValidUntil)} → ${TimezoneUtils.formatDateDisplayToSeoul(_extendedValidUntil)}',
             oldValue: {'validUntil': _originalValidUntil.toIso8601String()},
             newValue: {'validUntil': _extendedValidUntil.toIso8601String()},
+            sendNotification: _sendChangeNotification,
           ),
         );
 
@@ -659,17 +735,14 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         });
         _invalidateTimelineAndReloadIfExpanded();
 
-        final placeProvider = Provider.of<PlaceProvider>(
-          context,
-          listen: false,
-        );
-        final placeIdForRefresh = placeProvider.currentPlace?.id;
-        if (placeIdForRefresh != null) {
-          Provider.of<MemberProvider>(
-            context,
-            listen: false,
-          ).setPlaceId(placeIdForRefresh);
-        }
+        // setPlaceId는 같은 placeId면 no-op → 이 유저의 enrollment만 서버에서 갱신
+        // (사이드 패널·멤버 목록의 남은 횟수/유효기간 정합성 유지)
+        final mpForPeriod = Provider.of<MemberProvider>(context, listen: false);
+        await mpForPeriod.refreshEnrollmentsForUserIds([
+          widget.enrollment.userId,
+        ]);
+        // 유효기간이 연장되면 비활성 자동 해제
+        await mpForPeriod.reconcileInactiveForUser(widget.enrollment.userId);
 
         final resultCtxPeriod = _snackbarContext();
         if (resultCtxPeriod != null) {
@@ -834,7 +907,10 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         );
         if (!success) throw Exception('pendingMembers 업데이트 실패');
 
-        Provider.of<MemberProvider>(context, listen: false).setPlaceId(placeId);
+        await Provider.of<MemberProvider>(
+          context,
+          listen: false,
+        ).refreshPendingMembers();
 
         if (_leaveRequested) return;
         // 완료 후 화면 닫기
@@ -901,6 +977,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                 performedAt: now,
                 performedBy: 'admin', // TODO: 실제 admin ID로 변경
                 details: '재등록 처리 완료',
+                sendNotification: _sendChangeNotification,
               ),
             );
             _invalidateTimelineAndReloadIfExpanded();
@@ -916,7 +993,19 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           courseId: widget.course.id,
         );
 
-        Provider.of<MemberProvider>(context, listen: false).setPlaceId(placeId);
+        // enrollment 생성 + pending 코스 제거가 함께 일어남 → 둘 다 갱신
+        final memberProviderForRefresh = Provider.of<MemberProvider>(
+          context,
+          listen: false,
+        );
+        await memberProviderForRefresh.refreshEnrollmentsForUserIds([
+          widget.member.userId,
+        ]);
+        await memberProviderForRefresh.refreshPendingMembers();
+        // 재등록으로 횟수/기간이 회복되면 비활성 자동 해제
+        await memberProviderForRefresh.reconcileInactiveForUser(
+          widget.member.userId,
+        );
         if (_leaveRequested) return;
 
         // 재등록 후에는 enrollment 상태가 크게 변경되므로 화면을 닫음
@@ -959,6 +1048,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                   'validFrom': now.toIso8601String(),
                   'validUntil': _reEnrollValidUntil.toIso8601String(),
                 },
+                sendNotification: _sendChangeNotification,
               ),
             );
           },
@@ -1119,6 +1209,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           courseId: widget.course.id,
           enrollmentId: enrollmentId,
           cascade: false,
+          sendNotification: _sendChangeNotification,
         );
       } on FirebaseFunctionsException catch (e) {
         final details = e.details;
@@ -1145,6 +1236,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
             courseId: widget.course.id,
             enrollmentId: enrollmentId,
             cascade: true,
+            sendNotification: _sendChangeNotification,
           );
         } else {
           rethrow;
@@ -1531,6 +1623,10 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
               style: TextStyle(fontSize: 15, color: AppColors.textSecondary),
             ),
             const SizedBox(height: 32),
+            if (_hasRemainingReservationsChanges()) ...[
+              _buildSendNotificationCheckbox(),
+              const SizedBox(height: 12),
+            ],
             // 저장 버튼 (바깥에 padding 4)
             Padding(
               padding: const EdgeInsets.all(4),
@@ -2039,6 +2135,10 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
               ],
             ],
             const SizedBox(height: 32),
+            if (_hasPeriodExtensionChanges()) ...[
+              _buildSendNotificationCheckbox(),
+              const SizedBox(height: 12),
+            ],
             // 저장 버튼 (바깥에 padding 4)
             Padding(
               padding: const EdgeInsets.all(4),
@@ -2083,6 +2183,75 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
                             ),
                           ),
                 ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _restoreSendChangeNotificationPref() async {
+    final saved = await StorageService().getEnrollmentSendChangeNotification();
+    if (!mounted || saved == null) return;
+    if (_sendChangeNotification == saved) return;
+    setState(() => _sendChangeNotification = saved);
+  }
+
+  void _setSendChangeNotification(bool value) {
+    if (_sendChangeNotification == value) return;
+    setState(() => _sendChangeNotification = value);
+    StorageService().saveEnrollmentSendChangeNotification(value).ignore();
+  }
+
+  /// 저장/재등록/취소 버튼 위: 변경 알림 보내기 원형 체크
+  Widget _buildSendNotificationCheckbox() {
+    return GestureDetector(
+      onTap: () => _setSendChangeNotification(!_sendChangeNotification),
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+        child: Row(
+          children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              width: 22,
+              height: 22,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color:
+                    _sendChangeNotification
+                        ? AppColors.primaryGreen
+                        : Colors.transparent,
+                border: Border.all(
+                  color:
+                      _sendChangeNotification
+                          ? AppColors.primaryGreen
+                          : AppColors.textSecondary.withOpacity(0.45),
+                  width: 1.6,
+                ),
+              ),
+              child:
+                  _sendChangeNotification
+                      ? const Icon(Icons.check, size: 14, color: Colors.white)
+                      : null,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                '변경 알림 보내기',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ),
+            Text(
+              _sendChangeNotification ? '사용자에게 알림' : '알림 없이 저장',
+              style: TextStyle(
+                fontSize: 14,
+                color: AppColors.textSecondary.withOpacity(0.85),
               ),
             ),
           ],
@@ -2197,6 +2366,10 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
               },
             ),
             const SizedBox(height: 32),
+            if (_hasReEnrollChanges()) ...[
+              _buildSendNotificationCheckbox(),
+              const SizedBox(height: 12),
+            ],
             // 재등록 버튼
             Padding(
               padding: const EdgeInsets.all(4),
@@ -2580,11 +2753,7 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
         Positioned(
           left: -9,
           top: 5,
-          child: Container(
-            width: 9,
-            height: 2,
-            color: AppColors.borderLight,
-          ),
+          child: Container(width: 9, height: 2, color: AppColors.borderLight),
         ),
       ],
     );

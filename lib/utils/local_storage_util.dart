@@ -30,7 +30,18 @@ class StorageService {
   // lastSelectedCourse scope
   static const String scopeAdmin = 'admin';
   static const String scopeAdminMemberCourseTab = 'admin_member_course_tab';
+  static const String scopeAdminMemberInactiveTab =
+      'admin_member_inactive_tab';
   static const String scopeMember = 'member';
+
+  /// 비활성 탭 코스 칩 '전체' 저장용 센티널
+  static const String inactiveTabAllSentinel = '__all__';
+
+  static const String _keyAdminMemberLastTab = 'admin_member_last_tab';
+  static const String _keyEnrollmentSendChangeNotification =
+      'enrollment_send_change_notification';
+  static const String _keyReservationAddSendNotification =
+      'reservation_add_send_notification';
 
   String _lastSelectedCourseKey(String placeId, {String? scope}) {
     // legacy: last_selected_course_id_{placeId}
@@ -39,6 +50,9 @@ class StorageService {
     }
     return '${_keyLastSelectedCourseId}_${scope}_$placeId';
   }
+
+  String _adminMemberLastTabKey(String placeId) =>
+      '${_keyAdminMemberLastTab}_$placeId';
 
   /// 관리자 전화번호 저장
   Future<void> saveAdminPhone(String phoneNumber) async {
@@ -163,14 +177,18 @@ class StorageService {
   }
 
   /// 마지막 선택한 코스 ID 로드 (플레이스별)
+  /// [allowLegacyFallback]: false면 scoped 키만 사용 (비활성 탭 등)
   Future<String?> getLastSelectedCourseId(
     String placeId, {
     String? scope,
+    bool allowLegacyFallback = true,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final scopedKey = _lastSelectedCourseKey(placeId, scope: scope);
     final scopedValue = prefs.getString(scopedKey);
     if (scopedValue != null && scopedValue.isNotEmpty) return scopedValue;
+
+    if (!allowLegacyFallback) return null;
 
     // legacy fallback + migrate
     final legacyKey = _lastSelectedCourseKey(placeId, scope: null);
@@ -184,6 +202,50 @@ class StorageService {
 
     return null;
   }
+
+  /// 멤버 화면 마지막 탭 저장 (0: 전체, 1: 코스별, 2: 비활성)
+  Future<void> saveAdminMemberLastTab(String placeId, int tabIndex) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_adminMemberLastTabKey(placeId), tabIndex);
+  }
+
+  /// 멤버 화면 마지막 탭 로드
+  Future<int?> getAdminMemberLastTab(String placeId) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_adminMemberLastTabKey(placeId));
+  }
+
+  /// 수강 상세: 변경 알림 보내기 마지막 선택값 저장
+  Future<void> saveEnrollmentSendChangeNotification(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyEnrollmentSendChangeNotification, value);
+  }
+
+  /// 수강 상세: 변경 알림 보내기 마지막 선택값 로드 (없으면 null → 호출측 기본 true)
+  Future<bool?> getEnrollmentSendChangeNotification() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyEnrollmentSendChangeNotification);
+  }
+
+  /// 예약 추가/이동/취소: 알림 보내기 마지막 선택값 저장
+  Future<void> saveReservationAddSendNotification(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyReservationAddSendNotification, value);
+  }
+
+  /// 예약 추가/이동/취소: 알림 보내기 마지막 선택값 로드 (없으면 null → 호출측 기본 true)
+  Future<bool?> getReservationAddSendNotification() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyReservationAddSendNotification);
+  }
+
+  /// [saveReservationAddSendNotification] 별칭
+  Future<void> saveAdminReservationSendNotification(bool value) =>
+      saveReservationAddSendNotification(value);
+
+  /// [getReservationAddSendNotification] 별칭
+  Future<bool?> getAdminReservationSendNotification() =>
+      getReservationAddSendNotification();
 
   /// 플레이스별 마지막 선택 코스 ID 삭제
   Future<void> clearLastSelectedCourseId(

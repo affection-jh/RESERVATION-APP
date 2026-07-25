@@ -82,6 +82,7 @@ class CourseMemberListContent extends StatelessWidget {
   final String emptyMessage;
   final bool showEmptyCta;
   final VoidCallback? onMemberTapped;
+  final void Function(MemberView member, Rect cardRect)? onMemberLongPressed;
   final EdgeInsets? listPadding;
 
   /// true: SingleChildScrollView 안에서 사용(코스 상세). false: Expanded 안에서 스크롤(코스별 탭).
@@ -130,6 +131,7 @@ class CourseMemberListContent extends StatelessWidget {
     this.emptyMessage = '등록된 멤버가 없어요.',
     this.showEmptyCta = false,
     this.onMemberTapped,
+    this.onMemberLongPressed,
     this.listPadding,
     this.shrinkWrap = false,
     this.showHeaderWithCount = false,
@@ -164,7 +166,11 @@ class CourseMemberListContent extends StatelessWidget {
           filtered = memberProvider.listForCourseTab;
           totalCount = filtered.length;
         } else {
-          final enrolled = memberProvider.getMembersForCourse(courseId);
+          final enrolled =
+              memberProvider
+                  .getMembersForCourse(courseId)
+                  .where((v) => !v.shouldHideFromCourse(courseId))
+                  .toList();
           final pendingForCourse =
               memberProvider.allMembers
                   .where(
@@ -286,6 +292,10 @@ class CourseMemberListContent extends StatelessWidget {
                   backgroundColor: cardBackgroundColor,
                   member: v,
                   onMemberTapped: onMemberTapped ?? () {},
+                  onMemberLongPressed:
+                      onMemberLongPressed == null
+                          ? null
+                          : (rect) => onMemberLongPressed!(v, rect),
                   showCourseEnrollmentDetail: showCourseEnrollmentDetail,
                   courseForDirectDetail: courseForDirectDetail,
                 ),

@@ -366,6 +366,7 @@ class ReservationProvider with ChangeNotifier {
   Future<void> cancelReservation(
     SessionReservation reservation, {
     bool asAdminAction = false,
+    bool sendNotification = true,
   }) async {
     debugPrint('[ReservationProvider] cancelReservation 시작');
     debugPrint('[ReservationProvider] reservationId: ${reservation.id}');
@@ -388,6 +389,7 @@ class ReservationProvider with ChangeNotifier {
         reservationIds: [reservation.id],
         placeId: reservation.placeId,
         asAdminAction: asAdminAction,
+        sendNotification: sendNotification,
       );
       ReservationService.throwIfBatchCancelFailed(result);
 

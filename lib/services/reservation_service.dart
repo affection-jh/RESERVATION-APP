@@ -348,6 +348,7 @@ class ReservationService {
     required DateTime reservedDate,
     required List<Map<String, dynamic>> entries,
     bool force = false,
+    bool sendNotification = true,
   }) async {
     final dateString = _formatDate(reservedDate);
     final params = <String, dynamic>{
@@ -358,6 +359,7 @@ class ReservationService {
       'reservedDateString': dateString,
       'entries': entries,
       'force': force,
+      'sendNotification': sendNotification,
     };
     final result = await FirebaseFunctions.instance
         .httpsCallable('batchCreateReservations')
@@ -656,6 +658,7 @@ class ReservationService {
     required int newDayOfWeek,
     required String newStartTime,
     required DateTime newReservedDate,
+    bool sendNotification = true,
   }) async {
     final result = await FirebaseFunctions.instance
         .httpsCallable('batchMoveReservations')
@@ -665,6 +668,7 @@ class ReservationService {
       'newDayOfWeek': newDayOfWeek,
       'newStartTime': newStartTime,
       'newReservedDateString': _formatDate(newReservedDate),
+      'sendNotification': sendNotification,
     });
     return result.data as Map<String, dynamic>;
   }
@@ -673,6 +677,7 @@ class ReservationService {
     required List<String> reservationIds,
     required String placeId,
     bool asAdminAction = false,
+    bool sendNotification = true,
   }) async {
     final result = await FirebaseFunctions.instance
         .httpsCallable('batchCancelReservations')
@@ -680,6 +685,7 @@ class ReservationService {
       'reservationIds': reservationIds,
       'placeId': placeId,
       if (asAdminAction) 'asAdminAction': true,
+      'sendNotification': sendNotification,
     });
     return result.data as Map<String, dynamic>;
   }

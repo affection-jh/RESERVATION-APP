@@ -603,7 +603,7 @@ class _AdminPlaceEditScreenState extends State<AdminPlaceEditScreen> {
       context: context,
       placeId: placeId,
       currentAdminIds: currentAdminIds,
-      onMembersSelected: (selected) async {
+      onMembersSelected: (selected, {sendNotification = true}) async {
         final placeProvider = Provider.of<PlaceProvider>(
           context,
           listen: false,

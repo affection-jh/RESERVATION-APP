@@ -26,6 +26,9 @@ class EnrollmentAction {
   final Map<String, dynamic>? oldValue;
   final Map<String, dynamic>? newValue;
 
+  /// 사용자 푸시 알림 전송 여부 (기본 true). false면 onEnrollmentActionCreated에서 스킵.
+  final bool sendNotification;
+
   EnrollmentAction({
     required this.id,
     required this.actionType,
@@ -34,6 +37,7 @@ class EnrollmentAction {
     this.details,
     this.oldValue,
     this.newValue,
+    this.sendNotification = true,
   });
 
   /// Firestore 저장 시 performedAt은 서비스에서 FieldValue.serverTimestamp()로 덮어씀.
@@ -46,6 +50,7 @@ class EnrollmentAction {
       'details': details,
       'oldValue': oldValue,
       'newValue': newValue,
+      'sendNotification': sendNotification,
     };
   }
 
@@ -58,6 +63,7 @@ class EnrollmentAction {
       details: json['details'] as String?,
       oldValue: json['oldValue'] as Map<String, dynamic>?,
       newValue: json['newValue'] as Map<String, dynamic>?,
+      sendNotification: json['sendNotification'] != false,
     );
   }
 

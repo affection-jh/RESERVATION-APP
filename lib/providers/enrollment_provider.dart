@@ -133,6 +133,7 @@ class EnrollmentProvider with ChangeNotifier {
     required String courseId,
     required String enrollmentId,
     bool cascade = false,
+    bool sendNotification = true,
   }) async {
     _cancelInFlightKeys.add(enrollmentId);
     notifyListeners();
@@ -143,6 +144,7 @@ class EnrollmentProvider with ChangeNotifier {
         userId: userId,
         courseId: courseId,
         cascade: cascade,
+        sendNotification: sendNotification,
       );
     } finally {
       _cancelInFlightKeys.remove(enrollmentId);

@@ -403,6 +403,7 @@ class EnrollmentService {
     required String userId,
     required String courseId,
     bool cascade = false,
+    bool sendNotification = true,
   }) async {
     final callable = FirebaseFunctions.instance.httpsCallable(
       'cancelEnrollment',
@@ -412,6 +413,7 @@ class EnrollmentService {
       'userId': userId,
       'courseId': courseId,
       'cascade': cascade,
+      'sendNotification': sendNotification,
     });
     final data = result.data;
     if (data is Map) {
@@ -452,6 +454,25 @@ class EnrollmentService {
     return query.snapshots().map((snapshot) {
       return snapshot.docs.map(_courseEnrollmentFromDoc).toList();
     });
+  }
+
+  /// 특정 코스의 enrollments 실시간 구독 (멤버 선택 사이드 패널 남은 횟수 등)
+  Stream<List<CourseEnrollment>> watchCourseEnrollments(
+    String placeId,
+    String courseId,
+  ) {
+    if (placeId.isEmpty || courseId.isEmpty) {
+      return Stream.value(const []);
+    }
+    return _firestore
+        .collection('enrollments')
+        .where('placeId', isEqualTo: placeId)
+        .where('courseId', isEqualTo: courseId)
+        .snapshots()
+        .map(
+          (snapshot) =>
+              snapshot.docs.map(_courseEnrollmentFromDoc).toList(),
+        );
   }
 
   /// 특정 userId 목록의 enrollments 일회 조회 (세션 예약자 등 on-demand)
@@ -542,6 +563,44 @@ class EnrollmentService {
     } catch (e) {
       debugPrint('[EnrollmentService] getEnrollmentById failed: $e');
       return null;
+    }
+  }
+
+  /// 코스 단위 비활성/활성
+  Future<bool> setEnrollmentInactive({
+    required String enrollmentId,
+    required bool isInactive,
+  }) async {
+    if (enrollmentId.isEmpty) return false;
+    try {
+      await _firestore.collection('enrollments').doc(enrollmentId).set({
+        'isInactive': isInactive,
+      }, SetOptions(merge: true));
+      return true;
+    } catch (e) {
+      debugPrint('[EnrollmentService] setEnrollmentInactive error: $e');
+      return false;
+    }
+  }
+
+  /// 코스 단위 비활성 메모
+  Future<bool> setEnrollmentInactiveMemo({
+    required String enrollmentId,
+    required String? memo,
+  }) async {
+    if (enrollmentId.isEmpty) return false;
+    try {
+      final trimmed = memo?.trim();
+      await _firestore.collection('enrollments').doc(enrollmentId).set({
+        'inactiveMemo':
+            (trimmed == null || trimmed.isEmpty)
+                ? FieldValue.delete()
+                : trimmed,
+      }, SetOptions(merge: true));
+      return true;
+    } catch (e) {
+      debugPrint('[EnrollmentService] setEnrollmentInactiveMemo error: $e');
+      return false;
     }
   }
 

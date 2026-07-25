@@ -1224,7 +1224,7 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
       context: context,
       placeId: placeId,
       course: widget.course,
-      onMembersSelected: (selected) async {
+      onMembersSelected: (selected, {sendNotification = true}) async {
         if (selected.isEmpty || !context.mounted) return;
         final memberProvider = Provider.of<MemberProvider>(
           context,

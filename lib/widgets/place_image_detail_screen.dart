@@ -66,23 +66,6 @@ class _PlaceImageDetailScreenState extends State<PlaceImageDetailScreen> {
               ),
             ),
           ),
-          // 닫기 버튼
-          SafeArea(
-            child: Align(
-              alignment: Alignment.topRight,
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: IconButton(
-                  icon: Icon(
-                    Icons.close,
-                    color: Colors.white.withOpacity(bgOpacity),
-                    size: 28,
-                  ),
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-              ),
-            ),
-          ),
           // 이미지 + 이름 + 설명 (아래로 당기면 따라 내려가며 닫기)
           Positioned.fill(
             child: SafeArea(
@@ -154,6 +137,23 @@ class _PlaceImageDetailScreenState extends State<PlaceImageDetailScreen> {
                       ),
                     ),
                   ),
+                ),
+              ),
+            ),
+          ),
+          // 닫기 버튼 (제스처 레이어 위에 두어 탭이 가려지지 않게)
+          SafeArea(
+            child: Align(
+              alignment: Alignment.topRight,
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: IconButton(
+                  icon: Icon(
+                    Icons.close,
+                    color: Colors.white.withOpacity(bgOpacity),
+                    size: 28,
+                  ),
+                  onPressed: () => Navigator.of(context).pop(),
                 ),
               ),
             ),

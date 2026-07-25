@@ -92,19 +92,21 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
                       });
                 },
                 child: Container(
-                  padding: const EdgeInsets.only(right: 8),
+                  padding: const EdgeInsets.only(right: 4),
                   decoration: BoxDecoration(
                     color: AppColors.backgroundLight,
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Icon(
-                    Icons.more_vert,
-                    size: 22,
-                    color: AppColors.textPrimary.withOpacity(0.8),
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Icon(
+                      Icons.more_vert,
+                      size: 22,
+                      color: AppColors.textPrimary.withOpacity(0.8),
+                    ),
                   ),
                 ),
               ),
-            const SizedBox(width: 12),
           ],
         );
       },
@@ -114,14 +116,22 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
   Widget _buildCoursesSection(BuildContext context) {
     return Consumer2<CourseProvider, AuthProvider>(
       builder: (context, courseProvider, authProvider, child) {
-        final placeId = Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
-        final isSubManager = placeId != null && authProvider.isSubManagerForPlace(placeId);
-        final placeMember = placeId != null ? authProvider.getPlaceMemberForPlace(placeId) : null;
-        final courses = isSubManager && placeMember != null
-            ? courseProvider.courses
-                .where((c) => placeMember.manageableCourseIds.contains(c.id))
-                .toList()
-            : courseProvider.courses;
+        final placeId =
+            Provider.of<PlaceProvider>(context, listen: false).currentPlace?.id;
+        final isSubManager =
+            placeId != null && authProvider.isSubManagerForPlace(placeId);
+        final placeMember =
+            placeId != null
+                ? authProvider.getPlaceMemberForPlace(placeId)
+                : null;
+        final courses =
+            isSubManager && placeMember != null
+                ? courseProvider.courses
+                    .where(
+                      (c) => placeMember.manageableCourseIds.contains(c.id),
+                    )
+                    .toList()
+                : courseProvider.courses;
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -129,40 +139,55 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
             const SizedBox(height: 22),
             SectionHeader(
               title: isSubManager ? '관리중인 코스' : '개설한 코스',
-              onIconTap: isSubManager ? null : () => _openCourseAddFlow(context),
-              icon: isSubManager ? null : Icon(Icons.add_circle, size: 30, color: AppColors.primaryGreen),
+              onIconTap:
+                  isSubManager ? null : () => _openCourseAddFlow(context),
+              icon:
+                  isSubManager
+                      ? null
+                      : Icon(
+                        Icons.add_circle,
+                        size: 30,
+                        color: AppColors.primaryGreen,
+                      ),
               horizontalPadding: 20,
               fontSize: 20,
             ),
             const SizedBox(height: 12),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: courses.isEmpty
-                  ? EmptyStateCard(
-                      title: isSubManager ? '관리 중인 코스가 없어요' : '아직 코스가 없어요',
-                      buttonText: isSubManager ? null : '코스 추가하기',
-                      onPressed: isSubManager ? null : () => _openCourseAddFlow(context),
-                    )
-                  : Column(
-                      children: courses
-                          .map(
-                            (course) => Padding(
-                              padding: const EdgeInsets.only(bottom: 6),
-                              child: ReservationCourseCard(
-                                course: course,
-                                onTap: () {
-                                  Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                      builder: (context) =>
-                                          CourseEditScreen(course: course),
+              child:
+                  courses.isEmpty
+                      ? EmptyStateCard(
+                        title: isSubManager ? '관리 중인 코스가 없어요' : '아직 코스가 없어요',
+                        buttonText: isSubManager ? null : '코스 추가하기',
+                        onPressed:
+                            isSubManager
+                                ? null
+                                : () => _openCourseAddFlow(context),
+                      )
+                      : Column(
+                        children:
+                            courses
+                                .map(
+                                  (course) => Padding(
+                                    padding: const EdgeInsets.only(bottom: 6),
+                                    child: ReservationCourseCard(
+                                      course: course,
+                                      onTap: () {
+                                        Navigator.of(context).push(
+                                          MaterialPageRoute(
+                                            builder:
+                                                (context) => CourseEditScreen(
+                                                  course: course,
+                                                ),
+                                          ),
+                                        );
+                                      },
                                     ),
-                                  );
-                                },
-                              ),
-                            ),
-                          )
-                          .toList(),
-                    ),
+                                  ),
+                                )
+                                .toList(),
+                      ),
             ),
           ],
         );
@@ -173,11 +198,12 @@ class _AdminMyPageScreenState extends State<AdminMyPageScreen> {
   void _openCourseAddFlow(BuildContext context) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => CourseAddFlow(
-          onComplete: (course) {
-            if (mounted) setState(() {});
-          },
-        ),
+        builder:
+            (context) => CourseAddFlow(
+              onComplete: (course) {
+                if (mounted) setState(() {});
+              },
+            ),
       ),
     );
   }

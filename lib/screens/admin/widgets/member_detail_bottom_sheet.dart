@@ -59,9 +59,11 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
   Set<String> _processedCourseIds = {}; // 재등록 또는 삭제 처리된 코스 ID들
   StreamSubscription<List<CourseEnrollment>>? _enrollmentSubscription;
   StreamSubscription<DocumentSnapshot>? _pendingMemberSubscription;
+
   /// pending 문서의 courseEnrollments에만 있는 코스 ID (관리만 하는 allowedCourseIds 제외)
   List<String> _allPendingCourseIds = [];
-  List<String> _pendingCourseIds = []; // enrollments에 없는 pending 수강 코스 ID들 (계산된 값)
+  List<String> _pendingCourseIds =
+      []; // enrollments에 없는 pending 수강 코스 ID들 (계산된 값)
   List<CourseEnrollment> _pendingEnrollments =
       []; // pendingMembers의 courseEnrollments 파싱
   bool _enrollmentsLoaded = false;
@@ -425,6 +427,7 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
   }
 
   Widget _buildHeader() {
+    final memoPreview = _detailMemoPreview();
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -470,6 +473,10 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                 FormatUtils.formatPhoneNumber(widget.member.phoneNumber),
                 style: TextStyle(fontSize: 16, color: AppColors.textSecondary),
               ),
+              if (memoPreview != null) ...[
+                const SizedBox(height: 12),
+                _MemoTwoLineScroller(text: memoPreview),
+              ],
             ],
           ),
         ),
@@ -502,6 +509,31 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
         ),
       ],
     );
+  }
+
+  /// 플레이스 메모 우선, 없으면 수강별 메모 중 첫 번째
+  String? _detailMemoPreview() {
+    MemberView? live;
+    try {
+      live = Provider.of<MemberProvider>(
+        context,
+        listen: false,
+      ).getMemberView(widget.member.userId);
+    } catch (_) {
+      live = null;
+    }
+    final placeMemo =
+        (live?.inactiveMemo ?? widget.member.inactiveMemo)?.trim();
+    if (placeMemo != null && placeMemo.isNotEmpty) return placeMemo;
+    for (final e in _enrollments) {
+      final m = e.inactiveMemo?.trim();
+      if (m != null && m.isNotEmpty) return m;
+    }
+    for (final e in _pendingEnrollments) {
+      final m = e.inactiveMemo?.trim();
+      if (m != null && m.isNotEmpty) return m;
+    }
+    return null;
   }
 
   Widget _buildIconButton({
@@ -1569,6 +1601,36 @@ class _ReEnrollDialogState extends State<_ReEnrollDialog> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// 메모를 2줄 높이로만 보여주고, 스크롤로 나머지 확인
+class _MemoTwoLineScroller extends StatelessWidget {
+  final String text;
+
+  const _MemoTwoLineScroller({required this.text});
+
+  static const double _fontSize = 13;
+  static const double _lineHeight = 1.35;
+  static const double _viewportLines = 2.5;
+
+  @override
+  Widget build(BuildContext context) {
+    final viewportHeight = _fontSize * _lineHeight * _viewportLines;
+    return SizedBox(
+      height: viewportHeight,
+      child: SingleChildScrollView(
+        physics: const BouncingScrollPhysics(),
+        child: Text(
+          text,
+          style: TextStyle(
+            fontSize: _fontSize,
+            height: _lineHeight,
+            color: AppColors.textSecondary.withOpacity(0.9),
+          ),
+        ),
+      ),
     );
   }
 }

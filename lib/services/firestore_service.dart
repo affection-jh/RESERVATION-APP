@@ -125,6 +125,7 @@ class FirestoreService {
     required DateTime reservedDate,
     required List<Map<String, dynamic>> entries,
     bool force = false,
+    bool sendNotification = true,
   }) =>
       _reservationService.batchCreateReservations(
         placeId: placeId,
@@ -134,6 +135,7 @@ class FirestoreService {
         reservedDate: reservedDate,
         entries: entries,
         force: force,
+        sendNotification: sendNotification,
       );
   Future<void> deleteReservation({
     required String reservationId,
@@ -244,21 +246,25 @@ class FirestoreService {
     required int newDayOfWeek,
     required String newStartTime,
     required DateTime newReservedDate,
+    bool sendNotification = true,
   }) => _reservationService.batchMoveReservations(
     reservationIds: reservationIds,
     placeId: placeId,
     newDayOfWeek: newDayOfWeek,
     newStartTime: newStartTime,
     newReservedDate: newReservedDate,
+    sendNotification: sendNotification,
   );
   Future<Map<String, dynamic>> batchCancelReservations({
     required List<String> reservationIds,
     required String placeId,
     bool asAdminAction = false,
+    bool sendNotification = true,
   }) => _reservationService.batchCancelReservations(
     reservationIds: reservationIds,
     placeId: placeId,
     asAdminAction: asAdminAction,
+    sendNotification: sendNotification,
   );
 
   // ==================== Capacity Overrides ====================

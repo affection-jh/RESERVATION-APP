@@ -20,6 +20,12 @@ class PlaceMember {
   final DateTime createdAt;
   final DateTime? updatedAt;
 
+  /// 전체 탭에서 비활성 처리 시 true → 전체/모든 코스별에서 숨김
+  final bool isInactive;
+
+  /// 비활성/관리용 메모 (플레이스 단위)
+  final String? inactiveMemo;
+
   PlaceMember({
     required this.userId,
     this.placeId,
@@ -29,6 +35,8 @@ class PlaceMember {
     this.manageableCourseIds = const [],
     required this.createdAt,
     this.updatedAt,
+    this.isInactive = false,
+    this.inactiveMemo,
   });
 
   bool get isManager => role == PlaceMemberRole.manager;
@@ -45,6 +53,9 @@ class PlaceMember {
     List<String>? manageableCourseIds,
     DateTime? createdAt,
     DateTime? updatedAt,
+    bool? isInactive,
+    String? inactiveMemo,
+    bool clearInactiveMemo = false,
   }) {
     return PlaceMember(
       userId: userId ?? this.userId,
@@ -56,6 +67,9 @@ class PlaceMember {
           manageableCourseIds ?? List.from(this.manageableCourseIds),
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      isInactive: isInactive ?? this.isInactive,
+      inactiveMemo:
+          clearInactiveMemo ? null : (inactiveMemo ?? this.inactiveMemo),
     );
   }
 
@@ -68,6 +82,8 @@ class PlaceMember {
       'manageableCourseIds': manageableCourseIds,
       'createdAt': createdAt.toIso8601String(),
       'updatedAt': updatedAt?.toIso8601String(),
+      'isInactive': isInactive,
+      if (inactiveMemo != null) 'inactiveMemo': inactiveMemo,
     };
   }
 
@@ -104,6 +120,8 @@ class PlaceMember {
           json['updatedAt'] != null
               ? FirestoreUtils.timestampToDateTime(json['updatedAt'])
               : null,
+      isInactive: json['isInactive'] == true,
+      inactiveMemo: json['inactiveMemo'] as String?,
     );
   }
 }

@@ -176,6 +176,8 @@ class ReservationCourseCard extends StatelessWidget {
 class MemberCard extends StatefulWidget {
   final MemberView member;
   final VoidCallback? onMemberTapped;
+  /// 롱프레스 시 카드의 전역 Rect와 함께 호출 (포커스 오버레이용)
+  final void Function(Rect cardRect)? onMemberLongPressed;
   final Color? backgroundColor;
   final ExtensionRequestInfo? extensionRequestInfo;
 
@@ -197,6 +199,7 @@ class MemberCard extends StatefulWidget {
     super.key,
     required this.member,
     this.onMemberTapped,
+    this.onMemberLongPressed,
     this.backgroundColor,
     this.extensionRequestInfo,
     this.showCourseEnrollmentDetail = false,
@@ -293,6 +296,15 @@ class _MemberCardState extends State<MemberCard> {
                   context: context,
                   member: widget.member,
                 );
+              },
+      onLongPress:
+          isDeleting || widget.onMemberLongPressed == null
+              ? null
+              : () {
+                final box = context.findRenderObject() as RenderBox?;
+                if (box == null || !box.hasSize) return;
+                final rect = box.localToGlobal(Offset.zero) & box.size;
+                widget.onMemberLongPressed!(rect);
               },
       child: Stack(
         children: [

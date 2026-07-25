@@ -58,6 +58,11 @@ class MemberProvider with ChangeNotifier {
   bool _isCourseSelectorExpanded = true;
   Map<String, String>? _courseIdToNameForSearch;
 
+  /// prefs에서 읽은 값을 메모리에 유지 → 탭 전환 시 칩을 한 번에 맞춤
+  String? _cachedCourseTabCourseId;
+  String? _cachedInactiveTabCourseId; // null=미로드, __all__=전체, 그 외=코스ID
+  String? _uiPrefsHydratedForPlaceId;
+
   String? get placeId => _placeId;
   bool get isLoading => _isLoading;
   bool get isLoadingMore => _isLoadingMore;
@@ -81,12 +86,14 @@ class MemberProvider with ChangeNotifier {
   List<MemberView> _placeMembersToViews(
     List<PlaceMember> members,
     Map<String, List<String>> byUser,
+    Map<String, List<String>> inactiveByUser,
   ) {
     return members
         .map(
           (m) => MemberView.fromPlaceMember(
             m,
             enrolledCourseIds: byUser[m.userId] ?? const [],
+            inactiveCourseIds: inactiveByUser[m.userId] ?? const [],
           ),
         )
         .toList();
@@ -370,22 +377,19 @@ class MemberProvider with ChangeNotifier {
     _lastEnrollmentPageDoc = lastDoc;
     _hasMoreMembers = ens.length >= _pageSize;
     if (ens.isEmpty) _hasMoreMembers = false;
-    final filtered =
-        ens.where((e) => courseIds.contains(e.courseId)).toList();
+    final filtered = ens.where((e) => courseIds.contains(e.courseId)).toList();
     _mergeEnrollments(filtered);
     final userIds = filtered.map((e) => e.userId).toList();
     if (userIds.isNotEmpty) {
-      final members = await _service.getPlaceMembersByUserIds(
-        placeId,
-        userIds,
-      );
+      final members = await _service.getPlaceMembersByUserIds(placeId, userIds);
       _appendPlaceMembers(members);
     }
   }
 
   void _mergeOnDemandEnrollments(List<CourseEnrollment> list) {
-    final existingIds = _onDemandEnrollments.map((e) => e.id).toSet()
-      ..addAll(_enrollments.map((e) => e.id));
+    final existingIds =
+        _onDemandEnrollments.map((e) => e.id).toSet()
+          ..addAll(_enrollments.map((e) => e.id));
     for (final e in list) {
       if (existingIds.contains(e.id)) continue;
       _onDemandEnrollments.add(e);
@@ -419,7 +423,8 @@ class MemberProvider with ChangeNotifier {
           placeId,
           membersToFetch,
         );
-        final existingMemberIds = _allLoadedPlaceMembers.map((m) => m.userId).toSet();
+        final existingMemberIds =
+            _allLoadedPlaceMembers.map((m) => m.userId).toSet();
         for (final m in members) {
           if (!existingMemberIds.contains(m.userId)) {
             _onDemandPlaceMembers.add(m);
@@ -427,7 +432,9 @@ class MemberProvider with ChangeNotifier {
           }
         }
       } catch (e) {
-        debugPrint('[MemberProvider] ensureMembersForUserIds members error: $e');
+        debugPrint(
+          '[MemberProvider] ensureMembersForUserIds members error: $e',
+        );
       } finally {
         _onDemandUserIdsInFlight.removeAll(membersToFetch);
         notifyListeners();
@@ -442,19 +449,27 @@ class MemberProvider with ChangeNotifier {
       _mergeOnDemandEnrollments(enrollments);
       notifyListeners();
     } catch (e) {
-      debugPrint('[MemberProvider] ensureMembersForUserIds enrollments error: $e');
+      debugPrint(
+        '[MemberProvider] ensureMembersForUserIds enrollments error: $e',
+      );
     }
   }
 
   /// enrollmentId 단건 on-demand (예약 문서 enrollmentId 기준)
-  Future<CourseEnrollment?> ensureEnrollmentById(String enrollmentId) async {
+  /// [force] true면 캐시를 무시하고 서버에서 다시 읽어 교체 (상세 화면 진입 시 등)
+  Future<CourseEnrollment?> ensureEnrollmentById(
+    String enrollmentId, {
+    bool force = false,
+  }) async {
     if (enrollmentId.isEmpty) return null;
-    final cached = getEnrollmentById(enrollmentId);
-    if (cached != null) return cached;
+    if (!force) {
+      final cached = getEnrollmentById(enrollmentId);
+      if (cached != null) return cached;
+    }
     try {
       final fetched = await _service.getEnrollmentById(enrollmentId);
       if (fetched != null) {
-        _mergeOnDemandEnrollments([fetched]);
+        _replaceEnrollment(fetched);
         notifyListeners();
       }
       return fetched;
@@ -464,13 +479,254 @@ class MemberProvider with ChangeNotifier {
     }
   }
 
+  void _replaceEnrollment(CourseEnrollment enrollment) {
+    final id = enrollment.id;
+    var replaced = false;
+    for (var i = 0; i < _enrollments.length; i++) {
+      if (_enrollments[i].id == id) {
+        _enrollments[i] = enrollment;
+        replaced = true;
+        break;
+      }
+    }
+    for (var i = 0; i < _onDemandEnrollments.length; i++) {
+      if (_onDemandEnrollments[i].id == id) {
+        _onDemandEnrollments[i] = enrollment;
+        replaced = true;
+        break;
+      }
+    }
+    if (!replaced) {
+      _onDemandEnrollments.add(enrollment);
+    }
+    _dedupeEnrollmentsByUserCourse(_enrollments);
+    _dedupeEnrollmentsByUserCourse(_onDemandEnrollments);
+  }
+
+  /// 예약 추가/취소·횟수 조정 등 mutation 후, 특정 유저 enrollment를 서버에서 다시 읽어 캐시 교체
+  Future<void> refreshEnrollmentsForUserIds(List<String> userIds) async {
+    final placeId = _placeId;
+    if (placeId == null || placeId.isEmpty) return;
+
+    final distinct = userIds.where((id) => id.isNotEmpty).toSet().toList();
+    if (distinct.isEmpty) return;
+
+    try {
+      final fresh = await _service.getEnrollmentsForUserIds(placeId, distinct);
+      final targetUserIds = distinct.toSet();
+      _enrollments.removeWhere((e) => targetUserIds.contains(e.userId));
+      _onDemandEnrollments.removeWhere((e) => targetUserIds.contains(e.userId));
+      _enrollments.addAll(fresh);
+      _dedupeEnrollmentsByUserCourse(_enrollments);
+      notifyListeners();
+    } catch (e) {
+      debugPrint('[MemberProvider] refreshEnrollmentsForUserIds error: $e');
+    }
+  }
+
+  /// 유효기간/횟수가 회복되어 더 이상 비활 조건이 아니면 비활성을 자동 해제.
+  /// (횟수 조정·기간 연장·재등록 후 호출. 먼저 enrollment를 최신화해 둘 것)
+  Future<void> reconcileInactiveForUser(String userId) async {
+    final placeId = _placeId;
+    if (placeId == null || placeId.isEmpty || userId.isEmpty) return;
+
+    var changed = false;
+
+    // 코스 단위: 비활인데 더 이상 만료(횟수/기간)가 아니면 해제
+    for (final e in enrollmentsForUser(userId)) {
+      if (e.isInactive && !e.isDeactivatable && e.id.isNotEmpty) {
+        final ok = await _service.setEnrollmentInactive(
+          enrollmentId: e.id,
+          isInactive: false,
+        );
+        if (ok) {
+          _replaceEnrollment(e.copyWith(isInactive: false));
+          changed = true;
+        }
+      }
+    }
+
+    // 플레이스 단위: 비활인데 더 이상 '전부 만료'가 아니면 해제
+    final pm = _findLoadedPlaceMember(userId);
+    if (pm != null && pm.isInactive && !canDeactivateAtPlace(userId)) {
+      final ok = await _service.setPlaceMemberInactive(
+        placeId: placeId,
+        userId: userId,
+        isInactive: false,
+      );
+      if (ok) {
+        _replacePlaceMember(pm.copyWith(isInactive: false));
+        changed = true;
+      }
+    }
+
+    if (changed) notifyListeners();
+  }
+
+  /// pendingMembers 문서 변경 후 서버에서 다시 읽어 교체
+  Future<void> refreshPendingMembers() async {
+    final placeId = _placeId;
+    if (placeId == null || placeId.isEmpty) return;
+    try {
+      _pendingMembers = await _service.getPendingMembersByPlace(placeId);
+      notifyListeners();
+    } catch (e) {
+      debugPrint('[MemberProvider] refreshPendingMembers error: $e');
+    }
+  }
+
+  void _replacePlaceMember(PlaceMember updated) {
+    for (var i = 0; i < _placeMembers.length; i++) {
+      if (_placeMembers[i].userId == updated.userId) {
+        _placeMembers[i] = updated;
+        return;
+      }
+    }
+    for (var i = 0; i < _onDemandPlaceMembers.length; i++) {
+      if (_onDemandPlaceMembers[i].userId == updated.userId) {
+        _onDemandPlaceMembers[i] = updated;
+        return;
+      }
+    }
+  }
+
+  PlaceMember? _findLoadedPlaceMember(String userId) {
+    for (final m in _placeMembers) {
+      if (m.userId == userId) return m;
+    }
+    for (final m in _onDemandPlaceMembers) {
+      if (m.userId == userId) return m;
+    }
+    return null;
+  }
+
+  /// 전체 탭 비활성/활성
+  Future<bool> setPlaceInactive({
+    required String userId,
+    required bool isInactive,
+  }) async {
+    final placeId = _placeId;
+    if (placeId == null || placeId.isEmpty || userId.isEmpty) return false;
+    if (isInactive && !canDeactivateAtPlace(userId)) return false;
+
+    startProcessingMember(userId);
+    try {
+      final ok = await _service.setPlaceMemberInactive(
+        placeId: placeId,
+        userId: userId,
+        isInactive: isInactive,
+      );
+      if (!ok) return false;
+      final current = _findLoadedPlaceMember(userId);
+      if (current != null) {
+        _replacePlaceMember(current.copyWith(isInactive: isInactive));
+      }
+      notifyListeners();
+      return true;
+    } finally {
+      finishProcessingMember(userId);
+    }
+  }
+
+  /// 코스별 탭 비활성/활성
+  Future<bool> setCourseInactive({
+    required String userId,
+    required String courseId,
+    required bool isInactive,
+  }) async {
+    final placeId = _placeId;
+    if (placeId == null ||
+        placeId.isEmpty ||
+        userId.isEmpty ||
+        courseId.isEmpty) {
+      return false;
+    }
+    if (isInactive && !canDeactivateForCourse(userId, courseId)) return false;
+
+    final enrollment = getEnrollmentForUserAndCourse(userId, courseId);
+    if (enrollment == null || enrollment.id.isEmpty) return false;
+
+    startProcessingMember(userId);
+    try {
+      final ok = await _service.setEnrollmentInactive(
+        enrollmentId: enrollment.id,
+        isInactive: isInactive,
+      );
+      if (!ok) return false;
+      _replaceEnrollment(enrollment.copyWith(isInactive: isInactive));
+      notifyListeners();
+      return true;
+    } finally {
+      finishProcessingMember(userId);
+    }
+  }
+
+  /// 메모 저장 (코스 지정 시 enrollment, 아니면 place member)
+  Future<bool> setInactiveMemo({
+    required String userId,
+    required String? memo,
+    String? courseId,
+  }) async {
+    final placeId = _placeId;
+    if (placeId == null || placeId.isEmpty || userId.isEmpty) return false;
+
+    startProcessingMember(userId);
+    try {
+      if (courseId != null && courseId.isNotEmpty) {
+        final enrollment = getEnrollmentForUserAndCourse(userId, courseId);
+        if (enrollment == null || enrollment.id.isEmpty) return false;
+        final ok = await _service.setEnrollmentInactiveMemo(
+          enrollmentId: enrollment.id,
+          memo: memo,
+        );
+        if (!ok) return false;
+        final trimmed = memo?.trim();
+        _replaceEnrollment(
+          enrollment.copyWith(
+            inactiveMemo: trimmed,
+            clearInactiveMemo: trimmed == null || trimmed.isEmpty,
+          ),
+        );
+      } else {
+        final ok = await _service.setPlaceMemberInactiveMemo(
+          placeId: placeId,
+          userId: userId,
+          memo: memo,
+        );
+        if (!ok) return false;
+        final current = _findLoadedPlaceMember(userId);
+        if (current != null) {
+          final trimmed = memo?.trim();
+          _replacePlaceMember(
+            current.copyWith(
+              inactiveMemo: trimmed,
+              clearInactiveMemo: trimmed == null || trimmed.isEmpty,
+            ),
+          );
+        }
+      }
+      notifyListeners();
+      return true;
+    } finally {
+      finishProcessingMember(userId);
+    }
+  }
+
   /// 전체 멤버: loadMore 페이지(100명) + on-demand + pending (userId·전화번호 중복 없음)
   List<MemberView> get allMembers {
     final byUser = <String, List<String>>{};
+    final inactiveByUser = <String, List<String>>{};
     for (final e in _mergedEnrollments) {
       byUser.putIfAbsent(e.userId, () => []).add(e.courseId);
+      if (e.isInactive) {
+        inactiveByUser.putIfAbsent(e.userId, () => []).add(e.courseId);
+      }
     }
-    final placeViews = _placeMembersToViews(_uniqueLoadedPlaceMembers, byUser);
+    final placeViews = _placeMembersToViews(
+      _uniqueLoadedPlaceMembers,
+      byUser,
+      inactiveByUser,
+    );
     final pendingViews = _pendingViewsExcludingRegisteredPhones(placeViews);
     final combined = _uniqueMemberViewsByUserId([
       ...placeViews,
@@ -481,6 +737,10 @@ class MemberProvider with ChangeNotifier {
           (v) => v.copyWith(
             enrolledCourseIds:
                 v.isPending ? v.enrolledCourseIds : (byUser[v.userId] ?? []),
+            inactiveCourseIds:
+                v.isPending
+                    ? v.inactiveCourseIds
+                    : (inactiveByUser[v.userId] ?? const []),
           ),
         )
         .toList();
@@ -537,14 +797,15 @@ class MemberProvider with ChangeNotifier {
     return list;
   }
 
-  /// 전체 탭용: 검색·정렬 적용된 멤버 목록
+  /// 전체 탭용: 검색·정렬 적용된 멤버 목록 (비활성 제외)
   List<MemberView> get listForAllTab {
-    var list = _filteredBySearch(allMembers);
+    var list = allMembers.where((v) => !v.shouldHideFromAllTab).toList();
+    list = _filteredBySearch(list);
     list = _sortAllMembers(list);
     return list;
   }
 
-  /// 코스별 탭용: 선택된 코스들의 멤버 (검색·정렬 적용)
+  /// 코스별 탭용: 선택된 코스들의 멤버 (검색·정렬 적용, 비활성 제외)
   List<MemberView> get listForCourseTab {
     if (_selectedCourseIds.isEmpty) return [];
     if (_isSubManagerForPlace) {
@@ -557,6 +818,17 @@ class MemberProvider with ChangeNotifier {
         }
         list =
             list.map((v) => v.copyWith(enrollment: byUser[v.userId])).toList();
+        list = list.where((v) => !v.shouldHideFromCourse(courseId)).toList();
+      } else {
+        list =
+            list.where((v) {
+              if (v.isPlaceInactive) return false;
+              return _selectedCourseIds.any(
+                (id) =>
+                    v.enrolledCourseIds.contains(id) &&
+                    !v.inactiveCourseIds.contains(id),
+              );
+            }).toList();
       }
       list = _filteredBySearch(list);
       list = _sortCourseMembers(list);
@@ -564,7 +836,10 @@ class MemberProvider with ChangeNotifier {
     }
     if (_selectedCourseIds.length == 1) {
       final courseId = _selectedCourseIds.first;
-      var list = getMembersForCourse(courseId);
+      var list =
+          getMembersForCourse(
+            courseId,
+          ).where((v) => !v.shouldHideFromCourse(courseId)).toList();
       final pending =
           allMembers
               .where(
@@ -578,19 +853,67 @@ class MemberProvider with ChangeNotifier {
     }
     final filtered =
         allMembers.where((v) {
-          final hasCourse =
-              v.isPending
-                  ? v.relatedCourseIds.any(
-                    (id) => _selectedCourseIds.contains(id),
-                  )
-                  : v.enrolledCourseIds.any(
-                    (id) => _selectedCourseIds.contains(id),
-                  );
-          return hasCourse;
+          if (v.isPlaceInactive) return false;
+          if (v.isPending) {
+            return v.relatedCourseIds.any(
+              (id) => _selectedCourseIds.contains(id),
+            );
+          }
+          return v.enrolledCourseIds.any(
+            (id) =>
+                _selectedCourseIds.contains(id) &&
+                !v.inactiveCourseIds.contains(id),
+          );
         }).toList();
     var list = _filteredBySearch(filtered);
     list.sort((a, b) => a.adminDisplayName.compareTo(b.adminDisplayName));
     return list;
+  }
+
+  /// 비활성 탭 리스트.
+  /// - [courseId] 지정: 해당 코스 비활성 (플레이스 비활이면서 그 코스 수강 포함)
+  /// - [fullyInactiveOnly] true (주매니저 '전체'): 모든 코스에서 비활성
+  ///   (= 플레이스 비활 또는 수강 코스 전부 코스 비활, [MemberView.shouldHideFromAllTab])
+  /// - 둘 다 아니면 (부매니저): 코스/플레이스 비활이 하나라도 있는 멤버
+  List<MemberView> listForInactiveTab({
+    String? courseId,
+    bool fullyInactiveOnly = false,
+  }) {
+    late final List<MemberView> list;
+    if (courseId != null && courseId.isNotEmpty) {
+      list =
+          allMembers.where((v) {
+            if (!v.isInInactiveTab) return false;
+            if (v.isPlaceInactive) {
+              return v.enrolledCourseIds.isEmpty ||
+                  v.enrolledCourseIds.contains(courseId);
+            }
+            return v.inactiveCourseIds.contains(courseId);
+          }).toList();
+    } else if (fullyInactiveOnly) {
+      list = allMembers.where((v) => v.shouldHideFromAllTab).toList();
+    } else {
+      list = allMembers.where((v) => v.isInInactiveTab).toList();
+    }
+    return _sortAllMembers(_filteredBySearch(list));
+  }
+
+  /// 유저의 로드된 enrollment 목록
+  List<CourseEnrollment> enrollmentsForUser(String userId) {
+    return _mergedEnrollments.where((e) => e.userId == userId).toList();
+  }
+
+  /// 전체 탭 비활성 가능 여부: 수강 코스가 있고 전부 만료(기간 or 횟수)
+  bool canDeactivateAtPlace(String userId) {
+    final ens = enrollmentsForUser(userId);
+    if (ens.isEmpty) return false;
+    return ens.every((e) => e.isDeactivatable);
+  }
+
+  /// 코스 탭 비활성 가능 여부
+  bool canDeactivateForCourse(String userId, String courseId) {
+    final e = getEnrollmentForUserAndCourse(userId, courseId);
+    return e != null && e.isDeactivatable;
   }
 
   /// 과목 키워드 검색용 코스명 맵 설정 (CourseProvider.courses 기준)
@@ -871,9 +1194,12 @@ class MemberProvider with ChangeNotifier {
     }
   }
 
-  void setSelectedTab(int index) {
+  void setSelectedTab(int index, {bool save = true}) {
     if (_selectedTab == index) return;
     _selectedTab = index;
+    if (save && _placeId != null && _placeId!.isNotEmpty) {
+      StorageService().saveAdminMemberLastTab(_placeId!, index).ignore();
+    }
     if (_placeId != null && _placeId!.isNotEmpty) {
       _isLoading = true;
       notifyListeners();
@@ -910,6 +1236,13 @@ class MemberProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  /// 코스 선택 해제 (비활성 탭의 "전체" 모드 등)
+  void clearCourseSelection() {
+    if (_selectedCourseIds.isEmpty) return;
+    _selectedCourseIds.clear();
+    notifyListeners();
+  }
+
   /// 코스별 탭: 단일 코스만 선택하고 SharedPreferences에 저장
   void selectSingleCourseForCourseTab(String courseId, {bool save = true}) {
     if (_selectedCourseIds.length == 1 &&
@@ -918,6 +1251,7 @@ class MemberProvider with ChangeNotifier {
     }
     _selectedCourseIds.clear();
     _selectedCourseIds.add(courseId);
+    _cachedCourseTabCourseId = courseId;
     if (_placeId != null &&
         _placeId!.isNotEmpty &&
         (_selectedTab == 1 || _isSubManagerForPlace)) {
@@ -938,27 +1272,186 @@ class MemberProvider with ChangeNotifier {
     }
   }
 
+  /// prefs → 메모리 캐시 1회 로드 (탭 전환 시 sync 적용용)
+  Future<void> hydrateMemberUiPrefs(
+    String placeId, {
+    required List<String> validCourseIds,
+    required bool isSubManager,
+  }) async {
+    if (_uiPrefsHydratedForPlaceId == placeId) return;
+    _uiPrefsHydratedForPlaceId = placeId;
+
+    final storage = StorageService();
+    final savedTab = await storage.getAdminMemberLastTab(placeId);
+    final savedCourse = await storage.getLastSelectedCourseId(
+      placeId,
+      scope: StorageService.scopeAdminMemberCourseTab,
+    );
+    final savedInactive = await storage.getLastSelectedCourseId(
+      placeId,
+      scope: StorageService.scopeAdminMemberInactiveTab,
+      allowLegacyFallback: false,
+    );
+
+    _cachedCourseTabCourseId = savedCourse;
+    _cachedInactiveTabCourseId =
+        savedInactive ?? StorageService.inactiveTabAllSentinel;
+
+    var tab = savedTab ?? (isSubManager ? 1 : 0);
+    if (isSubManager && tab == 0) tab = 1;
+    if (tab < 0 || tab > 2) tab = isSubManager ? 1 : 0;
+
+    _selectedTab = tab;
+    if (tab == 1 || (isSubManager && tab != 2)) {
+      _applyCourseTabSelectionSync(validCourseIds, notify: false);
+    } else if (tab == 2 && !isSubManager) {
+      _applyInactiveTabSelectionSync(validCourseIds, notify: false);
+      _isCourseSelectorExpanded = true;
+    }
+    // setSelectedTab과 동일하게 로드 트리거 (save 없이)
+    if (_placeId != null && _placeId!.isNotEmpty) {
+      _isLoading = true;
+      notifyListeners();
+      unawaited(_loadFirstPage());
+    } else {
+      notifyListeners();
+    }
+  }
+
+  void _applyCourseTabSelectionSync(
+    List<String> validCourseIds, {
+    bool notify = true,
+  }) {
+    if (validCourseIds.isEmpty) return;
+    final cached = _cachedCourseTabCourseId;
+    final idToSelect =
+        (cached != null && validCourseIds.contains(cached))
+            ? cached
+            : validCourseIds.first;
+    if (_selectedCourseIds.length == 1 &&
+        _selectedCourseIds.contains(idToSelect)) {
+      return;
+    }
+    _selectedCourseIds.clear();
+    _selectedCourseIds.add(idToSelect);
+    if (notify) notifyListeners();
+  }
+
+  void _applyInactiveTabSelectionSync(
+    List<String> validCourseIds, {
+    bool notify = true,
+  }) {
+    final cached =
+        _cachedInactiveTabCourseId ?? StorageService.inactiveTabAllSentinel;
+    if (cached == StorageService.inactiveTabAllSentinel ||
+        !validCourseIds.contains(cached)) {
+      if (_selectedCourseIds.isEmpty) return;
+      _selectedCourseIds.clear();
+      if (notify) notifyListeners();
+      return;
+    }
+    if (_selectedCourseIds.length == 1 &&
+        _selectedCourseIds.contains(cached)) {
+      return;
+    }
+    _selectedCourseIds.clear();
+    _selectedCourseIds.add(cached);
+    if (notify) notifyListeners();
+  }
+
+  /// 코스별 탭 칩을 캐시 기준으로 즉시 적용 (prefs await 없음)
+  void applyCourseTabSelectionFromCache(
+    List<String> validCourseIds, {
+    bool notify = true,
+  }) {
+    _applyCourseTabSelectionSync(validCourseIds, notify: notify);
+  }
+
+  /// 비활성 탭 칩을 캐시 기준으로 즉시 적용
+  void applyInactiveTabSelectionFromCache(
+    List<String> validCourseIds, {
+    bool notify = true,
+  }) {
+    _applyInactiveTabSelectionSync(validCourseIds, notify: notify);
+  }
+
   /// 코스별 탭 진입 시: 저장된 코스 복원, 없으면 첫 번째 코스 선택
   Future<void> restoreCourseSelectionForCourseTab(
     String placeId,
     List<String> validCourseIds,
   ) async {
     if (validCourseIds.isEmpty) return;
-    final storage = StorageService();
-    final savedId = await storage.getLastSelectedCourseId(
-      placeId,
-      scope: StorageService.scopeAdminMemberCourseTab,
-    );
-    final idToSelect =
-        (savedId != null && validCourseIds.contains(savedId))
-            ? savedId
-            : validCourseIds.first;
-    _selectedCourseIds.clear();
-    _selectedCourseIds.add(idToSelect);
-    notifyListeners();
+    // 캐시가 없으면 prefs에서 채움
+    if (_cachedCourseTabCourseId == null ||
+        _uiPrefsHydratedForPlaceId != placeId) {
+      final savedId = await StorageService().getLastSelectedCourseId(
+        placeId,
+        scope: StorageService.scopeAdminMemberCourseTab,
+      );
+      _cachedCourseTabCourseId = savedId;
+      _uiPrefsHydratedForPlaceId ??= placeId;
+    }
+    _applyCourseTabSelectionSync(validCourseIds);
     if (_placeId != null && (_selectedTab == 1 || _isSubManagerForPlace)) {
       unawaited(_loadFirstPage());
     }
+  }
+
+  /// 비활성 탭 코스 칩 선택 (null/'전체' = 모든 코스 비활성 모드)
+  void selectInactiveCourseFilter(String? courseId) {
+    if (courseId == null || courseId.isEmpty) {
+      _cachedInactiveTabCourseId = StorageService.inactiveTabAllSentinel;
+      if (_selectedCourseIds.isNotEmpty) {
+        _selectedCourseIds.clear();
+        notifyListeners();
+      }
+      if (_placeId != null && _placeId!.isNotEmpty) {
+        StorageService()
+            .saveLastSelectedCourseId(
+              _placeId!,
+              StorageService.inactiveTabAllSentinel,
+              scope: StorageService.scopeAdminMemberInactiveTab,
+            )
+            .ignore();
+      }
+      return;
+    }
+
+    _cachedInactiveTabCourseId = courseId;
+    if (!(_selectedCourseIds.length == 1 &&
+        _selectedCourseIds.contains(courseId))) {
+      _selectedCourseIds.clear();
+      _selectedCourseIds.add(courseId);
+      notifyListeners();
+    }
+    if (_placeId != null && _placeId!.isNotEmpty) {
+      StorageService()
+          .saveLastSelectedCourseId(
+            _placeId!,
+            courseId,
+            scope: StorageService.scopeAdminMemberInactiveTab,
+          )
+          .ignore();
+    }
+  }
+
+  /// 비활성 탭 진입 시: 저장된 칩 복원 (없으면 '전체')
+  Future<void> restoreInactiveCourseSelection(
+    String placeId,
+    List<String> validCourseIds,
+  ) async {
+    if (_cachedInactiveTabCourseId == null ||
+        _uiPrefsHydratedForPlaceId != placeId) {
+      final savedId = await StorageService().getLastSelectedCourseId(
+        placeId,
+        scope: StorageService.scopeAdminMemberInactiveTab,
+        allowLegacyFallback: false,
+      );
+      _cachedInactiveTabCourseId =
+          savedId ?? StorageService.inactiveTabAllSentinel;
+      _uiPrefsHydratedForPlaceId ??= placeId;
+    }
+    _applyInactiveTabSelectionSync(validCourseIds);
   }
 
   void setCourseSelectorExpanded(bool value) {
@@ -992,6 +1485,12 @@ class MemberProvider with ChangeNotifier {
     _hasMoreMembers = true;
     _isLoading = true;
     _error = null;
+    // 플레이스 바뀌면 UI prefs 캐시 무효화
+    if (_uiPrefsHydratedForPlaceId != placeId) {
+      _uiPrefsHydratedForPlaceId = null;
+      _cachedCourseTabCourseId = null;
+      _cachedInactiveTabCourseId = null;
+    }
     notifyListeners();
 
     if (placeId == null || placeId.isEmpty) {
@@ -1165,6 +1664,9 @@ class MemberProvider with ChangeNotifier {
     _courseSortAscending = true;
     _selectedCourseIds.clear();
     _isCourseSelectorExpanded = true;
+    _uiPrefsHydratedForPlaceId = null;
+    _cachedCourseTabCourseId = null;
+    _cachedInactiveTabCourseId = null;
     notifyListeners();
   }
 }

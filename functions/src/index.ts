@@ -1471,6 +1471,8 @@ export const batchCreateReservations = functions.https.onCall(async (data, conte
     const startTime = String(data?.startTime ?? '');
     const reservedDateString = String(data?.reservedDateString ?? '');
     const globalForce = data?.force === true;
+    // 관리자가 「예약 알림 보내기」를 끈 경우 사용자 알림 스킵 (미지정 시 기존처럼 전송)
+    const sendNotification = data?.sendNotification !== false;
     const rawEntries = Array.isArray(data?.entries) ? data.entries : [];
     const seenEntryUserIds = new Set<string>();
     const entries = rawEntries
@@ -1863,7 +1865,11 @@ export const batchCreateReservations = functions.https.onCall(async (data, conte
             results?: Array<{ id?: string; userId: string; success: boolean; error?: string; isOneTime?: boolean }>;
         };
         const created = tx.created;
+        if (!sendNotification && created.length > 0) {
+            console.log(`[${functionName}] sendNotification=false, skip reservation notifications count=${created.length}`);
+        }
         for (const c of created) {
+            if (!sendNotification) break;
             if (c.userId.startsWith('pending_')) continue;
             try {
                 const courseName = await getCourseName(placeId, courseId);
@@ -1940,6 +1946,7 @@ export const cancelEnrollment = functions.https.onCall(async (data, context) => 
     const targetUserId = String(data?.userId ?? '');
     const courseId = String(data?.courseId ?? '');
     const cascade = data?.cascade === true;
+    const sendNotification = data?.sendNotification !== false; // 기본값: true
 
     if (!placeId || !targetUserId || !courseId) {
         throw new functions.https.HttpsError(
@@ -2054,8 +2061,8 @@ export const cancelEnrollment = functions.https.onCall(async (data, context) => 
         tx.delete(enrollmentDoc.ref);
     });
 
-    // 사용자 알림(1회, 집계)
-    if (toCancel.length > 0) {
+    // 사용자 알림(1회, 집계) — sendNotification이 false면 스킵
+    if (toCancel.length > 0 && sendNotification) {
         await createNotification({
             userId: targetUserId,
             type: 'system',
@@ -2070,9 +2077,19 @@ export const cancelEnrollment = functions.https.onCall(async (data, context) => 
             },
             isAdmin: false,
         });
+    } else if (toCancel.length > 0 && !sendNotification) {
+        console.log(`[${functionName}] sendNotification=false, skip cancel notification userId=${targetUserId}`);
     }
 
-    logFunctionSuccess(functionName, { callerId, placeId, targetUserId, courseId, cancelledReservations: toCancel.length, cascade });
+    logFunctionSuccess(functionName, {
+        callerId,
+        placeId,
+        targetUserId,
+        courseId,
+        cancelledReservations: toCancel.length,
+        cascade,
+        sendNotification,
+    });
     return { success: true, cancelledReservations: toCancel.length, courseName };
 });
 
@@ -3345,6 +3362,10 @@ export const onExtensionRequestUpdated = functions.firestore
 /**
  * 수강 액션(재등록/기간연장/횟수조정) 시 사용자에게 푸시 알림 전송
  * enrollments/{enrollmentId}/actionHistory/{actionId} onCreate
+ *
+ * 클라이언트 계약:
+ * - actionHistory 문서에 sendNotification: false 가 있으면 알림을 보내지 않는다.
+ * - 필드가 없거나 true 이면 기존처럼 알림을 보낸다. (하위호환)
  */
 export const onEnrollmentActionCreated = functions.firestore
     .document('enrollments/{enrollmentId}/actionHistory/{actionId}')
@@ -3354,6 +3375,21 @@ export const onEnrollmentActionCreated = functions.firestore
         const actionType = (actionData?.actionType as string) || '';
         const oldValue = (actionData?.oldValue || {}) as Record<string, any>;
         const newValue = (actionData?.newValue || {}) as Record<string, any>;
+
+        // 관리자가 「변경 알림 보내기」를 끈 경우 → 사용자 알림 생성/푸시 모두 스킵
+        const rawSend = actionData?.sendNotification;
+        const shouldSendNotification = !(
+            rawSend === false ||
+            rawSend === 'false' ||
+            rawSend === 0
+        );
+        if (!shouldSendNotification) {
+            console.log(
+                `[onEnrollmentActionCreated] sendNotification=false, skip ` +
+                `enrollmentId=${enrollmentId} actionType=${actionType}`,
+            );
+            return;
+        }
 
         // 재등록, 기간연장, 횟수조정만 알림 대상
         if (!['reenroll', 'periodAdjust', 'adjustCount'].includes(actionType)) {
@@ -3649,6 +3685,8 @@ export const batchMoveReservations = functions.https.onCall(async (data, context
     const newDayOfWeek = Number(data?.newDayOfWeek ?? 0);
     const newStartTime = String(data?.newStartTime ?? '');
     const newReservedDateString = String(data?.newReservedDateString ?? '');
+    // 관리자가 「알림 보내기」를 끈 경우 사용자 알림 스킵 (미지정 시 기존처럼 전송)
+    const sendNotification = data?.sendNotification !== false;
 
     if (reservationIds.length === 0) {
         throw new functions.https.HttpsError('invalid-argument', '예약 ID 목록이 필요합니다.');
@@ -3893,28 +3931,32 @@ export const batchMoveReservations = functions.https.onCall(async (data, context
 
         // 실제로 이동된 건이 있을 때만, 이동된 사용자에게만 알림 전송
         if (result?.success && movedCount > 0 && movedUserIds.length > 0) {
-            try {
-                const firstCourseId = Array.from(reservationsByCourse.keys())[0];
-                const courseName = firstCourseId ? (await getCourseName(placeId, firstCourseId)) || '코스' : '코스';
-                const newDateTimeKr = formatDateTimeKr(newReservedDateString, newStartTime);
+            if (!sendNotification) {
+                console.log(`[${functionName}] sendNotification=false, skip move notifications count=${movedUserIds.length}`);
+            } else {
+                try {
+                    const firstCourseId = Array.from(reservationsByCourse.keys())[0];
+                    const courseName = firstCourseId ? (await getCourseName(placeId, firstCourseId)) || '코스' : '코스';
+                    const newDateTimeKr = formatDateTimeKr(newReservedDateString, newStartTime);
 
-                for (const userId of movedUserIds) {
-                    await createNotification({
-                        userId,
-                        type: 'reservation',
-                        title: `${courseName} 예약이 변경되었습니다`,
-                        body: `${newDateTimeKr}로 변경되었습니다.`,
-                        placeId,
-                        data: {
-                            reservationIds: reservationIds,
-                            courseId: Array.from(reservationsByCourse.keys())[0],
+                    for (const userId of movedUserIds) {
+                        await createNotification({
+                            userId,
+                            type: 'reservation',
+                            title: `${courseName} 예약이 변경되었습니다`,
+                            body: `${newDateTimeKr}로 변경되었습니다.`,
                             placeId,
-                        },
-                        isAdmin: false,
-                    });
+                            data: {
+                                reservationIds: reservationIds,
+                                courseId: Array.from(reservationsByCourse.keys())[0],
+                                placeId,
+                            },
+                            isAdmin: false,
+                        });
+                    }
+                } catch (error) {
+                    console.error(`[batchMoveReservations] Error creating notifications:`, error);
                 }
-            } catch (error) {
-                console.error(`[batchMoveReservations] Error creating notifications:`, error);
             }
         }
         return result;
@@ -3944,6 +3986,8 @@ export const batchCancelReservations = functions.https.onCall(async (data, conte
     const reservationIds = Array.isArray(data?.reservationIds) ? data.reservationIds.map(String) : [];
     const placeId = String(data?.placeId ?? '');
     const asAdminAction = data?.asAdminAction === true;
+    // 관리자가 「알림 보내기」를 끈 경우 사용자 알림 스킵 (미지정 시 기존처럼 전송)
+    const sendNotification = data?.sendNotification !== false;
 
     if (reservationIds.length === 0) {
         throw new functions.https.HttpsError('invalid-argument', '예약 ID 목록이 필요합니다.');
@@ -4266,42 +4310,46 @@ export const batchCancelReservations = functions.https.onCall(async (data, conte
 
         // 트랜잭션 완료 후 알림: 타인 예약을 관리자가 취소한 경우에만 전송
         if (result?.success && isAdminForThisPlace) {
-            try {
-                const courseId = Array.from(courseIds)[0];
-                const courseName = courseId ? (await getCourseName(placeId, courseId)) || '코스' : '코스';
-                const userIdToFirstRes = new Map<string, { reservedDateString: string; startTime: string }>();
-                for (const { ref, reservation } of reservationsToCancel) {
-                    const uid = String(reservation?.userId ?? '');
-                    if (!successIds.has(ref.id)) continue;
-                    if (uid === callerId) continue;
-                    if (uid && !userIdToFirstRes.has(uid)) {
-                        userIdToFirstRes.set(uid, {
-                            reservedDateString: String(reservation?.reservedDateString ?? ''),
-                            startTime: String(reservation?.startTime ?? ''),
+            if (!sendNotification) {
+                console.log(`[${functionName}] sendNotification=false, skip cancel notifications`);
+            } else {
+                try {
+                    const courseId = Array.from(courseIds)[0];
+                    const courseName = courseId ? (await getCourseName(placeId, courseId)) || '코스' : '코스';
+                    const userIdToFirstRes = new Map<string, { reservedDateString: string; startTime: string }>();
+                    for (const { ref, reservation } of reservationsToCancel) {
+                        const uid = String(reservation?.userId ?? '');
+                        if (!successIds.has(ref.id)) continue;
+                        if (uid === callerId) continue;
+                        if (uid && !userIdToFirstRes.has(uid)) {
+                            userIdToFirstRes.set(uid, {
+                                reservedDateString: String(reservation?.reservedDateString ?? ''),
+                                startTime: String(reservation?.startTime ?? ''),
+                            });
+                        }
+                    }
+
+                    for (const userId of userIdToFirstRes.keys()) {
+                        const first = userIdToFirstRes.get(userId);
+                        const dateTimeStr = first ? formatDateTimeKr(first.reservedDateString, first.startTime).replace('시', '') : '';
+                        const body = dateTimeStr ? `${dateTimeStr} 예약이 취소되었습니다` : '예약이 취소되었습니다.';
+                        await createNotification({
+                            userId,
+                            type: 'reservation',
+                            title: `${courseName} 예약이 취소되었습니다`,
+                            body,
+                            placeId,
+                            data: {
+                                reservationIds: reservationIds,
+                                courseId,
+                                placeId,
+                            },
+                            isAdmin: false,
                         });
                     }
+                } catch (error) {
+                    console.error(`[batchCancelReservations] Error creating notifications:`, error);
                 }
-
-                for (const userId of userIdToFirstRes.keys()) {
-                    const first = userIdToFirstRes.get(userId);
-                    const dateTimeStr = first ? formatDateTimeKr(first.reservedDateString, first.startTime).replace('시', '') : '';
-                    const body = dateTimeStr ? `${dateTimeStr} 예약이 취소되었습니다` : '예약이 취소되었습니다.';
-                    await createNotification({
-                        userId,
-                        type: 'reservation',
-                        title: `${courseName} 예약이 취소되었습니다`,
-                        body,
-                        placeId,
-                        data: {
-                            reservationIds: reservationIds,
-                            courseId,
-                            placeId,
-                        },
-                        isAdmin: false,
-                    });
-                }
-            } catch (error) {
-                console.error(`[batchCancelReservations] Error creating notifications:`, error);
             }
         }
         return result;
