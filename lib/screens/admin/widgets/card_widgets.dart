@@ -176,6 +176,7 @@ class ReservationCourseCard extends StatelessWidget {
 class MemberCard extends StatefulWidget {
   final MemberView member;
   final VoidCallback? onMemberTapped;
+
   /// 롱프레스 시 카드의 전역 Rect와 함께 호출 (포커스 오버레이용)
   final void Function(Rect cardRect)? onMemberLongPressed;
   final Color? backgroundColor;
@@ -272,6 +273,21 @@ class _MemberCardState extends State<MemberCard> {
     return '${digits.substring(0, 3)}-${digits.substring(3, 7)}-${digits.substring(7, 11)}';
   }
 
+  /// 코스 카드: 해당 enrollment 메모 / 전체·비활성(전체): 플레이스 또는 수강 메모
+  bool _hasMemo(MemberProvider memberProvider) {
+    if (widget.showCourseEnrollmentDetail) {
+      final m = widget.member.enrollment?.inactiveMemo?.trim();
+      return m != null && m.isNotEmpty;
+    }
+    final placeMemo = widget.member.inactiveMemo?.trim();
+    if (placeMemo != null && placeMemo.isNotEmpty) return true;
+    for (final e in memberProvider.enrollmentsForUser(widget.member.userId)) {
+      final m = e.inactiveMemo?.trim();
+      if (m != null && m.isNotEmpty) return true;
+    }
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
     final hasRequests = widget.member.hasPendingRequests;
@@ -280,6 +296,7 @@ class _MemberCardState extends State<MemberCard> {
     final isCardLoading = memberProvider.isMemberCardLoading(
       widget.member.userId,
     );
+    final hasMemo = _hasMemo(memberProvider);
 
     return GestureDetector(
       onTap:
@@ -319,8 +336,7 @@ class _MemberCardState extends State<MemberCard> {
               ),
               decoration: BoxDecoration(
                 color: widget.backgroundColor ?? AppColors.backgroundWhite,
-                borderRadius:
-                    widget.borderRadius ?? BorderRadius.circular(16),
+                borderRadius: widget.borderRadius ?? BorderRadius.circular(16),
               ),
               child: Row(
                 children: [
@@ -348,6 +364,15 @@ class _MemberCardState extends State<MemberCard> {
                                       ),
                                     ),
                                   ),
+                                  if (hasMemo) ...[
+                                    const SizedBox(width: 8),
+                                    const admin_shared.Chip(
+                                      text: '메모',
+                                      backgroundColor:
+                                          AppColors.backgroundLight,
+                                      textColor: AppColors.textPrimary,
+                                    ),
+                                  ],
                                   if (widget.member.canManagePlace) ...[
                                     const SizedBox(width: 8),
                                     admin_shared.Chip(
@@ -490,26 +515,26 @@ class _MemberCardState extends State<MemberCard> {
                         ),
                       )
                       : (!isDeleting &&
-                              (widget.member.needsReenrollment == true ||
-                                  hasRequests))
-                          ? Container(
-                              width: 16,
-                              height: 16,
-                              alignment: Alignment.center,
-                              child: Container(
-                                width: 8,
-                                height: 8,
-                                decoration: const BoxDecoration(
-                                  color: Colors.red,
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                            )
-                          : Icon(
-                              Icons.arrow_forward_ios,
-                              size: 16,
-                              color: AppColors.textSecondary.withOpacity(0.5),
-                            ),
+                          (widget.member.needsReenrollment == true ||
+                              hasRequests))
+                      ? Container(
+                        width: 16,
+                        height: 16,
+                        alignment: Alignment.center,
+                        child: Container(
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                            color: Colors.red,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      )
+                      : Icon(
+                        Icons.arrow_forward_ios,
+                        size: 16,
+                        color: AppColors.textSecondary.withOpacity(0.5),
+                      ),
                 ],
               ),
             ),

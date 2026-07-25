@@ -178,6 +178,23 @@ class _MemberCardFocusOverlayBodyState
     }
   }
 
+  Future<void> _smsPhone() async {
+    final digits = _digitsOnly(widget.member.phoneNumber);
+    if (digits.isEmpty) return;
+    final uri = Uri(scheme: 'sms', path: digits);
+    try {
+      final launched = await launchUrl(uri);
+      if (!launched && mounted) {
+        final ctx = navigatorKey.currentContext ?? context;
+        SnackbarUtil.showInfo(ctx, '문자 앱을 열 수 없습니다.');
+      }
+    } catch (_) {
+      if (!mounted) return;
+      final ctx = navigatorKey.currentContext ?? context;
+      SnackbarUtil.showInfo(ctx, '문자 앱을 열 수 없습니다.');
+    }
+  }
+
   Future<void> _copyPhone() async {
     final raw = widget.member.phoneNumber.trim();
     if (raw.isEmpty) return;
@@ -197,8 +214,7 @@ class _MemberCardFocusOverlayBodyState
     final media = MediaQuery.of(context);
     final keyboard = media.viewInsets.bottom;
     // 키보드 위 갭(+12)은 iOS 26 라운드 키보드에서 딤이 비쳐 어색하므로 붙임
-    final panelBottom =
-        keyboard > 0 ? keyboard : media.padding.bottom + 24;
+    final panelBottom = keyboard > 0 ? keyboard : media.padding.bottom + 24;
     final memoPreview = widget.initialMemo.trim();
 
     return PopScope(
@@ -322,6 +338,11 @@ class _MemberCardFocusOverlayBodyState
                                   ),
                                   const SizedBox(width: 8),
                                   _PhoneActionIcon(
+                                    icon: Icons.message,
+                                    onTap: _smsPhone,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  _PhoneActionIcon(
                                     icon:
                                         _phoneCopied
                                             ? Icons.check
@@ -391,9 +412,7 @@ class _MemberCardFocusOverlayBodyState
                                     focusNode: _memoFocus,
                                     memberName: widget.member.adminDisplayName,
                                     phoneLabel:
-                                        widget.member.phoneNumber
-                                                .trim()
-                                                .isEmpty
+                                        widget.member.phoneNumber.trim().isEmpty
                                             ? null
                                             : _formatPhone(
                                               widget.member.phoneNumber,
@@ -482,10 +501,10 @@ class _PhoneActionIcon extends StatelessWidget {
         onTap: onTap,
         customBorder: const CircleBorder(),
         child: Padding(
-          padding: const EdgeInsets.all(6),
+          padding: const EdgeInsets.all(8),
           child: Icon(
             icon,
-            size: 18,
+            size: 19,
             color:
                 emphasized
                     ? const Color(0xFF8FE0B0)

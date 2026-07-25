@@ -1063,17 +1063,16 @@ class _EnrollmentDetailScreenState extends State<EnrollmentDetailScreen>
           _originalReEnrollValidUntil = _reEnrollValidUntil;
         });
 
-        final placeProvider = Provider.of<PlaceProvider>(
+        // setPlaceId는 같은 placeId면 no-op → 이 유저의 enrollment만 서버에서 갱신
+        // (횟수/기간 조정과 동일하게 재등록 후에도 비활성 자동 해제)
+        final mpForReenroll = Provider.of<MemberProvider>(
           context,
           listen: false,
         );
-        final placeId = placeProvider.currentPlace?.id;
-        if (placeId != null) {
-          Provider.of<MemberProvider>(
-            context,
-            listen: false,
-          ).setPlaceId(placeId);
-        }
+        await mpForReenroll.refreshEnrollmentsForUserIds([
+          widget.enrollment.userId,
+        ]);
+        await mpForReenroll.reconcileInactiveForUser(widget.enrollment.userId);
 
         // 재등록 후에는 enrollment 상태가 크게 변경되므로 화면을 닫음
         if (mounted) {

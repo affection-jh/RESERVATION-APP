@@ -70,9 +70,17 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
   bool _enrollmentsLoaded = false;
   bool _pendingMembersLoaded = false;
   TextEditingController? _nameController;
-  bool _isEditingName = false;
+  TextEditingController? _memoController;
+  FocusNode? _nameFocus;
+  FocusNode? _memoFocus;
+  bool _isEditing = false;
+  bool _focusMemoOnEdit = false;
+
+  /// 편집 중인 메모 스코프. null이면 플레이스 메모, 있으면 해당 코스 enrollment 메모
+  String? _editingMemoCourseId;
   EnrollmentProvider? _enrollmentProvider; // dispose에서 안전하게 사용하기 위한 참조
   String? _currentMemberName; // 로컬에서 관리하는 이름 (서버 업데이트 후 즉시 반영)
+  String? _localMemoOverride; // 저장 직후 미리보기용 (낙관적 업데이트)
 
   @override
   void initState() {
@@ -103,6 +111,9 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     _pendingMemberSubscription = null;
 
     _nameController?.dispose();
+    _memoController?.dispose();
+    _nameFocus?.dispose();
+    _memoFocus?.dispose();
     super.dispose();
   }
 
@@ -386,45 +397,45 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                       bottom: 40 + MediaQuery.of(context).padding.bottom,
                     ),
                     child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // 헤더
-                        Padding(
-                          padding: const EdgeInsets.only(left: 4, top: 4),
-                          child: _buildHeader(),
-                        ),
-                        const SizedBox(height: 24),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // 헤더
+                          Padding(
+                            padding: const EdgeInsets.only(left: 4, top: 4),
+                            child: _buildHeader(),
+                          ),
+                          const SizedBox(height: 24),
 
-                        if (_isLoading)
-                          const Center(
-                            child: Padding(
-                              padding: EdgeInsets.all(32.0),
-                              child: CircularProgressIndicator(
-                                color: AppColors.primaryGreen,
+                          if (_isLoading)
+                            const Center(
+                              child: Padding(
+                                padding: EdgeInsets.all(32.0),
+                                child: CircularProgressIndicator(
+                                  color: AppColors.primaryGreen,
+                                ),
                               ),
-                            ),
-                          )
-                        else ...[
-                          // 코스매니저일 때: 관리중인 코스 섹션 (탭 시 코스 편집 화면으로)
-                          if (widget.member.isSubManager &&
-                              widget.member.manageableCourseIds.isNotEmpty)
-                            _buildManagedCoursesSection(),
-                          if (widget.member.isSubManager &&
-                              widget.member.manageableCourseIds.isNotEmpty)
-                            const SizedBox(height: 6),
-                          // 등록된 코스 목록: 코스매니저만(수강 등록 없음)이면 섹션 자체를 숨김
-                          if (_shouldShowEnrollmentsSection())
-                            _buildEnrollmentsSection(),
+                            )
+                          else ...[
+                            // 코스매니저일 때: 관리중인 코스 섹션 (탭 시 코스 편집 화면으로)
+                            if (widget.member.isSubManager &&
+                                widget.member.manageableCourseIds.isNotEmpty)
+                              _buildManagedCoursesSection(),
+                            if (widget.member.isSubManager &&
+                                widget.member.manageableCourseIds.isNotEmpty)
+                              const SizedBox(height: 6),
+                            // 등록된 코스 목록: 코스매니저만(수강 등록 없음)이면 섹션 자체를 숨김
+                            if (_shouldShowEnrollmentsSection())
+                              _buildEnrollmentsSection(),
+                          ],
                         ],
-                      ],
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
           ),
         ],
       ),
@@ -442,9 +453,11 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               SizedBox(height: 2),
-              if (_isEditingName)
+              if (_isEditing)
                 TextField(
                   controller: _nameController,
+                  focusNode: _nameFocus,
+                  autofocus: !_focusMemoOnEdit,
                   style: TextStyle(
                     fontSize: 22,
                     fontWeight: FontWeight.bold,
@@ -458,29 +471,63 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
                     contentPadding: EdgeInsets.zero,
                     isDense: true,
                   ),
-                  autofocus: true,
                   maxLines: 1,
-                  textInputAction: TextInputAction.done,
-                  onSubmitted: (_) => _saveName(),
+                  textInputAction: TextInputAction.next,
+                  onSubmitted: (_) => _memoFocus?.requestFocus(),
                   scrollPadding: EdgeInsets.zero,
                 )
               else
-                Text(
-                  _currentMemberName ?? widget.member.name,
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.textPrimary,
+                GestureDetector(
+                  onTap: () => _enterEditMode(focusMemo: false),
+                  behavior: HitTestBehavior.opaque,
+                  child: Text(
+                    _currentMemberName ?? widget.member.name,
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.textPrimary,
+                    ),
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  overflow: TextOverflow.ellipsis,
                 ),
               Text(
                 FormatUtils.formatPhoneNumber(widget.member.phoneNumber),
                 style: TextStyle(fontSize: 16, color: AppColors.textSecondary),
               ),
-              if (memoPreview != null) ...[
+              if (_isEditing) ...[
                 const SizedBox(height: 12),
-                _MemoTwoLineScroller(text: memoPreview),
+                TextField(
+                  controller: _memoController,
+                  focusNode: _memoFocus,
+                  autofocus: _focusMemoOnEdit,
+                  maxLines: 4,
+                  minLines: 2,
+                  style: TextStyle(
+                    fontSize: 15,
+                    height: 1.35,
+                    color: AppColors.textPrimary,
+                  ),
+                  decoration: InputDecoration(
+                    hintText: '메모',
+                    hintStyle: TextStyle(
+                      fontSize: 15,
+                      color: AppColors.textSecondary.withOpacity(0.6),
+                    ),
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    contentPadding: EdgeInsets.zero,
+                    isDense: true,
+                  ),
+                  textInputAction: TextInputAction.newline,
+                ),
+              ] else if (memoPreview != null) ...[
+                const SizedBox(height: 12),
+                GestureDetector(
+                  onTap: () => _enterEditMode(focusMemo: true),
+                  behavior: HitTestBehavior.opaque,
+                  child: _MemoTwoLineScroller(text: memoPreview),
+                ),
               ],
             ],
           ),
@@ -489,12 +536,21 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // 이름 수정 버튼
-            _buildSvgIconButton(
-              svgPath: 'assets/icons/edit.svg',
-              color: AppColors.primaryGreen,
-              onTap: _handleEditName,
-            ),
+            // 편집 / 저장
+            _isEditing
+                ? _buildIconButton(
+                  icon: Icons.check,
+                  color: AppColors.primaryGreen,
+                  onTap: _saveEdits,
+                )
+                : _buildSvgIconButton(
+                  svgPath: 'assets/icons/edit.svg',
+                  color: AppColors.primaryGreen,
+                  onTap:
+                      () => _enterEditMode(
+                        focusMemo: _detailMemoPreview() != null,
+                      ),
+                ),
             const SizedBox(width: 8),
             // 삭제 버튼: 일반 멤버만 제거 가능 (매니저·부매니저·소유자 차단)
             if (_canRemoveFromPlace(context))
@@ -516,8 +572,13 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     );
   }
 
-  /// 플레이스 메모 우선, 없으면 수강별 메모 중 첫 번째
-  String? _detailMemoPreview() {
+  /// 표시할 메모와 편집 스코프. 플레이스 메모 우선, 없으면 수강별 메모 중 첫 번째
+  ({String text, String? courseId})? _detailMemoSource() {
+    if (_localMemoOverride != null) {
+      final t = _localMemoOverride!.trim();
+      if (t.isEmpty) return null;
+      return (text: t, courseId: null);
+    }
     MemberView? live;
     try {
       live = Provider.of<MemberProvider>(
@@ -529,17 +590,25 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     }
     final placeMemo =
         (live?.inactiveMemo ?? widget.member.inactiveMemo)?.trim();
-    if (placeMemo != null && placeMemo.isNotEmpty) return placeMemo;
+    if (placeMemo != null && placeMemo.isNotEmpty) {
+      return (text: placeMemo, courseId: null);
+    }
     for (final e in _enrollments) {
       final m = e.inactiveMemo?.trim();
-      if (m != null && m.isNotEmpty) return m;
+      if (m != null && m.isNotEmpty) {
+        return (text: m, courseId: e.courseId);
+      }
     }
     for (final e in _pendingEnrollments) {
       final m = e.inactiveMemo?.trim();
-      if (m != null && m.isNotEmpty) return m;
+      if (m != null && m.isNotEmpty) {
+        return (text: m, courseId: e.courseId);
+      }
     }
     return null;
   }
+
+  String? _detailMemoPreview() => _detailMemoSource()?.text;
 
   Widget _buildIconButton({
     required IconData icon,
@@ -586,85 +655,176 @@ class _MemberDetailBottomSheetState extends State<MemberDetailBottomSheet> {
     );
   }
 
-  void _handleEditName() {
-    setState(() {
-      _isEditingName = true;
-      _nameController = TextEditingController(
-        text: _currentMemberName ?? widget.member.name,
-      );
-    });
-  }
-
-  Future<void> _saveName() async {
-    final newName = _nameController?.text.trim() ?? '';
-    final currentName = _currentMemberName ?? widget.member.name;
-    if (newName.isEmpty || newName == currentName) {
-      setState(() {
-        _isEditingName = false;
-        _nameController?.dispose();
-        _nameController = null;
-      });
+  void _enterEditMode({required bool focusMemo}) {
+    if (_isEditing) {
+      _requestEditFocus(focusMemo);
       return;
     }
 
+    final source = _detailMemoSource();
+    _nameController?.dispose();
+    _memoController?.dispose();
+    _nameFocus?.dispose();
+    _memoFocus?.dispose();
+
+    _nameController = TextEditingController(
+      text: _currentMemberName ?? widget.member.name,
+    );
+    _memoController = TextEditingController(text: source?.text ?? '');
+    _nameFocus = FocusNode();
+    _memoFocus = FocusNode();
+    _editingMemoCourseId = source?.courseId;
+    _focusMemoOnEdit = focusMemo;
+
+    setState(() => _isEditing = true);
+
+    _requestEditFocus(focusMemo);
+  }
+
+  void _requestEditFocus(bool focusMemo) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_isEditing) return;
+      final node = focusMemo ? _memoFocus : _nameFocus;
+      if (node == null) return;
+      node.requestFocus();
+      // 키보드/바텀시트 레이아웃이 잡힌 뒤 한 번 더 보정
+      Future.delayed(const Duration(milliseconds: 50), () {
+        if (!mounted || !_isEditing) return;
+        if (!(node.hasFocus)) node.requestFocus();
+      });
+    });
+  }
+
+  void _exitEditMode() {
+    _nameController?.dispose();
+    _memoController?.dispose();
+    _nameFocus?.dispose();
+    _memoFocus?.dispose();
+    _nameController = null;
+    _memoController = null;
+    _nameFocus = null;
+    _memoFocus = null;
+    _editingMemoCourseId = null;
+    _isEditing = false;
+  }
+
+  Future<void> _saveEdits() async {
+    final newName = _nameController?.text.trim() ?? '';
+    final currentName = _currentMemberName ?? widget.member.name;
+    final memoText = _memoController?.text ?? '';
+    final memoTrimmed = memoText.trim();
+    final previousMemo = _detailMemoSource()?.text ?? '';
+    final courseId = _editingMemoCourseId;
+
+    final nameChanged = newName.isNotEmpty && newName != currentName;
+    final memoChanged = memoTrimmed != previousMemo;
+
+    if (!nameChanged && !memoChanged) {
+      setState(_exitEditMode);
+      return;
+    }
+
+    setState(() {
+      if (nameChanged) _currentMemberName = newName;
+      if (memoChanged) _localMemoOverride = memoTrimmed;
+      _exitEditMode();
+    });
+
+    var nameOk = true;
+    var memoOk = true;
+
     try {
-      // 즉시 로컬 상태 업데이트 (낙관적 업데이트)
-      setState(() {
-        _currentMemberName = newName;
-        _isEditingName = false;
-        _nameController?.dispose();
-        _nameController = null;
-      });
-
-      final placeProvider = Provider.of<PlaceProvider>(context, listen: false);
-      final placeId = placeProvider.currentPlace?.id;
-      if (placeId == null) return;
-
-      final memberService = MemberService();
-      final ok = await memberService.updateMemberName(
-        placeId: placeId,
-        phoneNumber: widget.member.phoneNumber,
-        newName: newName,
-      );
-
-      if (!ok) {
-        // 실패 시 원래 이름으로 복구
-        if (mounted) {
-          setState(() {
-            _currentMemberName = currentName;
-          });
-          SnackbarUtil.showInfo(context, '이름 수정에 실패했습니다.');
+      if (nameChanged) {
+        final placeProvider = Provider.of<PlaceProvider>(
+          context,
+          listen: false,
+        );
+        final placeId = placeProvider.currentPlace?.id;
+        if (placeId == null) {
+          nameOk = false;
+        } else {
+          final memberService = MemberService();
+          nameOk = await memberService.updateMemberName(
+            placeId: placeId,
+            phoneNumber: widget.member.phoneNumber,
+            newName: newName,
+          );
+          if (nameOk && mounted) {
+            final memberProvider = Provider.of<MemberProvider>(
+              context,
+              listen: false,
+            );
+            memberProvider.setPlaceId(placeId);
+          }
         }
-        return;
+        if (!nameOk && mounted) {
+          setState(() => _currentMemberName = currentName);
+        }
       }
 
-      // MemberProvider 새로고침 (백그라운드)
-      final memberProvider = Provider.of<MemberProvider>(
-        context,
-        listen: false,
-      );
-      memberProvider.setPlaceId(placeId);
-      Future.delayed(const Duration(milliseconds: 600), () {
-        if (!mounted) return;
-        final list =
-            memberProvider.allMembers
-                .where((v) => v.phoneNumber == widget.member.phoneNumber)
-                .toList();
-        if (list.isNotEmpty &&
-            list.first.adminDisplayName != _currentMemberName) {
-          setState(() => _currentMemberName = list.first.adminDisplayName);
+      if (memoChanged) {
+        if (widget.member.isPending) {
+          memoOk = false;
+          if (mounted) {
+            setState(
+              () =>
+                  _localMemoOverride =
+                      previousMemo.isEmpty ? null : previousMemo,
+            );
+            SnackbarUtil.showInfo(context, '가입 대기 멤버는 메모를 저장할 수 없습니다.');
+          }
+        } else {
+          final memberProvider = Provider.of<MemberProvider>(
+            context,
+            listen: false,
+          );
+          memoOk = await memberProvider.setInactiveMemo(
+            userId: widget.member.userId,
+            memo: memoTrimmed.isEmpty ? null : memoTrimmed,
+            courseId: courseId,
+          );
+          if (!mounted) return;
+          if (memoOk) {
+            setState(() {
+              _localMemoOverride = null;
+              if (courseId != null && courseId.isNotEmpty) {
+                _enrollments =
+                    _enrollments.map((e) {
+                      if (e.courseId != courseId) return e;
+                      return e.copyWith(
+                        inactiveMemo: memoTrimmed.isEmpty ? null : memoTrimmed,
+                        clearInactiveMemo: memoTrimmed.isEmpty,
+                      );
+                    }).toList();
+              }
+            });
+          } else {
+            setState(
+              () =>
+                  _localMemoOverride =
+                      previousMemo.isEmpty ? null : previousMemo,
+            );
+          }
         }
-      });
+      }
 
-      SnackbarUtil.showSuccess(context, '이름이 수정되었습니다.');
+      if (!mounted) return;
+      if (nameOk && memoOk && (nameChanged || memoChanged)) {
+        SnackbarUtil.showSuccess(context, '저장되었습니다.');
+      } else if (!nameOk && nameChanged) {
+        SnackbarUtil.showInfo(context, '이름 수정에 실패했습니다.');
+      } else if (!memoOk && memoChanged && !widget.member.isPending) {
+        SnackbarUtil.showInfo(context, '메모 저장에 실패했습니다.');
+      }
     } catch (e) {
-      // 실패 시 원래 이름으로 복구
-      if (mounted) {
-        setState(() {
-          _currentMemberName = currentName;
-        });
-        SnackbarUtil.showInfo(context, '이름 수정 중 오류가 발생했습니다: $e');
+      if (!mounted) return;
+      if (nameChanged) setState(() => _currentMemberName = currentName);
+      if (memoChanged) {
+        setState(
+          () => _localMemoOverride = previousMemo.isEmpty ? null : previousMemo,
+        );
       }
+      SnackbarUtil.showInfo(context, '저장 중 오류가 발생했습니다.');
     }
   }
 
@@ -1616,7 +1776,7 @@ class _MemoTwoLineScroller extends StatelessWidget {
 
   const _MemoTwoLineScroller({required this.text});
 
-  static const double _fontSize = 13;
+  static const double _fontSize = 15;
   static const double _lineHeight = 1.35;
   static const double _viewportLines = 2.5;
 
