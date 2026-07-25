@@ -1586,6 +1586,61 @@ class MemberProvider with ChangeNotifier {
   Set<String> getPendingSubManagerUserIds(String courseId) =>
       Set<String>.from(_pendingSubManagerAdds[courseId] ?? const {});
 
+  /// 코스매니저 지정 성공 직후 로컬 캐시에 즉시 반영
+  /// (setPlaceId는 동일 placeId면 no-op이라 UI가 안 바뀌는 문제 방지)
+  void markSubManagerForCourseLocally({
+    required String courseId,
+    required String userId,
+    String? phoneNumber,
+  }) {
+    if (courseId.isEmpty || userId.isEmpty) return;
+
+    final current = _findLoadedPlaceMember(userId);
+    if (current != null) {
+      final already =
+          current.manageableCourseIds.contains(courseId) &&
+          current.role != PlaceMemberRole.member;
+      if (already) return;
+      final nextIds =
+          current.manageableCourseIds.contains(courseId)
+              ? current.manageableCourseIds
+              : [...current.manageableCourseIds, courseId];
+      final nextRole =
+          current.role == PlaceMemberRole.member
+              ? PlaceMemberRole.subManager
+              : current.role;
+      _replacePlaceMember(
+        current.copyWith(role: nextRole, manageableCourseIds: nextIds),
+      );
+      notifyListeners();
+      return;
+    }
+
+    final phoneKey = (phoneNumber ?? '').replaceAll(RegExp(r'[^\d]'), '');
+    for (var i = 0; i < _pendingMembers.length; i++) {
+      final p = _pendingMembers[i];
+      final pPhone = p.phoneNumber.replaceAll(RegExp(r'[^\d]'), '');
+      final matches =
+          userId == 'pending_${p.id}' ||
+          (phoneKey.isNotEmpty && pPhone == phoneKey);
+      if (!matches) continue;
+      if (p.managedCourseIds.contains(courseId) &&
+          p.role == PlaceMemberRole.subManager) {
+        return;
+      }
+      final nextManaged =
+          p.managedCourseIds.contains(courseId)
+              ? p.managedCourseIds
+              : [...p.managedCourseIds, courseId];
+      _pendingMembers[i] = p.copyWith(
+        role: PlaceMemberRole.subManager,
+        managedCourseIds: nextManaged,
+      );
+      notifyListeners();
+      return;
+    }
+  }
+
   /// 플레이스에서 멤버 제거 (Cloud Function 호출)
   Future<void> removeMemberFromPlace({
     required String placeId,

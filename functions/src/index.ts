@@ -3227,6 +3227,11 @@ async function sendPushNotification({
 /**
  * 코스 문서(정책·이름 등) 변경 시 매니저·코스매니저에게 푸시 알림
  * 정기 일정(sessions)만 변경된 경우는 updateCourseSchedule에서 이미 알림 전송하므로 스킵
+ *
+ * 클라이언트 계약:
+ * - 코스 문서에 sendNotification: false 가 있으면 알림을 보내지 않는다. (정책 수정 UI 체크 해제)
+ * - 필드가 없거나 true 이면 기존처럼 알림을 보낸다. (하위호환)
+ * - 플래그 필드는 알림 처리 후 문서에서 제거한다.
  */
 export const onCourseDocumentUpdated = functions.firestore
     .document('places/{placeId}/courses/{courseId}')
@@ -3241,11 +3246,44 @@ export const onCourseDocumentUpdated = functions.firestore
         const changedKeys = [...allKeys].filter(
             (k) => JSON.stringify((before as any)[k]) !== JSON.stringify((after as any)[k]),
         );
+        // sendNotification 플래그 정리만 일어난 재트리거는 무시
+        const onlyNotificationFlagCleanup =
+            changedKeys.length > 0 &&
+            changedKeys.every((k) => k === 'sendNotification' || k === 'updatedAt');
+        if (onlyNotificationFlagCleanup) return;
+
         const onlySessionsAndMeta =
             changedKeys.length > 0 &&
-            changedKeys.every((k) => k === 'sessions' || k === 'updatedAt') &&
+            changedKeys.every((k) => k === 'sessions' || k === 'updatedAt' || k === 'sendNotification') &&
             changedKeys.includes('sessions');
         if (onlySessionsAndMeta) return;
+
+        // 관리자가 「변경 알림 보내기」를 끈 경우 → 알림 스킵 후 플래그 정리
+        const rawSend = (after as any)?.sendNotification;
+        const sendNotification = rawSend !== false && rawSend !== 'false' && rawSend !== 0;
+        const hasSendNotificationField =
+            Object.prototype.hasOwnProperty.call(after, 'sendNotification');
+
+        if (hasSendNotificationField) {
+            try {
+                await change.after.ref.update({
+                    sendNotification: admin.firestore.FieldValue.delete(),
+                });
+            } catch (cleanErr: any) {
+                console.error(
+                    `[onCourseDocumentUpdated] sendNotification 플래그 정리 실패:`,
+                    cleanErr?.message ?? cleanErr,
+                );
+            }
+        }
+
+        if (!sendNotification) {
+            console.log(
+                `[onCourseDocumentUpdated] sendNotification=false, skip ` +
+                    `placeId=${placeId} courseId=${courseId}`,
+            );
+            return;
+        }
 
         const policyChanged = JSON.stringify(before.policy ?? {}) !== JSON.stringify(after.policy ?? {});
         const courseName = (after.name as string) || '코스';

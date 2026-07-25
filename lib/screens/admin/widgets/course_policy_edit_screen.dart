@@ -7,8 +7,10 @@ import '../../../providers/course_provider.dart';
 import '../../../providers/place_provider.dart';
 import '../../../services/firestore_service.dart';
 import '../../../theme/app_colors.dart';
+import '../../../utils/local_storage_util.dart';
 import '../../../utils/navigator_key.dart';
 import '../../../utils/snackbar_util.dart';
+import '../../../widgets/admin_send_notification_checkbox.dart';
 import '../../../widgets/common_dialog.dart';
 
 enum _CloseBeforePickerKind { none, reserve, cancel }
@@ -43,6 +45,9 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
   bool _leaveRequested = false;
   bool _hasReservations = false;
 
+  /// 변경 알림 보내기 (기본 ON). 야간 작업 시 끌 수 있음.
+  bool _sendChangeNotification = true;
+
   CoursePolicy? _original;
   BookingOpenStrategyType _type = BookingOpenStrategyType.weeklyRelease;
 
@@ -75,7 +80,20 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
   void initState() {
     super.initState();
     _windowDaysController.text = _windowDays.toString();
+    _loadSendChangeNotificationPref();
     _load();
+  }
+
+  Future<void> _loadSendChangeNotificationPref() async {
+    final saved = await StorageService().getEnrollmentSendChangeNotification();
+    if (!mounted || saved == null || saved == _sendChangeNotification) return;
+    setState(() => _sendChangeNotification = saved);
+  }
+
+  void _setSendChangeNotification(bool value) {
+    if (_sendChangeNotification == value) return;
+    setState(() => _sendChangeNotification = value);
+    StorageService().saveEnrollmentSendChangeNotification(value).ignore();
   }
 
   @override
@@ -361,6 +379,8 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
         placeId: placeId,
         courseId: widget.courseId,
         policy: policy,
+        // 신규 코스 등록 플로우에서는 다른 관리자 알림을 보내지 않음
+        sendNotification: widget.requireSave ? false : _sendChangeNotification,
       );
       if (_leaveRequested || !mounted) return false;
 
@@ -703,52 +723,71 @@ class _CoursePolicyEditScreenState extends State<CoursePolicyEditScreen> {
                 padding: const EdgeInsets.fromLTRB(24, 12, 24, 10),
                 decoration: BoxDecoration(color: AppColors.backgroundLight),
                 child: SafeArea(
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed:
-                          (_isLoading || _isSaving || !_isValidInput())
-                              ? null
-                              : (widget.requireSave || _hasChanges)
-                              ? (widget.requireSave
-                                  ? _saveAndRegisterCourse
-                                  : () => _savePolicy(popAfterSave: true))
-                              : null,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primaryGreen,
-                        foregroundColor: Colors.white,
-                        disabledBackgroundColor:
-                            _isSaving
-                                ? AppColors.primaryGreen
-                                : AppColors.borderLight,
-                        disabledForegroundColor:
-                            _isSaving ? Colors.white : AppColors.textSecondary,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (!widget.requireSave && _hasChanges) ...[
+                        AdminSendNotificationCheckbox(
+                          value: _sendChangeNotification,
+                          onChanged: _setSendChangeNotification,
+                          label: '변경 알림 보내기',
+                          offHint: '알림 없이 저장',
+                          onHint: '사용자에게 알림',
                         ),
-                        elevation: 0,
-                      ),
-                      child:
-                          _isSaving
-                              ? const SizedBox(
-                                width: 24,
-                                height: 24,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                    Colors.white,
+                        const SizedBox(height: 10),
+                      ],
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed:
+                              (_isLoading || _isSaving || !_isValidInput())
+                                  ? null
+                                  : (widget.requireSave || _hasChanges)
+                                  ? (widget.requireSave
+                                      ? _saveAndRegisterCourse
+                                      : () => _savePolicy(popAfterSave: true))
+                                  : null,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primaryGreen,
+                            foregroundColor: Colors.white,
+                            disabledBackgroundColor:
+                                _isSaving
+                                    ? AppColors.primaryGreen
+                                    : AppColors.borderLight,
+                            disabledForegroundColor:
+                                _isSaving
+                                    ? Colors.white
+                                    : AppColors.textSecondary,
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            elevation: 0,
+                          ),
+                          child:
+                              _isSaving
+                                  ? const SizedBox(
+                                    width: 24,
+                                    height: 24,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                        Colors.white,
+                                      ),
+                                    ),
+                                  )
+                                  : Text(
+                                    widget.requireSave
+                                        ? '저장 및 코스 등록'
+                                        : '정책 수정하기',
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700,
+                                    ),
                                   ),
-                                ),
-                              )
-                              : Text(
-                                widget.requireSave ? '저장 및 코스 등록' : '정책 수정하기',
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                    ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),

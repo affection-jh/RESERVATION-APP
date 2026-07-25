@@ -77,7 +77,7 @@ class _MemberCardFocusOverlayBodyState
     extends State<_MemberCardFocusOverlayBody>
     with SingleTickerProviderStateMixin {
   static const double _blurSigma = 8;
-  static const double _dimOpacity = 0.48;
+  static const double _dimOpacity = 0.52;
 
   bool _editingMemo = false;
   bool _phoneCopied = false;
@@ -255,7 +255,7 @@ class _MemberCardFocusOverlayBodyState
                           padding: const EdgeInsets.all(9),
                           child: Icon(
                             Icons.close_rounded,
-                            size: 20,
+                            size: 24,
                             color: Colors.white.withOpacity(0.9),
                           ),
                         ),

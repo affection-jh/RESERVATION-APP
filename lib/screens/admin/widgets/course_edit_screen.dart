@@ -1245,7 +1245,15 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
                 adminDisplayName:
                     m.adminDisplayName.isEmpty ? null : m.adminDisplayName,
               );
-              if (ok) successCount++;
+              if (ok) {
+                successCount++;
+                // setPlaceId(동일 placeId)는 no-op → 로컬에 즉시 반영
+                memberProvider.markSubManagerForCourseLocally(
+                  courseId: courseId,
+                  userId: m.userId,
+                  phoneNumber: m.phoneNumber,
+                );
+              }
             } finally {
               memberProvider.finishAddingSubManagerForCourse(
                 courseId,
@@ -1254,8 +1262,10 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
             }
           }
           if (!context.mounted) return;
-          memberProvider.setPlaceId(placeId);
           if (successCount > 0) {
+            // pending 신규/병합 케이스 대비 서버 목록도 한 번 동기화
+            await memberProvider.refreshPendingMembers();
+            if (!context.mounted) return;
             SnackbarUtil.showSuccess(
               context,
               successCount == selected.length
@@ -1270,7 +1280,6 @@ class _CourseEditScreenState extends State<CourseEditScreen> {
             memberProvider.finishAddingSubManagerForCourse(courseId, m.userId);
           }
           if (context.mounted) {
-            memberProvider.setPlaceId(placeId);
             SnackbarUtil.showInfoFromError(
               context,
               e,

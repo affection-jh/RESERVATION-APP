@@ -23,12 +23,19 @@ class FcmService {
   StreamSubscription<RemoteMessage>? _messageOpenedSubscription;
   bool _isInitialized = false;
 
+  /// 현재 로그인 사용자. 로그아웃 시 null.
+  /// onTokenRefresh 클로저가 이전 UID를 붙잡지 않도록 필드로 관리한다.
+  String? _boundUserId;
+
   /// FCM 초기화 및 토큰 저장
   /// 사용자와 관리자 모두 동일하게 처리
   Future<void> initialize(String userId) async {
     debugPrint(
-      '[FcmService] initialize() called, userId=$userId, _isInitialized=$_isInitialized',
+      '[FcmService] initialize() called, userId=$userId, _isInitialized=$_isInitialized, bound=$_boundUserId',
     );
+    // 계정 전환 시에도 갱신 리스너가 새 UID로 저장하도록 항상 바인딩
+    _boundUserId = userId;
+
     if (_isInitialized) {
       debugPrint('[FcmService] 이미 초기화됨 → 토큰만 Firestore에 저장');
       await _saveTokenToFirestore(userId);
@@ -53,14 +60,20 @@ class FcmService {
       // FCM 토큰 가져오기 및 저장
       await _saveTokenToFirestore(userId);
 
-      // 토큰 갱신 리스너
+      // 토큰 갱신 리스너 — 항상 현재 _boundUserId 사용 (계정 전환 대응)
+      _tokenRefreshSubscription?.cancel();
       _tokenRefreshSubscription = _messaging.onTokenRefresh.listen((newToken) {
+        final uid = _boundUserId;
         final masked =
             newToken.length > 12
                 ? '${newToken.substring(0, 6)}...${newToken.substring(newToken.length - 6)}'
                 : newToken;
-        debugPrint('[FcmService] FCM 토큰 갱신됨: $masked');
-        _saveTokenToFirestore(userId, token: newToken);
+        debugPrint('[FcmService] FCM 토큰 갱신됨: $masked boundUserId=$uid');
+        if (uid == null || uid.isEmpty) {
+          debugPrint('[FcmService] 로그아웃 상태 → 토큰 갱신 저장 스킵');
+          return;
+        }
+        _saveTokenToFirestore(uid, token: newToken);
       });
 
       // 포그라운드 메시지 핸들러 설정 (한 번만)
@@ -255,28 +268,45 @@ class FcmService {
     }
   }
 
-  /// FCM 토큰 삭제 (로그아웃 시)
+  /// 로그아웃 시: 이 기기 토큰을 해당 유저 문서에서만 제거
+  ///
+  /// 기기 FCM 토큰(`FirebaseMessaging.deleteToken`)은 지우지 않는다.
+  /// 지우면 즉시 새 토큰이 발급되며, 계정 전환 직후 이전 UID로 저장되는
+  /// 레이스/permission-denied가 생기고, 잘못된 토큰이 남을 수 있다.
   Future<void> deleteToken(String userId) async {
-    try {
-      final token = await _messaging.getToken();
-      if (token != null) {
-        // ✅ 트랜잭션으로 원자적 삭제 (users 문서 + 서브컬렉션)
-        await _firestore.runTransaction((transaction) async {
-          final userRef = _firestore.collection('users').doc(userId);
-          transaction.update(userRef, {'fcmToken': FieldValue.delete()});
+    // 갱신 리스너가 로그아웃된 UID로 쓰지 않도록 먼저 해제
+    if (_boundUserId == userId) {
+      _boundUserId = null;
+    }
 
+    try {
+      String? token;
+      try {
+        token = await _messaging.getToken();
+      } catch (e) {
+        debugPrint('[FcmService] getToken (logout) 실패: $e');
+      }
+
+      await _firestore.runTransaction((transaction) async {
+        final userRef = _firestore.collection('users').doc(userId);
+        transaction.set(userRef, {
+          'fcmToken': FieldValue.delete(),
+          'fcmTokenUpdatedAt': FieldValue.delete(),
+        }, SetOptions(merge: true));
+
+        if (token != null && token.isNotEmpty) {
           final tokenRef = _firestore
               .collection('users')
               .doc(userId)
               .collection('fcmTokens')
               .doc(token);
           transaction.delete(tokenRef);
-        });
-
-        // 디바이스에서도 토큰 삭제
-        await _messaging.deleteToken();
-        debugPrint('[FcmService] FCM 토큰 삭제 완료');
-      }
+        }
+      });
+      debugPrint(
+        '[FcmService] 로그아웃: Firestore FCM 토큰 제거 완료 userId=$userId '
+        '(기기 토큰은 유지)',
+      );
     } catch (e) {
       debugPrint('[FcmService] FCM 토큰 삭제 실패: $e');
     }
@@ -510,6 +540,7 @@ class FcmService {
     _tokenRefreshSubscription = null;
     _foregroundMessageSubscription = null;
     _messageOpenedSubscription = null;
+    _boundUserId = null;
     _isInitialized = false;
   }
 }

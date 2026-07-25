@@ -95,10 +95,12 @@ class FirestoreService {
     required String placeId,
     required String courseId,
     required CoursePolicy policy,
+    bool sendNotification = true,
   }) => _courseService.upsertCoursePolicy(
     placeId: placeId,
     courseId: courseId,
     policy: policy,
+    sendNotification: sendNotification,
   );
   Future<bool> hasAnySessionReservationsForCourse(String courseId) =>
       _courseService.hasAnyReservationsForCourse(courseId);

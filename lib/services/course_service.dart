@@ -164,6 +164,7 @@ class CourseService {
     required String placeId,
     required String courseId,
     required CoursePolicy policy,
+    bool sendNotification = true,
   }) async {
     final docRef = _firestore
         .collection('places')
@@ -174,7 +175,12 @@ class CourseService {
     if (!doc.exists) {
       throw Exception('코스를 찾을 수 없습니다.');
     }
-    await docRef.update({'policy': policy.toJson()});
+    // sendNotification=false일 때만 문서에 남겨 onCourseDocumentUpdated가 알림을 스킵하도록 함
+    final update = <String, dynamic>{'policy': policy.toJson()};
+    if (!sendNotification) {
+      update['sendNotification'] = false;
+    }
+    await docRef.update(update);
     await FirestoreUtils.waitForServerAck();
   }
 
